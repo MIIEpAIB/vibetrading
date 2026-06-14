@@ -472,7 +472,7 @@ vibe-trading serve --port 8899
 cd frontend && npm install && npm run dev
 ```
 
-افتح `http://localhost:5899`. تمرر الواجهة الأمامية استدعاءات API إلى `localhost:8899`.
+افتح `http://localhost:8765`. ترتبط الواجهة الأمامية بـ `0.0.0.0:8765` وتمرر استدعاءات API إلى `localhost:8899`.
 
 **وضع الإنتاج (خادم واحد):**
 

@@ -32,12 +32,12 @@ services:
     image: node:20
     working_dir: /app
     ports:
-      - "5899:5899"
+      - "8765:8765"
     volumes:
       - ./frontend:/app
     environment:
       - VITE_API_URL=http://vibe-trading:8899
-    command: sh -c "npm install && npm run dev -- --host --port 5899"
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 8765"
     profiles:
       - frontend
     depends_on:

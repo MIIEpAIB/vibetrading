@@ -8,8 +8,8 @@ PID_DIR="$STATE_DIR/pids"
 
 BACKEND_HOST="${VIBE_BACKEND_HOST:-127.0.0.1}"
 BACKEND_PORT="${VIBE_BACKEND_PORT:-8899}"
-FRONTEND_HOST="${VIBE_FRONTEND_HOST:-127.0.0.1}"
-FRONTEND_PORT="${VIBE_FRONTEND_PORT:-5899}"
+FRONTEND_HOST="${VIBE_FRONTEND_HOST:-0.0.0.0}"
+FRONTEND_PORT="${VIBE_FRONTEND_PORT:-8765}"
 if [[ -n "${PYTHON:-}" ]]; then
   PYTHON_BIN="$PYTHON"
 elif [[ -x "$ROOT/.venv/bin/python" ]]; then
@@ -37,7 +37,8 @@ Commands:
 
 Environment:
   VIBE_BACKEND_PORT   Backend port (default: 8899)
-  VIBE_FRONTEND_PORT  Frontend port (default: 5899)
+  VIBE_FRONTEND_HOST  Frontend host (default: 0.0.0.0)
+  VIBE_FRONTEND_PORT  Frontend port (default: 8765)
   PYTHON              Python binary (default: local .venv, then python3)
 USAGE
 }
@@ -263,7 +264,7 @@ cmd_open() {
 
 cmd_urls() {
   cat <<URLS
-Frontend: http://127.0.0.1:$FRONTEND_PORT
+Frontend: http://127.0.0.1:$FRONTEND_PORT (bind: $FRONTEND_HOST)
 Backend:  http://127.0.0.1:$BACKEND_PORT
 API docs: http://127.0.0.1:$BACKEND_PORT/docs
 URLS

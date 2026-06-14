@@ -1,4 +1,4 @@
-﻿import { Bot, TrendingUp, Globe, Sparkles, Users, UserCircle2, NotebookPen, Landmark } from "lucide-react";
+﻿import { Bot, TrendingUp, Globe, Sparkles, Users, UserCircle2, NotebookPen, Landmark, ShieldCheck, Zap } from "lucide-react";
 
 interface Example {
   title: string;
@@ -17,7 +17,7 @@ const CATEGORIES: Category[] = [
   {
     label: "Multi-Market Backtest",
     icon: <TrendingUp className="h-4 w-4" />,
-    color: "text-red-400 border-red-500/30 hover:border-red-500/60 hover:bg-red-500/5",
+    color: "text-emerald-300 border-emerald-300/20 hover:border-emerald-300/45 hover:bg-emerald-300/10",
     examples: [
       {
         title: "Cross-Market Portfolio",
@@ -39,7 +39,7 @@ const CATEGORIES: Category[] = [
   {
     label: "Research & Analysis",
     icon: <Sparkles className="h-4 w-4" />,
-    color: "text-amber-400 border-amber-500/30 hover:border-amber-500/60 hover:bg-amber-500/5",
+    color: "text-orange-300 border-orange-300/20 hover:border-orange-300/45 hover:bg-orange-300/10",
     examples: [
       {
         title: "Multi-Factor Alpha Model",
@@ -56,7 +56,7 @@ const CATEGORIES: Category[] = [
   {
     label: "Swarm Teams",
     icon: <Users className="h-4 w-4" />,
-    color: "text-violet-400 border-violet-500/30 hover:border-violet-500/60 hover:bg-violet-500/5",
+    color: "text-sky-300 border-sky-300/20 hover:border-sky-300/45 hover:bg-sky-300/10",
     examples: [
       {
         title: "Investment Committee Review",
@@ -73,7 +73,7 @@ const CATEGORIES: Category[] = [
   {
     label: "Document & Web Research",
     icon: <Globe className="h-4 w-4" />,
-    color: "text-blue-400 border-blue-500/30 hover:border-blue-500/60 hover:bg-blue-500/5",
+    color: "text-sky-300 border-sky-300/20 hover:border-sky-300/45 hover:bg-sky-300/10",
     examples: [
       {
         title: "Analyze an Earnings Report PDF",
@@ -90,7 +90,7 @@ const CATEGORIES: Category[] = [
   {
     label: "Trade Journal",
     icon: <NotebookPen className="h-4 w-4" />,
-    color: "text-orange-400 border-orange-500/30 hover:border-orange-500/60 hover:bg-orange-500/5",
+    color: "text-orange-300 border-orange-300/20 hover:border-orange-300/45 hover:bg-orange-300/10",
     examples: [
       {
         title: "Analyze My Broker Export",
@@ -107,7 +107,7 @@ const CATEGORIES: Category[] = [
   {
     label: "Trading Connectors",
     icon: <Landmark className="h-4 w-4" />,
-    color: "text-cyan-400 border-cyan-500/30 hover:border-cyan-500/60 hover:bg-cyan-500/5",
+    color: "text-emerald-300 border-emerald-300/20 hover:border-emerald-300/45 hover:bg-emerald-300/10",
     examples: [
       {
         title: "Check Selected Connector",
@@ -129,7 +129,7 @@ const CATEGORIES: Category[] = [
   {
     label: "Shadow Account",
     icon: <UserCircle2 className="h-4 w-4" />,
-    color: "text-emerald-400 border-emerald-500/30 hover:border-emerald-500/60 hover:bg-emerald-500/5",
+    color: "text-emerald-300 border-emerald-300/20 hover:border-emerald-300/45 hover:bg-emerald-300/10",
     examples: [
       {
         title: "Train My Shadow from Journal",
@@ -152,7 +152,7 @@ const CATEGORIES: Category[] = [
 
 const CAPABILITY_CHIPS = [
   "Finance Skills Library",
-  "Swarm Agent Teams",
+  "Rui Swarm Teams",
   "Auto-Discovered Tools",
   "3 Markets: A-Share · Crypto · HK/US",
   "Trading Connector Profiles",
@@ -174,29 +174,50 @@ interface Props {
 
 export function WelcomeScreen({ onExample }: Props) {
   return (
-    <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-8 text-center">
+    <div className="flex min-h-[60vh] flex-col justify-center space-y-7 text-left">
       {/* Header */}
-      <div className="space-y-3">
-        <div className="h-16 w-16 mx-auto rounded-2xl bg-gradient-to-br from-primary/80 to-info/80 flex items-center justify-center shadow-lg">
-          <Bot className="h-8 w-8 text-white" />
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem] lg:items-end">
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex h-12 w-12 items-center justify-center rounded-lg border border-emerald-300/20 bg-emerald-300/10 shadow-lg shadow-black/25">
+              <Bot className="h-6 w-6 text-emerald-200" />
+            </div>
+            <div className="inline-flex items-center gap-2 rounded-full border border-orange-300/20 bg-orange-400/10 px-3 py-1.5 text-xs font-semibold text-orange-200">
+              <Zap className="h-3.5 w-3.5" />
+              Rui powered by DeepSeek
+            </div>
+          </div>
+          <div>
+            <h2 className="max-w-2xl text-3xl font-semibold tracking-normal text-white sm:text-4xl">
+              Ask Rui to research, test, and explain.
+            </h2>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-400 sm:text-base">
+              Start with a symbol, portfolio, document, or strategy idea. The agent can call tools, run swarms, backtest, and keep a research goal ledger.
+            </p>
+          </div>
         </div>
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight">Vibe-Trading</h2>
-          <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto leading-relaxed">
-            vibe trading with your professional financial agent team
-          </p>
-          <p className="text-sm text-muted-foreground mt-2 max-w-md leading-relaxed mx-auto">
-            Describe a trading strategy to get started.
-          </p>
+        <div className="grid gap-2 rounded-lg border border-white/10 bg-white/[0.045] p-4 shadow-2xl shadow-black/20">
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-zinc-500">Provider</span>
+            <span className="font-semibold text-emerald-200">DeepSeek</span>
+          </div>
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-zinc-500">Mode</span>
+            <span className="font-semibold text-white">Research</span>
+          </div>
+          <div className="mt-2 flex items-center gap-2 rounded-lg bg-emerald-300/10 px-3 py-2 text-xs font-medium text-emerald-200">
+            <ShieldCheck className="h-4 w-4" />
+            Read-only until connector mandates are explicitly approved.
+          </div>
         </div>
       </div>
 
       {/* Capability chips */}
-      <div className="flex flex-wrap justify-center gap-2 max-w-lg">
+      <div className="flex max-w-4xl flex-wrap gap-2">
         {CAPABILITY_CHIPS.map((chip) => (
           <span
             key={chip}
-            className="px-2.5 py-1 text-xs rounded-full border border-border/60 text-muted-foreground bg-muted/30"
+            className="rounded-full border border-white/10 bg-white/[0.045] px-2.5 py-1 text-xs text-zinc-400"
           >
             {chip}
           </span>
@@ -204,9 +225,9 @@ export function WelcomeScreen({ onExample }: Props) {
       </div>
 
       {/* Example categories grid */}
-      <div className="w-full max-w-2xl text-left space-y-4">
-        <p className="text-xs text-muted-foreground px-1">Try an example:</p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div className="w-full space-y-4">
+        <p className="px-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">Try an example</p>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {CATEGORIES.map((cat) => (
             <div key={cat.label} className="space-y-2">
               <div className={`flex items-center gap-1.5 text-xs font-medium px-1 ${cat.color.split(" ").filter(c => c.startsWith("text-")).join(" ")}`}>
@@ -218,12 +239,12 @@ export function WelcomeScreen({ onExample }: Props) {
                   <button
                     key={ex.title}
                     onClick={() => onExample(ex.prompt)}
-                    className={`block w-full text-left px-3 py-2.5 rounded-xl border transition-colors ${cat.color}`}
+                    className={`block w-full rounded-lg border bg-white/[0.035] px-3 py-2.5 text-left transition-colors ${cat.color}`}
                   >
-                    <span className="text-sm font-medium text-foreground leading-snug">
+                    <span className="text-sm font-semibold leading-snug text-zinc-100">
                       {ex.title}
                     </span>
-                    <span className="block text-xs text-muted-foreground mt-0.5 leading-snug">
+                    <span className="mt-0.5 block text-xs leading-snug text-zinc-500">
                       {ex.desc}
                     </span>
                   </button>

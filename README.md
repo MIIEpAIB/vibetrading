@@ -478,7 +478,7 @@ vibe-trading serve --port 8899
 cd frontend && npm install && npm run dev
 ```
 
-Open `http://localhost:5899`. The frontend proxies API calls to `localhost:8899`.
+Open `http://localhost:8765`. The frontend binds `0.0.0.0:8765` and proxies API calls to `localhost:8899`.
 
 **Production mode (single server):**
 

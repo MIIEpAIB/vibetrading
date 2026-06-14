@@ -9,13 +9,13 @@ describe("WelcomeScreen", () => {
 
   it("renders the title", () => {
     render(<WelcomeScreen onExample={onExample} />);
-    expect(screen.getByText("Vibe-Trading")).toBeInTheDocument();
+    expect(screen.getByText("Ask Rui to research, test, and explain.")).toBeInTheDocument();
   });
 
   it("renders capability chips", () => {
     render(<WelcomeScreen onExample={onExample} />);
     expect(screen.getByText("Finance Skills Library")).toBeInTheDocument();
-    expect(screen.getByText("Swarm Agent Teams")).toBeInTheDocument();
+    expect(screen.getByText("Rui Swarm Teams")).toBeInTheDocument();
     expect(screen.getByText("Shadow Account Backtest")).toBeInTheDocument();
   });
 
@@ -38,7 +38,7 @@ describe("WelcomeScreen", () => {
 
   it("renders the helper text", () => {
     render(<WelcomeScreen onExample={onExample} />);
-    expect(screen.getByText("Describe a trading strategy to get started.")).toBeInTheDocument();
-    expect(screen.getByText("Try an example:")).toBeInTheDocument();
+    expect(screen.getByText(/Start with a symbol/)).toBeInTheDocument();
+    expect(screen.getByText("Try an example")).toBeInTheDocument();
   });
 });

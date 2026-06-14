@@ -1,7 +1,7 @@
 export function AgentAvatar() {
   return (
-    <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-[#1a365d] to-[#0891b2] flex items-center justify-center text-white text-xs font-bold shrink-0 mt-0.5 select-none">
-      P
+    <div className="mt-0.5 flex h-8 w-8 shrink-0 select-none items-center justify-center rounded-lg border border-emerald-300/20 bg-gradient-to-br from-emerald-400/25 via-[#07100d] to-orange-400/20 text-xs font-bold text-emerald-100 shadow-lg shadow-black/20">
+      Rui
     </div>
   );
 }

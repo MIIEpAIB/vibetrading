@@ -469,7 +469,7 @@ vibe-trading serve --port 8899
 cd frontend && npm install && npm run dev
 ```
 
-打开 `http://localhost:5899`。前端会将 API 调用代理到 `localhost:8899`。
+打开 `http://localhost:8765`。前端默认绑定 `0.0.0.0:8765`，并将 API 调用代理到 `localhost:8899`。
 
 **生产模式（单 server）：**
 

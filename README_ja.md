@@ -472,7 +472,7 @@ vibe-trading serve --port 8899
 cd frontend && npm install && npm run dev
 ```
 
-`http://localhost:5899` を開きます。frontend は API calls を `localhost:8899` へ proxy します。
+`http://localhost:8765` を開きます。frontend は `0.0.0.0:8765` に bind し、API calls を `localhost:8899` へ proxy します。
 
 **Production mode（single server）:**
 

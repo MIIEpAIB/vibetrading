@@ -2,9 +2,9 @@ import { render, screen } from "@testing-library/react";
 import { AgentAvatar } from "../AgentAvatar";
 
 describe("AgentAvatar", () => {
-  it("renders the letter P", () => {
+  it("renders the Rui name", () => {
     render(<AgentAvatar />);
-    expect(screen.getByText("P")).toBeInTheDocument();
+    expect(screen.getByText("Rui")).toBeInTheDocument();
   });
 
   it("has gradient background styling", () => {

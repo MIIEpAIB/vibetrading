@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, useMemo, useCallback, type FormEvent } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Send, Loader2, ArrowDown, Square, Download, Plus, Paperclip, X, Users, Target, ChevronDown, Pencil, Check, Play, OctagonX, Activity, Ban, CheckCircle2, Landmark } from "lucide-react";
+import { Send, Loader2, ArrowDown, Square, Download, Plus, Paperclip, X, Users, Target, ChevronDown, Pencil, Check, Play, OctagonX, Activity, Ban, CheckCircle2, Landmark, Bot, BrainCircuit, Gauge } from "lucide-react";
 import { toast } from "sonner";
 import { useAgentStore } from "@/stores/agent";
 import { useSSE } from "@/hooks/useSSE";
-import { ApiError, AUTH_REQUIRED_MESSAGE, api, isAuthRequiredError, type GoalSnapshot, type MandateProposal, type MandateCommitted, type LiveAction, type LiveHalted, type LiveStatus } from "@/lib/api";
+import { ApiError, AUTH_REQUIRED_MESSAGE, api, isAuthRequiredError, type GoalSnapshot, type LLMSettings, type MandateProposal, type MandateCommitted, type LiveAction, type LiveHalted, type LiveStatus } from "@/lib/api";
 import { isReportWorthyRun } from "@/lib/runReports";
 import type { AgentMessage, ToolCallEntry } from "@/types/agent";
 import { AgentAvatar } from "@/components/chat/AgentAvatar";
@@ -249,6 +249,7 @@ export function Agent() {
    * could be active out-of-band (CLI/another session), not only off in-session SSE
    * items (audit M2: always-available global halt — SPEC Consent §4). */
   const [liveStatus, setLiveStatus] = useState<LiveStatus | null>(null);
+  const [llmSettings, setLlmSettings] = useState<LLMSettings | null>(null);
   const [reasoningActive, setReasoningActive] = useState(false);
   /* The status endpoint is not wired on every backend; a 404/501 hides the panel
    * and removes status from the kill-switch visibility condition. */
@@ -780,6 +781,7 @@ export function Agent() {
 
   useEffect(() => {
     api.getLLMSettings().then((s) => {
+      setLlmSettings(s);
       sseTimeoutMsRef.current = s.sse_timeout_seconds * 1000;
     }).catch(() => {});
   }, []);
@@ -1103,19 +1105,83 @@ export function Agent() {
   /* The global kill switch reflects only a global halt from either an in-session SSE
    * event or the polled status; broker-scoped halts stay on their broker row. */
   const liveIsHalted = isGlobalLiveHalt(liveHalted) || (liveStatus?.global_halted ?? false);
+  const providerOption = llmSettings?.providers.find((provider) => provider.name === llmSettings.provider);
+  const providerLabel = providerOption?.label ?? "DeepSeek";
+  const modelLabel = llmSettings?.model_name ?? "deepseek-v4-pro";
+  const providerReady = llmSettings?.api_key_configured ?? true;
+  const sessionLabel = sessionId ? sessionId.slice(0, 8) : "new";
+  const visibleMessageCount = messages.filter((message) => message.type === "user" || message.type === "answer").length;
+  const runStateLabel = status === "streaming"
+    ? reasoningActive ? "Reasoning" : "Running"
+    : status === "error" ? "Needs attention" : "Ready";
 
   return (
-    <div className="flex flex-col flex-1 min-w-0 overflow-hidden h-full">
-      <div ref={listRef} className="flex-1 overflow-auto p-6 scroll-smooth relative">
-        <div className="max-w-3xl mx-auto space-y-4">
+    <div className="dark relative flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-[#050505] text-zinc-100">
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.035)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.035)_1px,transparent_1px)] bg-[size:56px_56px]" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_90%_45%_at_50%_-20%,rgba(16,185,129,0.16),transparent_72%)]" />
+
+      <header className="relative z-10 border-b border-white/10 bg-[#060806]/90 px-4 py-4 backdrop-blur-xl sm:px-6">
+        <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="min-w-0">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-2 rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1 text-xs font-semibold text-emerald-200">
+                <Bot className="h-3.5 w-3.5" />
+                Rui Desk
+              </span>
+              <span className={[
+                "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold",
+                providerReady
+                  ? "border-orange-300/20 bg-orange-400/10 text-orange-200"
+                  : "border-rose-300/25 bg-rose-400/10 text-rose-200",
+              ].join(" ")}>
+                <span className={["h-1.5 w-1.5 rounded-full", providerReady ? "bg-emerald-300" : "bg-rose-300"].join(" ")} />
+                {providerLabel}
+              </span>
+            </div>
+            <h1 className="truncate text-2xl font-semibold tracking-normal text-white sm:text-3xl">
+              Autonomous Research Command
+            </h1>
+            <p className="mt-1 max-w-2xl truncate text-sm text-zinc-400">
+              {modelLabel}
+            </p>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2 sm:min-w-[28rem]">
+            <div className="rounded-lg border border-white/10 bg-white/[0.045] px-3 py-2">
+              <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                <Activity className="h-3.5 w-3.5 text-emerald-300" />
+                State
+              </div>
+              <div className="mt-1 truncate text-sm font-semibold text-white">{runStateLabel}</div>
+            </div>
+            <div className="rounded-lg border border-white/10 bg-white/[0.045] px-3 py-2">
+              <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                <BrainCircuit className="h-3.5 w-3.5 text-sky-300" />
+                Session
+              </div>
+              <div className="mt-1 truncate font-mono text-sm font-semibold text-white">{sessionLabel}</div>
+            </div>
+            <div className="rounded-lg border border-white/10 bg-white/[0.045] px-3 py-2">
+              <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                <Gauge className="h-3.5 w-3.5 text-orange-300" />
+                Turns
+              </div>
+              <div className="mt-1 font-mono text-sm font-semibold text-white">{visibleMessageCount}</div>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <div ref={listRef} className="relative z-10 flex-1 overflow-auto px-4 py-5 scroll-smooth sm:px-6">
+        <div className="mx-auto w-full max-w-5xl space-y-5 pb-6">
           {sessionLoading && (
             <div className="space-y-4 py-4">
               {[1, 2, 3].map(i => (
                 <div key={i} className="flex gap-3 animate-pulse">
-                  <div className="h-8 w-8 rounded-full bg-muted shrink-0" />
+                  <div className="h-8 w-8 rounded-lg bg-white/10 shrink-0" />
                   <div className="flex-1 space-y-2">
-                    <div className="h-4 bg-muted rounded w-3/4" />
-                    <div className="h-3 bg-muted/60 rounded w-1/2" />
+                    <div className="h-4 bg-white/10 rounded w-3/4" />
+                    <div className="h-3 bg-white/5 rounded w-1/2" />
                   </div>
                 </div>
               ))}
@@ -1167,9 +1233,9 @@ export function Agent() {
           {status === "streaming" && !reasoningActive && !streamingText && toolCalls.length === 0 && !messages.some((m) => m.type === "swarm_status" && m.swarmStatus?.status === "running") && (
             <div className="flex gap-3">
               <AgentAvatar />
-              <div className="flex-1 min-w-0 flex items-center gap-2 text-xs text-muted-foreground pt-1">
-                <Loader2 className="h-3 w-3 animate-spin text-primary shrink-0" />
-                <span>Agent is working…</span>
+              <div className="flex-1 min-w-0 flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-zinc-400">
+                <Loader2 className="h-3 w-3 animate-spin text-orange-300 shrink-0" />
+                <span>Rui is working…</span>
               </div>
             </div>
           )}
@@ -1178,17 +1244,17 @@ export function Agent() {
           {(streamingText || reasoningActive || (status === "streaming" && toolCalls.length > 0)) && (
             <div className="flex gap-3">
               <AgentAvatar />
-              <div className="flex-1 min-w-0 space-y-1.5">
+              <div className="flex-1 min-w-0 space-y-2 rounded-lg border border-white/10 bg-white/[0.04] px-4 py-3">
                 {reasoningActive && !streamingText && (
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <Loader2 className="h-3 w-3 animate-spin text-primary shrink-0" />
+                  <div className="flex items-center gap-2 text-xs text-zinc-400">
+                    <Loader2 className="h-3 w-3 animate-spin text-orange-300 shrink-0" />
                     <span>Reasoning…</span>
                   </div>
                 )}
                 {streamingText && (
-                  <div className="prose prose-sm dark:prose-invert max-w-none leading-relaxed">
+                  <div className="prose prose-sm dark:prose-invert max-w-none leading-relaxed prose-p:text-zinc-200">
                     {streamingText}
-                    <span className="inline-block w-0.5 h-4 bg-primary ml-0.5 animate-pulse align-middle" />
+                    <span className="inline-block w-0.5 h-4 bg-orange-400 ml-0.5 animate-pulse align-middle" />
                   </div>
                 )}
                 {status === "streaming" && toolCalls.length > 0 && (
@@ -1201,10 +1267,10 @@ export function Agent() {
           {/* Persistent streaming pulse bar — always visible while agent is working */}
           {status === "streaming" && (
             <div className="flex items-center gap-2 px-1 pt-1">
-              <div className="h-0.5 flex-1 rounded-full bg-primary/20 overflow-hidden">
-                <div className="h-full w-1/3 bg-primary rounded-full animate-[pulse-slide_2s_ease-in-out_infinite]" />
+              <div className="h-0.5 flex-1 rounded-full bg-emerald-300/15 overflow-hidden">
+                <div className="h-full w-1/3 bg-gradient-to-r from-emerald-300 to-orange-300 rounded-full animate-[pulse-slide_2s_ease-in-out_infinite]" />
               </div>
-              <span className="text-[10px] text-muted-foreground shrink-0 tabular-nums">running</span>
+              <span className="text-[10px] text-zinc-500 shrink-0 tabular-nums">running</span>
             </div>
           )}
 
@@ -1214,7 +1280,7 @@ export function Agent() {
         {showScrollBtn && (
           <button
             onClick={forceScrollToBottom}
-            className="sticky bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1 px-3 py-1.5 rounded-full bg-primary text-primary-foreground text-xs font-medium shadow-lg hover:opacity-90 transition-opacity z-10"
+            className="sticky bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1 rounded-full bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white shadow-lg shadow-orange-500/25 transition hover:bg-orange-400 z-10"
           >
             <ArrowDown className="h-3 w-3" /> New messages
           </button>
@@ -1222,15 +1288,15 @@ export function Agent() {
         <ConversationTimeline messages={messages} containerRef={listRef} />
       </div>
 
-      <form onSubmit={handleSubmit} className="border-t p-4 bg-background/80 backdrop-blur-sm">
-        <div className="max-w-3xl mx-auto space-y-2">
+      <form onSubmit={handleSubmit} className="relative z-10 border-t border-white/10 bg-[#060806]/90 px-4 py-4 backdrop-blur-xl sm:px-6">
+        <div className="mx-auto w-full max-w-5xl space-y-3">
           {/* Swarm preset badge */}
           {swarmPreset && (
             <div className="flex items-center gap-1">
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-violet-500/10 text-violet-600 dark:text-violet-400 text-xs font-medium">
+              <span className="inline-flex items-center gap-1.5 rounded-lg border border-sky-300/20 bg-sky-300/10 px-2.5 py-1 text-xs font-semibold text-sky-200">
                 <Users className="h-3 w-3" />
                 {swarmPreset.title}
-                <button type="button" onClick={() => setSwarmPreset(null)} className="hover:text-destructive transition-colors">
+                <button type="button" onClick={() => setSwarmPreset(null)} className="transition-colors hover:text-orange-200">
                   <X className="h-3 w-3" />
                 </button>
               </span>
@@ -1238,10 +1304,10 @@ export function Agent() {
           )}
           {goalComposerActive && (
             <div className="flex items-center gap-1">
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-primary/10 text-primary text-xs font-medium">
+              <span className="inline-flex items-center gap-1.5 rounded-lg border border-orange-300/20 bg-orange-400/10 px-2.5 py-1 text-xs font-semibold text-orange-200">
                 <Target className="h-3 w-3" />
                 New Research Goal
-                <button type="button" onClick={() => setGoalComposerActive(false)} className="hover:text-destructive transition-colors">
+                <button type="button" onClick={() => setGoalComposerActive(false)} className="transition-colors hover:text-rose-200">
                   <X className="h-3 w-3" />
                 </button>
               </span>
@@ -1252,23 +1318,23 @@ export function Agent() {
               <button
                 type="button"
                 onClick={() => setGoalDetailsOpen((open) => !open)}
-                className="inline-flex max-w-full items-center gap-1.5 justify-self-start rounded-lg bg-primary/10 px-2.5 py-1 text-left text-xs font-medium text-primary transition-colors hover:bg-primary/15"
+                className="inline-flex max-w-full items-center gap-1.5 justify-self-start rounded-lg border border-emerald-300/20 bg-emerald-300/10 px-2.5 py-1 text-left text-xs font-semibold text-emerald-200 transition-colors hover:bg-emerald-300/15"
                 title={goalSnapshot.goal.objective}
                 aria-label="Active research goal"
                 aria-expanded={goalDetailsOpen}
               >
                 <Target className="h-3 w-3 shrink-0" />
                 <span className="shrink-0">Goal</span>
-                <span className="truncate text-muted-foreground">
+                <span className="truncate text-zinc-400">
                   {goalSnapshot.goal.ui_summary || goalSnapshot.goal.objective}
                 </span>
                 {goalProgress.metLabel && (
-                  <span className="shrink-0 font-mono text-[11px] text-emerald-600 dark:text-emerald-400">
+                  <span className="shrink-0 font-mono text-[11px] text-emerald-300">
                     {goalProgress.metLabel}
                   </span>
                 )}
                 {goalProgress.evidenceTotal > 0 && (
-                  <span className="shrink-0 rounded bg-background px-1 font-mono text-[10px] text-primary" title="Evidence collected toward this research goal">
+                  <span className="shrink-0 rounded border border-white/10 bg-black/30 px-1 font-mono text-[10px] text-orange-200" title="Evidence collected toward this research goal">
                     {goalProgress.evidenceTotal} evidence
                   </span>
                 )}
@@ -1281,20 +1347,20 @@ export function Agent() {
                 />
               </button>
               {goalDetailsOpen && (
-                <div className="grid gap-3 rounded-xl border border-primary/20 bg-background/95 p-3 text-xs shadow-sm">
+                <div className="grid gap-3 rounded-lg border border-white/10 bg-[#0a0d0b]/95 p-3 text-xs shadow-2xl shadow-black/25">
                   {goalEditActive ? (
                     <div className="grid gap-2">
                       <textarea
                         value={goalEditValue}
                         onChange={(event) => setGoalEditValue(event.target.value)}
                         rows={3}
-                        className="w-full rounded-lg border bg-background px-3 py-2 text-xs leading-relaxed text-foreground outline-none focus:ring-2 focus:ring-primary/30"
+                        className="w-full rounded-lg border border-white/10 bg-black/25 px-3 py-2 text-xs leading-relaxed text-zinc-100 outline-none focus:ring-2 focus:ring-orange-400/30"
                       />
                       <div className="flex justify-end gap-2">
                         <button
                           type="button"
                           onClick={() => setGoalEditActive(false)}
-                          className="inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+                          className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-semibold text-zinc-400 transition-colors hover:text-white"
                         >
                           <X className="h-3 w-3" />
                           Cancel
@@ -1303,7 +1369,7 @@ export function Agent() {
                           type="button"
                           onClick={handleSaveGoalEdit}
                           disabled={!goalEditValue.trim()}
-                          className="inline-flex items-center gap-1 rounded-lg bg-primary px-2 py-1 text-[11px] font-medium text-primary-foreground transition-opacity disabled:opacity-40"
+                          className="inline-flex items-center gap-1 rounded-lg bg-orange-500 px-2 py-1 text-[11px] font-semibold text-white transition hover:bg-orange-400 disabled:opacity-40"
                         >
                           <Check className="h-3 w-3" />
                           Save
@@ -1311,24 +1377,24 @@ export function Agent() {
                       </div>
                     </div>
                   ) : (
-                    <div className="rounded-lg border bg-muted/20 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+                    <div className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-[11px] leading-relaxed text-zinc-400">
                       {goalSnapshot.goal.objective}
                     </div>
                   )}
                   <div className="grid grid-cols-2 gap-2">
-                    <div className="rounded-lg border bg-muted/20 p-2.5">
-                      <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    <div className="rounded-lg border border-white/10 bg-white/[0.04] p-2.5">
+                      <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
                         Criteria
                       </div>
-                      <div className="mt-1 font-mono text-base font-semibold text-foreground">
+                      <div className="mt-1 font-mono text-base font-semibold text-white">
                         {goalProgress.label || "0/0"}
                       </div>
                     </div>
-                    <div className="rounded-lg border bg-muted/20 p-2.5">
-                      <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    <div className="rounded-lg border border-white/10 bg-white/[0.04] p-2.5">
+                      <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
                         Evidence
                       </div>
-                      <div className="mt-1 font-mono text-base font-semibold text-foreground">
+                      <div className="mt-1 font-mono text-base font-semibold text-white">
                         {goalProgress.evidenceTotal}
                       </div>
                     </div>
@@ -1342,18 +1408,18 @@ export function Agent() {
                       return (
                         <div
                           key={criterion.criterion_id}
-                          className="grid grid-cols-[1.25rem_minmax(0,1fr)_auto] items-start gap-2 rounded-lg border bg-muted/20 p-2"
+                          className="grid grid-cols-[1.25rem_minmax(0,1fr)_auto] items-start gap-2 rounded-lg border border-white/10 bg-white/[0.04] p-2"
                         >
-                          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-muted text-[10px] text-muted-foreground">
+                          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-300/10 text-[10px] text-emerald-200">
                             {criterionIndexLabel(index)}
                           </span>
                           <span className="min-w-0">
-                            <span className="block truncate font-medium text-foreground">{criterion.text}</span>
-                            <span className="block text-[11px] text-muted-foreground">
+                            <span className="block truncate font-medium text-zinc-100">{criterion.text}</span>
+                            <span className="block text-[11px] text-zinc-500">
                               {displayStatus}
                             </span>
                           </span>
-                          <span className="rounded-full border px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                          <span className="rounded-full border border-white/10 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500">
                             {evidenceCount} ev
                           </span>
                         </div>
@@ -1361,29 +1427,29 @@ export function Agent() {
                     })}
                   </div>
                   {goalSnapshot.evidence.length > 0 && (
-                    <div className="grid gap-1.5 border-t pt-2">
-                      <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    <div className="grid gap-1.5 border-t border-white/10 pt-2">
+                      <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
                         Recent Evidence
                       </div>
                       {latestGoalEvidence(goalSnapshot).map((item) => (
-                        <div key={item.evidence_id} className="rounded-lg bg-muted/20 px-2 py-1.5">
-                          <div className="mb-0.5 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+                        <div key={item.evidence_id} className="rounded-lg bg-white/[0.04] px-2 py-1.5">
+                          <div className="mb-0.5 flex items-center justify-between gap-2 text-[10px] text-zinc-500">
                             <span className="truncate">{item.source_provider || "evidence"}</span>
                             <span>{statusLabel(item.verification_status)}</span>
                           </div>
-                          <div className="line-clamp-2 text-[11px] leading-relaxed text-foreground">
+                          <div className="line-clamp-2 text-[11px] leading-relaxed text-zinc-200">
                             {item.text}
                           </div>
                         </div>
                       ))}
                     </div>
                   )}
-                  <div className="flex flex-wrap justify-end gap-2 border-t pt-2">
+                  <div className="flex flex-wrap justify-end gap-2 border-t border-white/10 pt-2">
                     <button
                       type="button"
                       onClick={handleContinueGoal}
                       disabled={status === "streaming"}
-                      className="inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+                      className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-semibold text-zinc-400 transition-colors hover:text-white disabled:opacity-40"
                     >
                       <Play className="h-3 w-3" />
                       Continue
@@ -1392,7 +1458,7 @@ export function Agent() {
                       type="button"
                       onClick={handleStartGoalEdit}
                       disabled={goalEditActive}
-                      className="inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+                      className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-semibold text-zinc-400 transition-colors hover:text-white disabled:opacity-40"
                     >
                       <Pencil className="h-3 w-3" />
                       Edit
@@ -1400,7 +1466,7 @@ export function Agent() {
                     <button
                       type="button"
                       onClick={handleCancelGoal}
-                      className="inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
+                      className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-semibold text-zinc-400 transition-colors hover:border-rose-400/40 hover:text-rose-300"
                     >
                       <X className="h-3 w-3" />
                       Cancel Goal
@@ -1421,10 +1487,10 @@ export function Agent() {
           {/* Attachment badge */}
           {attachment && (
             <div className="flex items-center gap-1">
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-primary/10 text-primary text-xs font-medium">
+              <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300/20 bg-emerald-300/10 px-2.5 py-1 text-xs font-semibold text-emerald-200">
                 <Paperclip className="h-3 w-3" />
                 {attachment.filename}
-                <button type="button" onClick={() => setAttachment(null)} className="hover:text-destructive transition-colors">
+                <button type="button" onClick={() => setAttachment(null)} className="transition-colors hover:text-rose-200">
                   <X className="h-3 w-3" />
                 </button>
               </span>
@@ -1432,7 +1498,7 @@ export function Agent() {
           )}
           {/* Uploading indicator */}
           {uploading && (
-            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <div className="flex items-center gap-1.5 text-xs text-zinc-400">
               <Loader2 className="h-3 w-3 animate-spin" />
               Uploading...
             </div>
@@ -1442,7 +1508,7 @@ export function Agent() {
           {liveActive && (
             <div className="flex items-center gap-2">
               {liveIsHalted ? (
-                <span className="inline-flex items-center gap-1.5 rounded-lg bg-destructive/10 px-2.5 py-1 text-xs font-medium text-destructive">
+                <span className="inline-flex items-center gap-1.5 rounded-lg border border-rose-400/30 bg-rose-400/10 px-2.5 py-1 text-xs font-semibold text-rose-300">
                   <OctagonX className="h-3 w-3" />
                   Connector runtime halted
                 </span>
@@ -1451,7 +1517,7 @@ export function Agent() {
                   type="button"
                   onClick={handleHaltLive}
                   disabled={halting}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-destructive/40 bg-destructive/5 px-2.5 py-1 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-40"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-rose-400/40 bg-rose-400/5 px-2.5 py-1 text-xs font-semibold text-rose-300 transition-colors hover:bg-rose-400/10 disabled:opacity-40"
                   title="Instantly halt connector runtime activity"
                 >
                   {halting ? <Loader2 className="h-3 w-3 animate-spin" /> : <OctagonX className="h-3 w-3" />}
@@ -1467,22 +1533,22 @@ export function Agent() {
                 type="button"
                 onClick={() => setShowUploadMenu(prev => !prev)}
                 disabled={status === "streaming" || uploading}
-                className="w-9 h-9 rounded-full border flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40 shrink-0"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.045] text-zinc-400 transition-colors hover:bg-white/[0.08] hover:text-white disabled:opacity-40"
                 title="More options"
               >
                 <Plus className="h-4 w-4" />
               </button>
               {showUploadMenu && (
-                <div className="absolute bottom-full left-0 mb-2 w-52 rounded-xl border bg-background/95 backdrop-blur-sm shadow-lg py-1 z-50">
+                <div className="absolute bottom-full left-0 z-50 mb-2 w-60 rounded-lg border border-white/10 bg-[#0a0d0b]/95 py-1 shadow-2xl shadow-black/50 backdrop-blur-xl">
                   <button
                     type="button"
                     onClick={() => { fileInputRef.current?.click(); setShowUploadMenu(false); }}
-                    className="w-full px-3 py-2 text-left text-sm hover:bg-muted transition-colors flex items-center gap-2"
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-white"
                   >
                     <Paperclip className="h-4 w-4" />
                     Upload PDF document
                   </button>
-                  <div className="border-t my-1" />
+                  <div className="my-1 border-t border-white/10" />
                   <button
                     type="button"
                     onClick={() => {
@@ -1491,7 +1557,7 @@ export function Agent() {
                       setGoalComposerActive(true);
                       inputRef.current?.focus();
                     }}
-                    className="w-full px-3 py-2 text-left text-sm hover:bg-muted transition-colors flex items-center gap-2"
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-white"
                   >
                     <Target className="h-4 w-4" />
                     Research Goal
@@ -1501,22 +1567,22 @@ export function Agent() {
                     onClick={() => {
                       setShowUploadMenu(false);
                       setGoalComposerActive(false);
-                      setSwarmPreset({ name: "auto", title: "Agent Swarm" });
+                      setSwarmPreset({ name: "auto", title: "Rui Swarm" });
                       inputRef.current?.focus();
                     }}
-                    className="w-full px-3 py-2 text-left text-sm hover:bg-muted transition-colors flex items-center gap-2"
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-white"
                   >
                     <Users className="h-4 w-4" />
-                    Agent Swarm
+                    Rui Swarm
                   </button>
-                  <div className="border-t my-1" />
+                  <div className="my-1 border-t border-white/10" />
                   <button
                     type="button"
                     onClick={() => {
                       setShowUploadMenu(false);
                       void runPrompt(CONNECTOR_CHECK_PROMPT);
                     }}
-                    className="w-full px-3 py-2 text-left text-sm hover:bg-muted transition-colors flex items-center gap-2"
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-white"
                   >
                     <Landmark className="h-4 w-4" />
                     Check Trading Connector
@@ -1527,7 +1593,7 @@ export function Agent() {
                       setShowUploadMenu(false);
                       void runPrompt(CONNECTOR_PORTFOLIO_PROMPT);
                     }}
-                    className="w-full px-3 py-2 text-left text-sm hover:bg-muted transition-colors flex items-center gap-2"
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-white"
                   >
                     <Landmark className="h-4 w-4" />
                     Analyze Connector Portfolio
@@ -1579,14 +1645,14 @@ export function Agent() {
                   ? "Describe the research goal to attach to this session"
                   : "e.g. Create a dual MA crossover strategy for 000001.SZ, backtest 2024"
               }
-              className="flex-1 px-4 py-2.5 rounded-xl border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 transition-shadow resize-none max-h-32 overflow-y-auto"
+              className="max-h-32 flex-1 resize-none overflow-y-auto rounded-lg border border-white/10 bg-white/[0.045] px-4 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 transition-shadow focus:outline-none focus:ring-2 focus:ring-orange-400/35"
               disabled={status === "streaming"}
             />
             {messages.length > 0 && (
               <button
                 type="button"
                 onClick={handleExport}
-                className="px-3 py-2.5 rounded-xl border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                className="rounded-lg border border-white/10 bg-white/[0.045] px-3 py-2.5 text-zinc-400 transition-colors hover:bg-white/[0.08] hover:text-white"
                 title="Export chat"
               >
                 <Download className="h-4 w-4" />
@@ -1596,7 +1662,7 @@ export function Agent() {
               <button
                 type="button"
                 onClick={handleCancel}
-                className="px-4 py-2.5 rounded-xl bg-destructive text-destructive-foreground text-sm font-medium hover:opacity-90 transition-opacity"
+                className="rounded-lg bg-rose-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-rose-400"
                 title="Stop generation"
               >
                 <Square className="h-4 w-4" />
@@ -1605,7 +1671,7 @@ export function Agent() {
               <button
                 type="submit"
                 disabled={goalComposerActive ? !input.trim() : (!input.trim() && !attachment)}
-                className="px-4 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-medium disabled:opacity-40 hover:opacity-90 transition-opacity"
+                className="rounded-lg bg-orange-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-orange-500/20 transition hover:bg-orange-400 disabled:opacity-40"
               >
                 <Send className="h-4 w-4" />
               </button>

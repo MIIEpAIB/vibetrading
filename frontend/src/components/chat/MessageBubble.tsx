@@ -22,7 +22,7 @@ function CopyButton({ text }: { text: string }) {
   return (
     <button
       onClick={handleCopy}
-      className="absolute top-2 right-2 p-1.5 rounded-md bg-muted/80 hover:bg-muted text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity"
+      className="absolute right-2 top-2 rounded-md border border-white/10 bg-black/30 p-1.5 text-zinc-500 opacity-0 transition-opacity hover:bg-white/[0.08] hover:text-white group-hover:opacity-100"
       title={copied ? "Copied" : "Copy"}
     >
       {copied ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
@@ -52,12 +52,12 @@ export const MessageBubble = memo(function MessageBubble({ msg, onRetry }: Props
   if (msg.type === "user") {
     return (
       <div className="flex justify-end gap-3 group">
-        <div className="max-w-[72%] rounded-2xl rounded-tr-sm bg-primary text-primary-foreground px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap">
+        <div className="max-w-[78%] rounded-lg rounded-tr-sm bg-orange-500 px-4 py-2.5 text-sm leading-relaxed text-white shadow-lg shadow-orange-500/15 whitespace-pre-wrap">
           {msg.content}
           {ts && <span className="block text-[9px] opacity-50 text-right mt-1">{ts}</span>}
         </div>
-        <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center shrink-0 mt-0.5">
-          <User className="h-4 w-4 text-muted-foreground" />
+        <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.06]">
+          <User className="h-4 w-4 text-zinc-400" />
         </div>
       </div>
     );
@@ -67,12 +67,12 @@ export const MessageBubble = memo(function MessageBubble({ msg, onRetry }: Props
     return (
       <div className="flex gap-3 group">
         <AgentAvatar />
-        <div className="flex-1 min-w-0 relative">
+        <div className="relative min-w-0 flex-1 rounded-lg border border-white/10 bg-white/[0.045] px-4 py-3 shadow-2xl shadow-black/10">
           <CopyButton text={msg.content} />
-          <div className="prose prose-sm dark:prose-invert max-w-none leading-relaxed prose-table:border prose-table:border-border/50 prose-th:bg-muted/30 prose-th:px-3 prose-th:py-1.5 prose-td:px-3 prose-td:py-1.5 prose-th:text-left prose-th:text-xs prose-th:font-medium prose-td:text-xs prose-hr:hidden">
+          <div className="prose prose-sm dark:prose-invert max-w-none leading-relaxed prose-p:text-zinc-200 prose-li:text-zinc-200 prose-strong:text-white prose-a:text-orange-300 prose-code:text-emerald-200 prose-pre:border prose-pre:border-white/10 prose-pre:bg-black/35 prose-table:border prose-table:border-white/10 prose-th:border-white/10 prose-th:bg-white/[0.06] prose-th:px-3 prose-th:py-1.5 prose-th:text-left prose-th:text-xs prose-th:font-medium prose-td:border-white/10 prose-td:px-3 prose-td:py-1.5 prose-td:text-xs prose-hr:hidden">
             <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}>{msg.content}</ReactMarkdown>
           </div>
-          {ts && <span className="text-[9px] text-muted-foreground/30 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">{ts}</span>}
+          {ts && <span className="mt-1 text-[9px] text-zinc-600 opacity-0 transition-opacity group-hover:opacity-100">{ts}</span>}
         </div>
       </div>
     );
@@ -88,14 +88,14 @@ export const MessageBubble = memo(function MessageBubble({ msg, onRetry }: Props
       <div className="flex gap-3">
         <AgentAvatar />
         <div className="space-y-2">
-          <div className="flex items-start gap-2 rounded-xl border border-danger/30 bg-danger/5 px-4 py-3">
-            <XCircle className="h-4 w-4 text-danger shrink-0 mt-0.5" />
-            <p className="text-sm text-danger leading-relaxed">{msg.content}</p>
+          <div className="flex items-start gap-2 rounded-lg border border-rose-400/30 bg-rose-400/10 px-4 py-3">
+            <XCircle className="h-4 w-4 text-rose-300 shrink-0 mt-0.5" />
+            <p className="text-sm text-rose-200 leading-relaxed">{msg.content}</p>
           </div>
           {onRetry && (
             <button
               onClick={() => onRetry(msg)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:text-foreground hover:bg-muted/80 border border-transparent hover:border-border transition-all"
+              className="flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-xs text-zinc-400 transition-all hover:bg-white/[0.06] hover:text-white"
               title={hint}
             >
               <RefreshCw className="h-3 w-3" />
@@ -112,7 +112,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onRetry }: Props
     return (
       <div className="flex gap-3">
         <AgentAvatar />
-        <p className="text-sm text-muted-foreground leading-relaxed">{msg.content}</p>
+        <p className="text-sm text-zinc-400 leading-relaxed">{msg.content}</p>
       </div>
     );
   }
