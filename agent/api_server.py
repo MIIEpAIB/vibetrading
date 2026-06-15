@@ -51,6 +51,13 @@ _UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1 MB
 console = Console()
 logger = logging.getLogger(__name__)
 
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(ENV_PATH, override=False)
+except Exception:
+    pass
+
 
 # ============================================================================
 # Pydantic Models
@@ -205,6 +212,80 @@ class UpdateDataSourceSettingsRequest(BaseModel):
 
     tushare_token: Optional[str] = None
     clear_tushare_token: bool = False
+
+
+class CryptoStorageStatusResponse(BaseModel):
+    """Public storage status for crypto dashboard K-line persistence."""
+
+    redis: str = Field(..., description="Redis cache status: hit, miss, stored, disabled, or degraded")
+    timescale: str = Field(..., description="TimescaleDB write status: stored, disabled, skipped, or degraded")
+    detail: str = Field("", description="Optional non-secret detail")
+
+
+class CryptoMarketAggregateResponse(BaseModel):
+    """Aggregate crypto market metrics for dashboard boxes."""
+
+    market_cap: float
+    volume_24h: float
+    open_interest: float
+    liquidation_24h: float
+    avg_change_24h: float
+    btc_dominance: float
+
+
+class CryptoMarketRowResponse(BaseModel):
+    """Single row in the crypto market dashboard table."""
+
+    rank: int
+    symbol: str
+    base: str
+    name: str
+    price: float
+    change_24h: float
+    high_24h: float
+    low_24h: float
+    volume_24h: float
+    quote_volume_24h: float
+    market_cap: float
+    funding_rate: float
+    open_interest: float
+    liquidation_24h: float
+
+
+class CryptoMarketsResponse(BaseModel):
+    """Crypto dashboard market data payload."""
+
+    status: str
+    source: str
+    updated_at: str
+    symbols: List[str]
+    aggregate: CryptoMarketAggregateResponse
+    rows: List[CryptoMarketRowResponse]
+
+
+class CryptoKlineBarResponse(BaseModel):
+    """Normalized crypto OHLCV bar."""
+
+    time: str
+    timestamp: int
+    symbol: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+
+
+class CryptoKlinesResponse(BaseModel):
+    """Crypto dashboard K-line response payload."""
+
+    status: str
+    symbol: str
+    timeframe: str
+    source: str
+    updated_at: str
+    storage: CryptoStorageStatusResponse
+    bars: List[CryptoKlineBarResponse]
 
 
 # ---- V4 Session Models ----
@@ -1501,6 +1582,39 @@ async def health_check():
         service="Vibe-Trading API",
         timestamp=datetime.now().isoformat()
     )
+
+
+@app.get(
+    "/crypto/markets",
+    response_model=CryptoMarketsResponse,
+    dependencies=[Depends(require_local_or_auth)],
+)
+async def get_crypto_markets(
+    limit: int = Query(13, description="Number of mainstream crypto rows to return", ge=1, le=13),
+):
+    """Return dashboard crypto market rows and aggregate metrics."""
+    from src.crypto_market import get_market_dashboard
+
+    return get_market_dashboard(limit=limit)
+
+
+@app.get(
+    "/crypto/klines",
+    response_model=CryptoKlinesResponse,
+    dependencies=[Depends(require_local_or_auth)],
+)
+async def get_crypto_klines(
+    symbol: str = Query("BTC/USDT", description="Crypto symbol, e.g. BTC/USDT"),
+    timeframe: str = Query("1h", description="Bar size: 1m, 5m, 15m, 30m, 1h, 4h, 1d"),
+    limit: int = Query(180, description="Maximum bars to return", ge=20, le=1000),
+):
+    """Return normalized OHLCV K-line bars for the dashboard chart."""
+    from src.crypto_market import get_klines
+
+    try:
+        return get_klines(symbol=symbol, timeframe=timeframe, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @app.get("/correlation")

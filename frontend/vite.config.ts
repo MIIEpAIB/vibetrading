@@ -9,6 +9,7 @@ const PROXY_PATHS = [
   "/settings/llm",
   "/settings/data-sources",
   "/strategies",
+  "/crypto",
   "/mandate",
   "/live",
   "/upload",

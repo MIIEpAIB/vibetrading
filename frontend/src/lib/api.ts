@@ -211,6 +211,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ broker }),
     }),
+  getCryptoMarkets: (limit = 13) =>
+    request<CryptoMarketsResponse>(`/crypto/markets?limit=${encodeURIComponent(String(limit))}`),
+  getCryptoKlines: (symbol: string, timeframe = "1h", limit = 180) => {
+    const q = new URLSearchParams({ symbol, timeframe, limit: String(limit) });
+    return request<CryptoKlinesResponse>(`/crypto/klines?${q.toString()}`);
+  },
 };
 
 // --- Swarm types ---
@@ -242,6 +248,68 @@ export interface LLMProviderOption {
   api_key_required: boolean;
   auth_type?: string;
   login_command?: string | null;
+}
+
+export interface CryptoMarketAggregate {
+  market_cap: number;
+  volume_24h: number;
+  open_interest: number;
+  liquidation_24h: number;
+  avg_change_24h: number;
+  btc_dominance: number;
+}
+
+export interface CryptoMarketRow {
+  rank: number;
+  symbol: string;
+  base: string;
+  name: string;
+  price: number;
+  change_24h: number;
+  high_24h: number;
+  low_24h: number;
+  volume_24h: number;
+  quote_volume_24h: number;
+  market_cap: number;
+  funding_rate: number;
+  open_interest: number;
+  liquidation_24h: number;
+}
+
+export interface CryptoMarketsResponse {
+  status: string;
+  source: string;
+  updated_at: string;
+  symbols: string[];
+  aggregate: CryptoMarketAggregate;
+  rows: CryptoMarketRow[];
+}
+
+export interface CryptoStorageStatus {
+  redis: string;
+  timescale: string;
+  detail?: string;
+}
+
+export interface CryptoKlineBar {
+  time: string;
+  timestamp: number;
+  symbol: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export interface CryptoKlinesResponse {
+  status: string;
+  symbol: string;
+  timeframe: string;
+  source: string;
+  updated_at: string;
+  storage: CryptoStorageStatus;
+  bars: CryptoKlineBar[];
 }
 
 export interface LLMSettings {

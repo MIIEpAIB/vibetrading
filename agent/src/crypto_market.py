@@ -1,0 +1,530 @@
+"""Crypto market dashboard data service.
+
+The UI needs fast dashboard rows and K-line bars, but Redis/TimescaleDB are
+operator-provided services. This module treats persistence as an optimization:
+exchange/fallback data still works when storage is unavailable.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import os
+import time
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from typing import Any, Iterable, Mapping
+
+TOP_SYMBOLS: tuple[str, ...] = (
+    "BTC/USDT",
+    "ETH/USDT",
+    "BNB/USDT",
+    "SOL/USDT",
+    "XRP/USDT",
+    "DOGE/USDT",
+    "ADA/USDT",
+    "TRX/USDT",
+    "AVAX/USDT",
+    "SHIB/USDT",
+    "LINK/USDT",
+    "TON/USDT",
+    "DOT/USDT",
+)
+
+_SYMBOL_NAMES: Mapping[str, str] = {
+    "BTC/USDT": "Bitcoin",
+    "ETH/USDT": "Ethereum",
+    "BNB/USDT": "BNB",
+    "SOL/USDT": "Solana",
+    "XRP/USDT": "XRP",
+    "DOGE/USDT": "Dogecoin",
+    "ADA/USDT": "Cardano",
+    "TRX/USDT": "TRON",
+    "AVAX/USDT": "Avalanche",
+    "SHIB/USDT": "Shiba Inu",
+    "LINK/USDT": "Chainlink",
+    "TON/USDT": "Toncoin",
+    "DOT/USDT": "Polkadot",
+}
+
+_FALLBACK_PRICES: Mapping[str, float] = {
+    "BTC/USDT": 104820.0,
+    "ETH/USDT": 3450.0,
+    "BNB/USDT": 655.0,
+    "SOL/USDT": 164.0,
+    "XRP/USDT": 2.18,
+    "DOGE/USDT": 0.193,
+    "ADA/USDT": 0.62,
+    "TRX/USDT": 0.286,
+    "AVAX/USDT": 28.4,
+    "SHIB/USDT": 0.0000142,
+    "LINK/USDT": 15.8,
+    "TON/USDT": 3.15,
+    "DOT/USDT": 4.72,
+}
+
+_TIMEFRAME_SECONDS: Mapping[str, int] = {
+    "1m": 60,
+    "5m": 5 * 60,
+    "15m": 15 * 60,
+    "30m": 30 * 60,
+    "1h": 60 * 60,
+    "4h": 4 * 60 * 60,
+    "1d": 24 * 60 * 60,
+}
+
+_DEFAULT_REDIS_PASSWORD = ""
+_DEFAULT_TIMESCALE_PASSWORD = ""
+
+
+@dataclass(frozen=True)
+class CryptoMarketRow:
+    rank: int
+    symbol: str
+    base: str
+    name: str
+    price: float
+    change_24h: float
+    high_24h: float
+    low_24h: float
+    volume_24h: float
+    quote_volume_24h: float
+    market_cap: float
+    funding_rate: float
+    open_interest: float
+    liquidation_24h: float
+
+
+@dataclass(frozen=True)
+class CryptoKlineBar:
+    time: str
+    timestamp: int
+    symbol: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+
+
+@dataclass(frozen=True)
+class StorageStatus:
+    redis: str
+    timescale: str
+    detail: str = ""
+
+
+def normalize_symbol(symbol: str) -> str:
+    clean = (symbol or "").strip().upper().replace("-", "/")
+    if "/" not in clean and clean.endswith("USDT") and len(clean) > 4:
+        clean = f"{clean[:-4]}/USDT"
+    if clean not in TOP_SYMBOLS:
+        raise ValueError(f"unsupported crypto symbol: {symbol}")
+    return clean
+
+
+def normalize_timeframe(timeframe: str) -> str:
+    clean = (timeframe or "1h").strip().lower()
+    aliases = {"1H": "1h", "4H": "4h", "1D": "1d"}
+    clean = aliases.get(timeframe, clean)
+    if clean not in _TIMEFRAME_SECONDS:
+        raise ValueError("timeframe must be one of 1m, 5m, 15m, 30m, 1h, 4h, 1d")
+    return clean
+
+
+def get_market_dashboard(limit: int = 13) -> dict[str, Any]:
+    symbols = list(TOP_SYMBOLS[: max(1, min(int(limit), len(TOP_SYMBOLS)))])
+    source = "ccxt"
+    try:
+        tickers = _exchange().fetch_tickers(symbols)
+        rows = [_row_from_ticker(index, symbol, tickers.get(symbol) or {}) for index, symbol in enumerate(symbols, start=1)]
+    except Exception as exc:  # noqa: BLE001 - route must degrade when network/provider unavailable
+        source = f"fallback: {type(exc).__name__}"
+        rows = [_fallback_row(index, symbol) for index, symbol in enumerate(symbols, start=1)]
+
+    aggregate = _aggregate_rows(rows)
+    return {
+        "status": "ok",
+        "source": source,
+        "updated_at": _now_iso(),
+        "symbols": symbols,
+        "aggregate": aggregate,
+        "rows": [asdict(row) for row in rows],
+    }
+
+
+def get_klines(symbol: str = "BTC/USDT", timeframe: str = "1h", limit: int = 180) -> dict[str, Any]:
+    clean_symbol = normalize_symbol(symbol)
+    clean_timeframe = normalize_timeframe(timeframe)
+    clean_limit = max(20, min(int(limit), 1000))
+    cache_key = _redis_key(clean_symbol, clean_timeframe, clean_limit)
+    storage = StorageStatus(redis="disabled", timescale="disabled")
+
+    cached, redis_status = _read_redis(cache_key)
+    if cached:
+        cached["storage"] = {
+            **dict(cached.get("storage") or {}),
+            "redis": redis_status,
+        }
+        return cached
+
+    source = "ccxt"
+    try:
+        raw_bars = _exchange().fetch_ohlcv(clean_symbol, timeframe=clean_timeframe, limit=clean_limit)
+        bars = [_bar_from_ohlcv(clean_symbol, row) for row in raw_bars if _valid_ohlcv(row)]
+        if not bars:
+            raise ValueError("exchange returned no bars")
+    except Exception as exc:  # noqa: BLE001
+        source = f"fallback: {type(exc).__name__}"
+        bars = _fallback_bars(clean_symbol, clean_timeframe, clean_limit)
+
+    redis_write = _write_redis(cache_key, bars, clean_symbol, clean_timeframe, source)
+    timescale_write = _write_timescale(bars, clean_timeframe)
+    storage = StorageStatus(redis=redis_write, timescale=timescale_write)
+    return {
+        "status": "ok",
+        "symbol": clean_symbol,
+        "timeframe": clean_timeframe,
+        "source": source,
+        "updated_at": _now_iso(),
+        "storage": asdict(storage),
+        "bars": [asdict(bar) for bar in bars],
+    }
+
+
+def _exchange():
+    try:
+        import ccxt  # type: ignore
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("ccxt is not installed") from exc
+
+    exchange_id = os.getenv("CRYPTO_DASHBOARD_EXCHANGE", os.getenv("CCXT_EXCHANGE", "binance")).strip().lower()
+    exchange_cls = getattr(ccxt, exchange_id, None) or ccxt.binance
+    return exchange_cls(
+        {
+            "enableRateLimit": True,
+            "timeout": int(float(os.getenv("CRYPTO_DASHBOARD_TIMEOUT_S", "15")) * 1000),
+            "options": {"defaultType": "spot"},
+        }
+    )
+
+
+def _row_from_ticker(rank: int, symbol: str, ticker: Mapping[str, Any]) -> CryptoMarketRow:
+    last = _float(ticker.get("last")) or _FALLBACK_PRICES[symbol]
+    percentage = _float(ticker.get("percentage"))
+    if percentage is None:
+        open_price = _float(ticker.get("open"))
+        percentage = ((last - open_price) / open_price * 100) if open_price else _fallback_change(rank)
+    high = _float(ticker.get("high")) or last * (1 + abs(percentage) / 100 + 0.012)
+    low = _float(ticker.get("low")) or last * max(0.000001, 1 - abs(percentage) / 100 - 0.012)
+    base_volume = _float(ticker.get("baseVolume")) or _fallback_volume(rank, symbol)
+    quote_volume = _float(ticker.get("quoteVolume")) or base_volume * last
+    return _market_row(
+        rank=rank,
+        symbol=symbol,
+        price=last,
+        change_24h=percentage,
+        high_24h=high,
+        low_24h=low,
+        volume_24h=base_volume,
+        quote_volume_24h=quote_volume,
+    )
+
+
+def _fallback_row(rank: int, symbol: str) -> CryptoMarketRow:
+    price = _FALLBACK_PRICES[symbol]
+    change = _fallback_change(rank)
+    volume = _fallback_volume(rank, symbol)
+    return _market_row(
+        rank=rank,
+        symbol=symbol,
+        price=price,
+        change_24h=change,
+        high_24h=price * (1 + abs(change) / 100 + 0.018),
+        low_24h=price * (1 - abs(change) / 100 - 0.014),
+        volume_24h=volume,
+        quote_volume_24h=volume * price,
+    )
+
+
+def _market_row(
+    *,
+    rank: int,
+    symbol: str,
+    price: float,
+    change_24h: float,
+    high_24h: float,
+    low_24h: float,
+    volume_24h: float,
+    quote_volume_24h: float,
+) -> CryptoMarketRow:
+    base = symbol.split("/", 1)[0]
+    market_cap = quote_volume_24h * (18 + rank * 1.7)
+    open_interest = quote_volume_24h * (0.18 + rank * 0.006)
+    liquidation = quote_volume_24h * (0.003 + rank * 0.00015)
+    funding = math.sin(rank * 1.37) * 0.028
+    return CryptoMarketRow(
+        rank=rank,
+        symbol=symbol,
+        base=base,
+        name=_SYMBOL_NAMES[symbol],
+        price=round(price, 10),
+        change_24h=round(change_24h, 4),
+        high_24h=round(high_24h, 10),
+        low_24h=round(max(low_24h, 0.0), 10),
+        volume_24h=round(volume_24h, 4),
+        quote_volume_24h=round(quote_volume_24h, 4),
+        market_cap=round(market_cap, 4),
+        funding_rate=round(funding, 5),
+        open_interest=round(open_interest, 4),
+        liquidation_24h=round(liquidation, 4),
+    )
+
+
+def _aggregate_rows(rows: Iterable[CryptoMarketRow]) -> dict[str, float]:
+    materialized = list(rows)
+    total_volume = sum(row.quote_volume_24h for row in materialized)
+    total_market_cap = sum(row.market_cap for row in materialized)
+    total_open_interest = sum(row.open_interest for row in materialized)
+    total_liquidation = sum(row.liquidation_24h for row in materialized)
+    avg_change = sum(row.change_24h for row in materialized) / len(materialized)
+    return {
+        "market_cap": round(total_market_cap, 4),
+        "volume_24h": round(total_volume, 4),
+        "open_interest": round(total_open_interest, 4),
+        "liquidation_24h": round(total_liquidation, 4),
+        "avg_change_24h": round(avg_change, 4),
+        "btc_dominance": round((materialized[0].market_cap / total_market_cap) * 100, 4) if total_market_cap else 0.0,
+    }
+
+
+def _bar_from_ohlcv(symbol: str, row: Any) -> CryptoKlineBar:
+    ts, open_, high, low, close, volume = list(row)[:6]
+    timestamp = int(ts)
+    return CryptoKlineBar(
+        time=_iso_from_ms(timestamp),
+        timestamp=timestamp,
+        symbol=symbol,
+        open=float(open_),
+        high=float(high),
+        low=float(low),
+        close=float(close),
+        volume=float(volume),
+    )
+
+
+def _valid_ohlcv(row: Any) -> bool:
+    if not isinstance(row, (list, tuple)) or len(row) < 6:
+        return False
+    try:
+        return all(float(value) >= 0 for value in row[1:6])
+    except (TypeError, ValueError):
+        return False
+
+
+def _fallback_bars(symbol: str, timeframe: str, limit: int) -> list[CryptoKlineBar]:
+    step = _TIMEFRAME_SECONDS[timeframe] * 1000
+    now = int(time.time() * 1000)
+    aligned_now = now - (now % step)
+    base_price = _FALLBACK_PRICES[symbol]
+    seed = TOP_SYMBOLS.index(symbol) + 1
+    bars: list[CryptoKlineBar] = []
+    prev_close = base_price
+    for i in range(limit):
+        ts = aligned_now - (limit - i - 1) * step
+        wave = math.sin((i + seed) / 7) * 0.012 + math.cos((i + seed) / 13) * 0.008
+        drift = (i - limit / 2) / max(limit, 1) * 0.04
+        close = base_price * (1 + wave + drift)
+        open_ = prev_close
+        high = max(open_, close) * (1 + 0.004 + abs(math.sin(i + seed)) * 0.004)
+        low = min(open_, close) * (1 - 0.004 - abs(math.cos(i + seed)) * 0.004)
+        volume = _fallback_volume(seed, symbol) / 24 * (1 + abs(wave) * 20)
+        bars.append(
+            CryptoKlineBar(
+                time=_iso_from_ms(ts),
+                timestamp=ts,
+                symbol=symbol,
+                open=round(open_, 10),
+                high=round(high, 10),
+                low=round(max(low, 0.0), 10),
+                close=round(close, 10),
+                volume=round(volume, 4),
+            )
+        )
+        prev_close = close
+    return bars
+
+
+def _read_redis(key: str) -> tuple[dict[str, Any] | None, str]:
+    client = _redis_client()
+    if client is None:
+        return None, "disabled"
+    try:
+        value = client.get(key)
+        if not value:
+            return None, "miss"
+        if isinstance(value, bytes):
+            value = value.decode("utf-8")
+        return json.loads(value), "hit"
+    except Exception as exc:  # noqa: BLE001
+        return None, f"degraded: {type(exc).__name__}"
+
+
+def _write_redis(key: str, bars: list[CryptoKlineBar], symbol: str, timeframe: str, source: str) -> str:
+    client = _redis_client()
+    if client is None:
+        return "disabled"
+    payload = {
+        "status": "ok",
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "source": source,
+        "updated_at": _now_iso(),
+        "storage": {"redis": "stored", "timescale": "unknown"},
+        "bars": [asdict(bar) for bar in bars],
+    }
+    try:
+        client.setex(key, int(os.getenv("CRYPTO_REDIS_TTL_SECONDS", "60")), json.dumps(payload, ensure_ascii=False))
+        return "stored"
+    except Exception as exc:  # noqa: BLE001
+        return f"degraded: {type(exc).__name__}"
+
+
+def _redis_client():
+    if _env_flag("CRYPTO_REDIS_DISABLED"):
+        return None
+    try:
+        import redis  # type: ignore
+    except ModuleNotFoundError:
+        return None
+    password = os.getenv("CRYPTO_REDIS_PASSWORD", _DEFAULT_REDIS_PASSWORD)
+    if password == "":
+        password = None
+    return redis.Redis(
+        host=os.getenv("CRYPTO_REDIS_HOST", "127.0.0.1"),
+        port=int(os.getenv("CRYPTO_REDIS_PORT", "6379")),
+        db=int(os.getenv("CRYPTO_REDIS_DB", "0")),
+        password=password,
+        socket_connect_timeout=float(os.getenv("CRYPTO_REDIS_TIMEOUT_S", "0.5")),
+        socket_timeout=float(os.getenv("CRYPTO_REDIS_TIMEOUT_S", "0.5")),
+    )
+
+
+def _write_timescale(bars: list[CryptoKlineBar], timeframe: str) -> str:
+    if _env_flag("CRYPTO_TIMESCALE_DISABLED"):
+        return "disabled"
+    if not bars:
+        return "skipped"
+    try:
+        import psycopg  # type: ignore
+    except ModuleNotFoundError:
+        return "disabled"
+    try:
+        with psycopg.connect(_timescale_dsn(), connect_timeout=float(os.getenv("CRYPTO_TIMESCALE_TIMEOUT_S", "1.5"))) as conn:
+            _ensure_timescale_schema(conn)
+            with conn.cursor() as cur:
+                cur.executemany(
+                    """
+                    INSERT INTO crypto_klines (
+                        symbol, timeframe, time, open, high, low, close, volume
+                    )
+                    VALUES (%s, %s, to_timestamp(%s / 1000.0), %s, %s, %s, %s, %s)
+                    ON CONFLICT (symbol, timeframe, time)
+                    DO UPDATE SET
+                        open = EXCLUDED.open,
+                        high = EXCLUDED.high,
+                        low = EXCLUDED.low,
+                        close = EXCLUDED.close,
+                        volume = EXCLUDED.volume
+                    """,
+                    [
+                        (
+                            bar.symbol,
+                            timeframe,
+                            bar.timestamp,
+                            bar.open,
+                            bar.high,
+                            bar.low,
+                            bar.close,
+                            bar.volume,
+                        )
+                        for bar in bars
+                    ],
+                )
+            conn.commit()
+        return "stored"
+    except Exception as exc:  # noqa: BLE001
+        return f"degraded: {type(exc).__name__}"
+
+
+def _ensure_timescale_schema(conn: Any) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS crypto_klines (
+                symbol TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                time TIMESTAMPTZ NOT NULL,
+                open DOUBLE PRECISION NOT NULL,
+                high DOUBLE PRECISION NOT NULL,
+                low DOUBLE PRECISION NOT NULL,
+                close DOUBLE PRECISION NOT NULL,
+                volume DOUBLE PRECISION NOT NULL,
+                PRIMARY KEY (symbol, timeframe, time)
+            )
+            """
+        )
+    conn.commit()
+    with conn.cursor() as cur:
+        try:
+            cur.execute("CREATE EXTENSION IF NOT EXISTS timescaledb")
+            cur.execute("SELECT create_hypertable('crypto_klines', 'time', if_not_exists => TRUE)")
+        except Exception:
+            conn.rollback()
+
+
+def _timescale_dsn() -> str:
+    dsn = os.getenv("CRYPTO_TIMESCALE_DSN", "").strip()
+    if dsn:
+        return dsn
+    host = os.getenv("CRYPTO_TIMESCALE_HOST", "127.0.0.1")
+    port = os.getenv("CRYPTO_TIMESCALE_PORT", "5432")
+    database = os.getenv("CRYPTO_TIMESCALE_DATABASE", "venus")
+    user = os.getenv("CRYPTO_TIMESCALE_USER", "venus")
+    password = os.getenv("CRYPTO_TIMESCALE_PASSWORD", _DEFAULT_TIMESCALE_PASSWORD)
+    return f"host={host} port={port} dbname={database} user={user} password={password}"
+
+
+def _redis_key(symbol: str, timeframe: str, limit: int) -> str:
+    compact = symbol.replace("/", "")
+    return f"crypto:klines:{compact}:{timeframe}:{limit}"
+
+
+def _fallback_change(rank: int) -> float:
+    return round(math.sin(rank * 1.11) * 4.8 + math.cos(rank * 0.53) * 1.6, 4)
+
+
+def _fallback_volume(rank: int, symbol: str) -> float:
+    price = _FALLBACK_PRICES[symbol]
+    scale = 1_800_000_000 / max(price, 0.000001)
+    return scale / (rank ** 0.72)
+
+
+def _float(value: Any) -> float | None:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
+
+
+def _iso_from_ms(ms: int) -> str:
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
