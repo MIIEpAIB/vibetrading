@@ -12,37 +12,74 @@ import {
   TrendingDown,
   TrendingUp,
 } from "lucide-react";
+import {
+  CandlestickSeries,
+  ColorType,
+  createChart,
+  HistogramSeries,
+  type CandlestickData,
+  type HistogramData,
+  type IChartApi,
+  type ISeriesApi,
+  type UTCTimestamp,
+} from "lightweight-charts";
 import { api, type CryptoKlineBar, type CryptoMarketRow, type CryptoMarketsResponse } from "@/lib/api";
-import { echarts } from "@/lib/echarts";
 import { cn } from "@/lib/utils";
 
-const FALLBACK_ROWS: CryptoMarketRow[] = [
-  ["BTC/USDT", "Bitcoin", 104820, 2.84],
-  ["ETH/USDT", "Ethereum", 3450, 1.96],
-  ["BNB/USDT", "BNB", 655, -0.52],
-  ["SOL/USDT", "Solana", 164, 4.2],
-  ["XRP/USDT", "XRP", 2.18, -1.31],
-  ["DOGE/USDT", "Dogecoin", 0.193, 3.12],
-  ["ADA/USDT", "Cardano", 0.62, 0.74],
-  ["TRX/USDT", "TRON", 0.286, 0.19],
-  ["AVAX/USDT", "Avalanche", 28.4, -2.18],
-  ["SHIB/USDT", "Shiba Inu", 0.0000142, 1.47],
-  ["LINK/USDT", "Chainlink", 15.8, 2.24],
-  ["TON/USDT", "Toncoin", 3.15, -0.68],
-  ["DOT/USDT", "Polkadot", 4.72, 1.08],
-].map(([symbol, name, price, change], index) => {
+type CoinSeed = {
+  symbol: string;
+  name: string;
+  price: number;
+  change: number;
+  iconBg: string;
+  iconFg: string;
+};
+
+const COIN_SEEDS: CoinSeed[] = [
+  { symbol: "BTC/USDT", name: "Bitcoin", price: 104820, change: 2.84, iconBg: "#f7931a", iconFg: "#111827" },
+  { symbol: "ETH/USDT", name: "Ethereum", price: 3450, change: 1.96, iconBg: "#627eea", iconFg: "#ffffff" },
+  { symbol: "BNB/USDT", name: "BNB", price: 655, change: -0.52, iconBg: "#f3ba2f", iconFg: "#111827" },
+  { symbol: "SOL/USDT", name: "Solana", price: 164, change: 4.2, iconBg: "#14f195", iconFg: "#111827" },
+  { symbol: "XRP/USDT", name: "XRP", price: 2.18, change: -1.31, iconBg: "#d1d5db", iconFg: "#111827" },
+  { symbol: "DOGE/USDT", name: "Dogecoin", price: 0.193, change: 3.12, iconBg: "#c2a633", iconFg: "#111827" },
+  { symbol: "ADA/USDT", name: "Cardano", price: 0.62, change: 0.74, iconBg: "#3468d1", iconFg: "#ffffff" },
+  { symbol: "TRX/USDT", name: "TRON", price: 0.286, change: 0.19, iconBg: "#ef0027", iconFg: "#ffffff" },
+  { symbol: "AVAX/USDT", name: "Avalanche", price: 28.4, change: -2.18, iconBg: "#e84142", iconFg: "#ffffff" },
+  { symbol: "SHIB/USDT", name: "Shiba Inu", price: 0.0000142, change: 1.47, iconBg: "#f00500", iconFg: "#ffffff" },
+  { symbol: "LINK/USDT", name: "Chainlink", price: 15.8, change: 2.24, iconBg: "#2a5ada", iconFg: "#ffffff" },
+  { symbol: "TON/USDT", name: "Toncoin", price: 3.15, change: -0.68, iconBg: "#0098ea", iconFg: "#ffffff" },
+  { symbol: "DOT/USDT", name: "Polkadot", price: 4.72, change: 1.08, iconBg: "#e6007a", iconFg: "#ffffff" },
+];
+
+const COIN_ICON_META = new Map(
+  COIN_SEEDS.map((coin) => [
+    coin.symbol,
+    {
+      base: coin.symbol.split("/")[0],
+      icon_url: `/coin-icons/${coin.symbol.split("/")[0].toLowerCase()}.svg`,
+      icon_bg: coin.iconBg,
+      icon_fg: coin.iconFg,
+    },
+  ]),
+);
+
+const FALLBACK_ROWS: CryptoMarketRow[] = COIN_SEEDS.map(({ symbol, name, price, change, iconBg, iconFg }, index) => {
   const rank = index + 1;
-  const quoteVolume = Number(price) * (1_800_000_000 / Number(price)) / rank ** 0.7;
+  const quoteVolume = price * (1_800_000_000 / price) / rank ** 0.7;
+  const base = symbol.split("/")[0];
   return {
     rank,
-    symbol: String(symbol),
-    base: String(symbol).split("/")[0],
-    name: String(name),
-    price: Number(price),
-    change_24h: Number(change),
-    high_24h: Number(price) * 1.035,
-    low_24h: Number(price) * 0.965,
-    volume_24h: quoteVolume / Number(price),
+    symbol,
+    base,
+    name,
+    icon_url: `/coin-icons/${base.toLowerCase()}.svg`,
+    icon_bg: iconBg,
+    icon_fg: iconFg,
+    price,
+    change_24h: change,
+    high_24h: price * 1.035,
+    low_24h: price * 0.965,
+    volume_24h: quoteVolume / price,
     quote_volume_24h: quoteVolume,
     market_cap: quoteVolume * (20 + rank),
     funding_rate: Math.sin(rank) * 0.02,
@@ -78,14 +115,6 @@ function formatMoney(value: number): string {
   return `$${value.toPrecision(4)}`;
 }
 
-function formatNumber(value: number): string {
-  const abs = Math.abs(value);
-  if (abs >= 1e9) return `${(value / 1e9).toFixed(2)}B`;
-  if (abs >= 1e6) return `${(value / 1e6).toFixed(2)}M`;
-  if (abs >= 1e3) return `${(value / 1e3).toFixed(2)}K`;
-  return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
-}
-
 function formatPercent(value: number, decimals = 2): string {
   const sign = value > 0 ? "+" : "";
   return `${sign}${value.toFixed(decimals)}%`;
@@ -97,29 +126,89 @@ function toneClass(value: number): string {
   return "text-zinc-300";
 }
 
+function withCoinMeta(row: CryptoMarketRow): CryptoMarketRow {
+  const meta = COIN_ICON_META.get(row.symbol);
+  if (!meta) return row;
+  return {
+    ...row,
+    icon_url: row.icon_url || meta.icon_url,
+    icon_bg: row.icon_bg || meta.icon_bg,
+    icon_fg: row.icon_fg || meta.icon_fg,
+  };
+}
+
+function enrichMarkets(payload: CryptoMarketsResponse): CryptoMarketsResponse {
+  return {
+    ...payload,
+    rows: payload.rows.map(withCoinMeta),
+  };
+}
+
+function toChartTime(timestamp: number): UTCTimestamp {
+  return Math.floor(timestamp / 1000) as UTCTimestamp;
+}
+
 function buildFallbackBars(symbol: string, limit = 180): CryptoKlineBar[] {
   const row = FALLBACK_ROWS.find((item) => item.symbol === symbol) ?? FALLBACK_ROWS[0];
   const now = Date.now();
-  let previous = row.price;
-  return Array.from({ length: limit }, (_, index) => {
+  
+  // 1. 设定初始价格，加入一些随机偏移，防止切换周期时每条线都一模一样
+  let currentClose = row.price * (1 + (Math.random() - 0.5) * 0.02);
+  
+  // 2. 根据所选的 K 线数量反推历史时间轴，按时间正序从老到新生成
+  const bars: CryptoKlineBar[] = [];
+  
+  for (let index = 0; index < limit; index++) {
+    // 假设每根 K 线时间间隔为 1 小时
     const timestamp = now - (limit - index - 1) * 60 * 60 * 1000;
-    const wave = Math.sin(index / 7) * 0.012 + Math.cos(index / 13) * 0.008;
-    const close = row.price * (1 + wave + (index - limit / 2) / limit * 0.04);
-    const open = previous;
-    const high = Math.max(open, close) * 1.007;
-    const low = Math.min(open, close) * 0.993;
-    previous = close;
-    return {
+    
+    // 3. 开盘价等于上一根 K 线的收盘价
+    const open = currentClose;
+    
+    // 4. 使用随机数模拟市场涨跌（限制在正负 0.6% 以内）
+    const changePercent = (Math.random() - 0.5) * 0.012; 
+    currentClose = open * (1 + changePercent);
+    
+    // 5. 制造影线：最高价与最低价在开盘和收盘的基础上向外随机延伸
+    const highestOfOpenClose = Math.max(open, currentClose);
+    const lowestOfOpenClose = Math.min(open, currentClose);
+    
+    const high = highestOfOpenClose * (1 + Math.random() * 0.004);
+    const low = lowestOfOpenClose * (1 - Math.random() * 0.004);
+    
+    // 6. 同样为成交量注入随机性
+    const volumeNoise = 0.7 + Math.random() * 0.6; // 0.7 到 1.3 的随机系数
+    const volume = (row.volume_24h / 24) * volumeNoise;
+
+    bars.push({
       time: new Date(timestamp).toISOString(),
       timestamp,
       symbol,
       open,
       high,
       low,
-      close,
-      volume: row.volume_24h / 24,
-    };
-  });
+      close: currentClose,
+      volume,
+    });
+  }
+  
+  return bars;
+}
+
+
+function CoinIcon({ row, size = "md" }: { row: CryptoMarketRow; size?: "sm" | "md" }) {
+  const sizeClass = size === "sm" ? "h-7 w-7 text-[10px]" : "h-8 w-8 text-xs";
+  const label = row.base.slice(0, row.base === "SHIB" ? 4 : 3);
+  return (
+    <span
+      className={cn("relative flex shrink-0 items-center justify-center overflow-hidden rounded-full font-bold shadow-inner", sizeClass)}
+      style={{ backgroundColor: row.icon_bg, color: row.icon_fg }}
+      title={`${row.name} icon`}
+    >
+      <span className="absolute inset-0 flex items-center justify-center">{label}</span>
+      <img src={row.icon_url} alt="" className="relative h-full w-full rounded-full object-cover" loading="lazy" />
+    </span>
+  );
 }
 
 function MetricBox({
@@ -157,101 +246,118 @@ function MetricBox({
 
 function KlinePanel({
   symbol,
-  timeframe,
   bars,
-  loading,
 }: {
   symbol: string;
-  timeframe: string;
   bars: CryptoKlineBar[];
-  loading: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<ReturnType<typeof echarts.init> | null>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
 
   useEffect(() => {
     if (!ref.current) return;
-    const chart = echarts.init(ref.current);
+
+    const chart = createChart(ref.current, {
+      autoSize: true,
+      height: 360,
+      layout: {
+        background: { type: ColorType.Solid, color: "transparent" },
+        textColor: "#a1a1aa",
+        fontSize: 11,
+      },
+      grid: {
+        vertLines: { color: "rgba(63,63,70,0.22)" },
+        horzLines: { color: "rgba(63,63,70,0.35)" },
+      },
+      rightPriceScale: {
+        borderColor: "#27272a",
+        scaleMargins: { top: 0.08, bottom: 0.28 },
+      },
+      timeScale: {
+        borderColor: "#27272a",
+        timeVisible: true,
+        secondsVisible: false,
+        rightOffset: 8,
+        barSpacing: 7,
+      },
+      crosshair: {
+        mode: 0,
+        vertLine: { color: "rgba(251,146,60,0.55)", width: 1, style: 3, labelBackgroundColor: "#f97316" },
+        horzLine: { color: "rgba(251,146,60,0.55)", width: 1, style: 3, labelBackgroundColor: "#f97316" },
+      },
+      localization: {
+        priceFormatter: (price: number) => formatMoney(price),
+      },
+    });
+
+    const candleSeries = chart.addSeries(CandlestickSeries, {
+      upColor: "#10b981",
+      downColor: "#ef4444",
+      borderUpColor: "#10b981",
+      borderDownColor: "#ef4444",
+      wickUpColor: "#34d399",
+      wickDownColor: "#f87171",
+      priceLineColor: "#f97316",
+      lastValueVisible: true,
+      priceLineVisible: true,
+    });
+
+    const volumeSeries = chart.addSeries(HistogramSeries, {
+      priceFormat: { type: "volume" },
+      priceScaleId: "volume",
+      lastValueVisible: false,
+      priceLineVisible: false,
+    });
+
+    chart.priceScale("volume").applyOptions({
+      scaleMargins: { top: 0.78, bottom: 0 },
+      borderVisible: false,
+    });
+
     chartRef.current = chart;
-    const resize = new ResizeObserver(() => chart.resize());
-    resize.observe(ref.current);
+    candleSeriesRef.current = candleSeries;
+    volumeSeriesRef.current = volumeSeries;
+
     return () => {
-      resize.disconnect();
-      chart.dispose();
+      chart.remove();
       chartRef.current = null;
+      candleSeriesRef.current = null;
+      volumeSeriesRef.current = null;
     };
   }, []);
 
   useEffect(() => {
-    const chart = chartRef.current;
-    if (!chart) return;
-    const dates = bars.map((bar) => bar.time.slice(5, 16).replace("T", " "));
-    const candles = bars.map((bar) => [bar.open, bar.close, bar.low, bar.high]);
-    const volumes = bars.map((bar) => ({
+    const candleSeries = candleSeriesRef.current;
+    const volumeSeries = volumeSeriesRef.current;
+    if (!candleSeries || !volumeSeries) return;
+
+    const orderedBars = [...bars].sort((a, b) => a.timestamp - b.timestamp);
+    const candles: CandlestickData[] = orderedBars.map((bar) => ({
+      time: toChartTime(bar.timestamp),
+      open: bar.open,
+      high: bar.high,
+      low: bar.low,
+      close: bar.close,
+    }));
+    const volumes: HistogramData[] = orderedBars.map((bar) => ({
+      time: toChartTime(bar.timestamp),
       value: bar.volume,
-      itemStyle: { color: bar.close >= bar.open ? "rgba(16,185,129,0.45)" : "rgba(248,113,113,0.45)" },
+      color: bar.close >= bar.open ? "rgba(16,185,129,0.42)" : "rgba(239,68,68,0.42)",
     }));
 
-    chart.setOption({
-      backgroundColor: "transparent",
-      animation: false,
-      tooltip: {
-        trigger: "axis",
-        axisPointer: { type: "cross" },
-        backgroundColor: "rgba(15,18,24,0.96)",
-        borderColor: "#272a33",
-        textStyle: { color: "#e5e7eb", fontSize: 11 },
-      },
-      grid: [
-        { left: 8, right: 8, top: 12, height: "63%", containLabel: true },
-        { left: 8, right: 8, top: "76%", height: "15%", containLabel: true },
-      ],
-      xAxis: [
-        { type: "category", data: dates, boundaryGap: true, axisLine: { lineStyle: { color: "#2b2f3a" } }, axisLabel: { color: "#71717a", fontSize: 10 } },
-        { type: "category", data: dates, gridIndex: 1, boundaryGap: true, axisLine: { lineStyle: { color: "#2b2f3a" } }, axisLabel: { show: false } },
-      ],
-      yAxis: [
-        { scale: true, splitLine: { lineStyle: { color: "rgba(63,63,70,0.45)" } }, axisLabel: { color: "#71717a", fontSize: 10 } },
-        { scale: true, gridIndex: 1, splitLine: { show: false }, axisLabel: { color: "#71717a", fontSize: 10, formatter: (value: number) => formatNumber(value) } },
-      ],
-      dataZoom: [
-        { type: "inside", xAxisIndex: [0, 1], start: Math.max(0, 100 - (100 * 90) / Math.max(bars.length, 1)), end: 100 },
-      ],
-      series: [
-        {
-          name: symbol,
-          type: "candlestick",
-          data: candles,
-          itemStyle: {
-            color: "#10b981",
-            color0: "#ef4444",
-            borderColor: "#10b981",
-            borderColor0: "#ef4444",
-          },
-        },
-        { name: "Vol", type: "bar", data: volumes, xAxisIndex: 1, yAxisIndex: 1 },
-      ],
-    }, true);
-  }, [bars, symbol]);
+    candleSeries.setData(candles);
+    volumeSeries.setData(volumes);
+    chartRef.current?.timeScale().fitContent();
+  }, [bars]);
 
   return (
-    <div className="rounded-lg border border-zinc-800 bg-[#111318] p-4">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
-            <CandlestickChart className="h-4 w-4 text-orange-300" />
-            {symbol} Perpetual Index
-          </div>
-          <div className="mt-1 text-xs text-zinc-500">{timeframe.toUpperCase()} K-line synced from backend cache</div>
-        </div>
-        {loading ? (
-          <RefreshCw className="h-4 w-4 animate-spin text-zinc-500" />
-        ) : (
-          <LineChart className="h-4 w-4 text-emerald-400" />
-        )}
-      </div>
-      <div ref={ref} className="h-[320px] w-full" />
-    </div>
+    <div
+      ref={ref}
+      className="h-[420px] w-full overflow-hidden rounded-md bg-[#0d0f13]"
+      aria-label={`${symbol} candlestick chart`}
+    />
   );
 }
 
@@ -271,7 +377,8 @@ export function Home() {
     setError(null);
     try {
       const payload = await api.getCryptoMarkets(13);
-      setMarkets(payload);
+      const enrichedPayload = enrichMarkets(payload);
+      setMarkets(enrichedPayload);
       if (!payload.rows.some((row) => row.symbol === selectedSymbol)) {
         setSelectedSymbol(payload.rows[0]?.symbol ?? "BTC/USDT");
       }
@@ -348,7 +455,10 @@ export function Home() {
               <div className="grid gap-3 md:grid-cols-4">
                 <div className="rounded-md bg-[#181b21] p-3">
                   <div className="text-xs text-zinc-500">Selected</div>
-                  <div className="mt-2 text-xl font-semibold text-white">{selectedSymbol}</div>
+                  <div className="mt-2 flex items-center gap-2 text-xl font-semibold text-white">
+                    <CoinIcon row={selectedRow} size="sm" />
+                    {selectedSymbol}
+                  </div>
                 </div>
                 <div className="rounded-md bg-[#181b21] p-3">
                   <div className="text-xs text-zinc-500">Price</div>
@@ -372,26 +482,38 @@ export function Home() {
             <div className="rounded-lg border border-zinc-800 bg-[#111318] p-4">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <div className="text-sm font-semibold text-zinc-100">K-line Data</div>
-                  <div className="mt-1 text-xs text-zinc-500">Redis cache + TimescaleDB persistence through backend API</div>
+                  <div className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
+                    <CandlestickChart className="h-4 w-4 text-orange-300" />
+                    K-line Data
+                  </div>
+                  <div className="mt-1 text-xs text-zinc-500">
+                    {selectedSymbol} Perpetual Index · {timeframe.toUpperCase()} · Redis cache + TimescaleDB persistence
+                  </div>
                 </div>
-                <div className="flex rounded-md border border-zinc-800 bg-[#0d0f13] p-1">
-                  {TIMEFRAMES.map((item) => (
-                    <button
-                      key={item}
-                      type="button"
-                      onClick={() => setTimeframe(item)}
-                      className={cn(
-                        "h-7 rounded px-3 text-xs font-medium transition",
-                        timeframe === item ? "bg-orange-500 text-white" : "text-zinc-400 hover:text-zinc-100",
-                      )}
-                    >
-                      {item.toUpperCase()}
-                    </button>
-                  ))}
+                <div className="flex items-center gap-2">
+                  {klineLoading ? (
+                    <RefreshCw className="h-4 w-4 animate-spin text-zinc-500" />
+                  ) : (
+                    <LineChart className="h-4 w-4 text-emerald-400" />
+                  )}
+                  <div className="flex rounded-md border border-zinc-800 bg-[#0d0f13] p-1">
+                    {TIMEFRAMES.map((item) => (
+                      <button
+                        key={item}
+                        type="button"
+                        onClick={() => setTimeframe(item)}
+                        className={cn(
+                          "h-7 rounded px-3 text-xs font-medium transition",
+                          timeframe === item ? "bg-orange-500 text-white" : "text-zinc-400 hover:text-zinc-100",
+                        )}
+                      >
+                        {item.toUpperCase()}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
-              <KlinePanel symbol={selectedSymbol} timeframe={timeframe} bars={bars} loading={klineLoading} />
+              <KlinePanel symbol={selectedSymbol} bars={bars} />
             </div>
           </div>
 
@@ -412,7 +534,10 @@ export function Home() {
                       selectedSymbol === row.symbol ? "border-orange-500/40 bg-orange-500/10" : "border-zinc-800 bg-[#181b21] hover:border-zinc-700",
                     )}
                   >
-                    <span className="text-xs font-semibold text-zinc-100">{row.base}</span>
+                    <span className="flex items-center gap-2 text-xs font-semibold text-zinc-100">
+                      <CoinIcon row={row} size="sm" />
+                      {row.base}
+                    </span>
                     <span className="h-1.5 overflow-hidden rounded-full bg-zinc-800">
                       <span
                         className={cn("block h-full rounded-full", row.change_24h >= 0 ? "bg-emerald-400" : "bg-red-400")}
@@ -490,7 +615,7 @@ export function Home() {
                     <td className="px-4 py-3 font-mono text-xs text-zinc-500">{row.rank}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
-                        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-800 text-xs font-semibold text-zinc-100">{row.base.slice(0, 3)}</span>
+                        <CoinIcon row={row} />
                         <div>
                           <div className="font-semibold text-zinc-100">{row.symbol}</div>
                           <div className="text-xs text-zinc-500">{row.name}</div>

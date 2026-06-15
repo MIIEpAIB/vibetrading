@@ -47,7 +47,19 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     throw await errorFromResponse(res);
   }
   const text = await res.text();
-  return text ? JSON.parse(text) : ({} as T);
+  if (!text) {
+    return {} as T;
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    const contentType = res.headers.get("content-type") || "unknown content type";
+    const isHtml = /^\s*(?:<!doctype|<html)\b/i.test(text);
+    const detail = isHtml
+      ? `Expected JSON from ${path}, but received the app HTML shell. Check that API routes are proxied to the backend.`
+      : `Expected JSON from ${path}, but received ${contentType}.`;
+    throw new ApiError(detail, res.status);
+  }
 }
 
 export interface UploadResult {
@@ -264,6 +276,9 @@ export interface CryptoMarketRow {
   symbol: string;
   base: string;
   name: string;
+  icon_url: string;
+  icon_bg: string;
+  icon_fg: string;
   price: number;
   change_24h: number;
   high_24h: number;
