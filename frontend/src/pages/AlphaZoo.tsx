@@ -40,6 +40,7 @@ import {
 import { echarts } from "@/lib/echarts";
 import { getChartTheme } from "@/lib/chart-theme";
 import { useDarkMode } from "@/hooks/useDarkMode";
+import { useTranslation } from "@/i18n/I18nProvider";
 
 /* ---------- Constants ---------- */
 
@@ -133,6 +134,7 @@ export function AlphaZoo() {
 /* ---------- Browse view ---------- */
 
 function BrowseView() {
+  const { t } = useTranslation();
   const [alphas, setAlphas] = useState<AlphaSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [zooFilter, setZooFilter] = useState<string>("");
@@ -259,7 +261,7 @@ function BrowseView() {
       <div className="flex flex-col md:flex-row md:items-end gap-3 border rounded-xl p-4 bg-card">
         <div className="flex-1 min-w-0">
           <label htmlFor="alpha-search" className="text-xs text-muted-foreground block mb-1">
-            Search
+            {t("alpha.search")}
           </label>
           <div className="relative">
             <Search
@@ -273,20 +275,20 @@ function BrowseView() {
                 setSearch(e.target.value);
                 setVisibleCount(PAGE_SIZE);
               }}
-              placeholder="Filter by id or nickname…"
+              placeholder={t("alpha.searchPlaceholder")}
               className="w-full pl-9 pr-3 py-2 rounded-lg border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
             />
           </div>
         </div>
         <div className="md:w-40">
-          <label htmlFor="alpha-zoo-filter" className="text-xs text-muted-foreground block mb-1">Zoo</label>
+          <label htmlFor="alpha-zoo-filter" className="text-xs text-muted-foreground block mb-1">{t("alpha.zoo")}</label>
           <select
             id="alpha-zoo-filter"
             value={zooFilter}
             onChange={(e) => setZooFilter(e.target.value)}
             className="w-full px-3 py-2 rounded-lg border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
           >
-            <option value="">All zoos</option>
+            <option value="">{t("alpha.allZoos")}</option>
             {ZOO_CARDS.map((z) => (
               <option key={z.id} value={z.id}>
                 {z.title}
@@ -296,7 +298,7 @@ function BrowseView() {
         </div>
         <div className="md:w-40">
           <label htmlFor="alpha-theme-filter" className="text-xs text-muted-foreground block mb-1">
-            Theme
+            {t("alpha.theme")}
           </label>
           <select
             id="alpha-theme-filter"
@@ -304,7 +306,7 @@ function BrowseView() {
             onChange={(e) => setThemeFilter(e.target.value)}
             className="w-full px-3 py-2 rounded-lg border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
           >
-            <option value="">All themes</option>
+            <option value="">{t("alpha.allThemes")}</option>
             {themeOptions.map((tname) => (
               <option key={tname} value={tname}>
                 {tname}
@@ -314,7 +316,7 @@ function BrowseView() {
         </div>
         <div className="md:w-44">
           <label htmlFor="alpha-universe-filter" className="text-xs text-muted-foreground block mb-1">
-            Universe
+            {t("alpha.universe")}
           </label>
           <select
             id="alpha-universe-filter"
@@ -322,7 +324,7 @@ function BrowseView() {
             onChange={(e) => setUniverseFilter(e.target.value)}
             className="w-full px-3 py-2 rounded-lg border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
           >
-            <option value="">All universes</option>
+            <option value="">{t("alpha.allUniverses")}</option>
             {UNIVERSE_OPTIONS.map((u) => (
               <option key={u.value} value={u.value}>
                 {u.label}
@@ -333,16 +335,16 @@ function BrowseView() {
         <Link
           to={compareHref}
           className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium hover:bg-muted hover:text-foreground transition"
-          title="Tick 2+ alphas below, then compare them head-to-head"
+          title={t("alpha.compareTitle")}
         >
-          <ArrowLeftRight className="h-3.5 w-3.5" aria-hidden="true" /> Compare
+          <ArrowLeftRight className="h-3.5 w-3.5" aria-hidden="true" /> {t("alpha.compare")}
           {selected.size >= 2 ? ` (${selected.size})` : ""}
         </Link>
         <Link
           to="/alpha-zoo/bench"
           className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 transition"
         >
-          <Play className="h-3.5 w-3.5" aria-hidden="true" /> Run benchmark
+          <Play className="h-3.5 w-3.5" aria-hidden="true" /> {t("alpha.runBenchmark")}
         </Link>
       </div>
 
@@ -350,27 +352,27 @@ function BrowseView() {
       {/* TODO(v0.2): switch to react-window if alpha count exceeds 5000 */}
       <div className="border rounded-xl overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm" aria-label="Alpha catalogue">
-            <caption className="sr-only">Alpha catalogue</caption>
+          <table className="w-full text-sm" aria-label={t("alpha.catalogue")}>
+            <caption className="sr-only">{t("alpha.catalogue")}</caption>
             <thead>
               <tr className="border-b bg-muted/40">
                 <th className="w-10 px-3 py-2.5">
-                  <span className="sr-only">Select for compare</span>
+                  <span className="sr-only">{t("alpha.selectForCompare")}</span>
                 </th>
                 <th className="text-left px-4 py-2.5 text-muted-foreground">
                   ID
                 </th>
                 <th className="text-left px-4 py-2.5 text-muted-foreground">
-                  Zoo
+                  {t("alpha.zoo")}
                 </th>
                 <th className="text-left px-4 py-2.5 text-muted-foreground">
-                  Theme
+                  {t("alpha.theme")}
                 </th>
                 <th className="text-left px-4 py-2.5 text-muted-foreground hidden md:table-cell">
-                  Universe
+                  {t("alpha.universe")}
                 </th>
-                <th className="text-right px-4 py-2.5 text-muted-foreground" title="Predictive half-life: trading days before the signal's edge decays">
-                  Decay (days)
+                <th className="text-right px-4 py-2.5 text-muted-foreground" title={t("alpha.decayTitle")}>
+                  {t("alpha.decayDays")}
                 </th>
               </tr>
             </thead>
@@ -379,13 +381,13 @@ function BrowseView() {
                 <tr>
                   <td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">
                     <Loader2 className="h-4 w-4 animate-spin inline mr-2" aria-hidden="true" />
-                    Loading alphas…
+                    {t("alpha.loadingAlphas")}
                   </td>
                 </tr>
               ) : visible.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">
-                    No alphas match the current filters.
+                    {t("alpha.noMatches")}
                   </td>
                 </tr>
               ) : (
@@ -402,7 +404,7 @@ function BrowseView() {
                         type="checkbox"
                         checked={selected.has(a.id)}
                         onChange={() => toggleSelected(a.id)}
-                        aria-label={`Select ${a.id} for compare`}
+                        aria-label={`${t("alpha.selectForCompare")}: ${a.id}`}
                         className="h-4 w-4 rounded border-input accent-primary cursor-pointer"
                       />
                     </td>
@@ -438,14 +440,14 @@ function BrowseView() {
         {!loading && visible.length < filtered.length && (
           <div className="border-t p-3 flex items-center justify-between text-xs text-muted-foreground">
             <span>
-              Showing {visible.length} of {filtered.length}
+              {t("alpha.showing", { visible: visible.length, total: filtered.length })}
             </span>
             <button
               type="button"
               onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}
               className="px-3 py-1 rounded-md border hover:bg-muted hover:text-foreground transition"
             >
-              Load more
+              {t("alpha.loadMore")}
             </button>
           </div>
         )}
@@ -461,6 +463,7 @@ interface DetailProps {
 }
 
 function DetailView({ alphaId }: DetailProps) {
+  const { t } = useTranslation();
   const [detail, setDetail] = useState<AlphaDetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -477,7 +480,7 @@ function DetailView({ alphaId }: DetailProps) {
       })
       .catch((err: unknown) => {
         if (!alive) return;
-        const msg = err instanceof Error ? err.message : "Failed to load alpha";
+        const msg = err instanceof Error ? err.message : t("alpha.failedLoad");
         setError(msg);
       })
       .finally(() => {
@@ -491,7 +494,7 @@ function DetailView({ alphaId }: DetailProps) {
   if (loading) {
     return (
       <div className="p-8 flex items-center justify-center text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin mr-2" aria-hidden="true" /> Loading {alphaId}…
+        <Loader2 className="h-4 w-4 animate-spin mr-2" aria-hidden="true" /> {t("alpha.loadingAlpha", { id: alphaId })}
       </div>
     );
   }
@@ -500,11 +503,11 @@ function DetailView({ alphaId }: DetailProps) {
     return (
       <div className="p-8 max-w-3xl mx-auto space-y-4">
         <Link to="/alpha-zoo" className="text-sm text-muted-foreground hover:text-foreground inline-flex items-center gap-1">
-          <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" /> Back to Alpha Zoo
+          <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" /> {t("alpha.backToZoo")}
         </Link>
         <div className="border rounded-xl p-6 bg-card">
           <h2 className="font-semibold text-sm mb-1 flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 text-warning" aria-hidden="true" /> Could not load alpha
+            <AlertTriangle className="h-4 w-4 text-warning" aria-hidden="true" /> {t("alpha.couldNotLoad")}
           </h2>
           <p className="text-sm text-muted-foreground">{error || "Unknown error"}</p>
         </div>
@@ -531,14 +534,14 @@ function DetailView({ alphaId }: DetailProps) {
           to="/alpha-zoo"
           className="text-sm text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
         >
-          <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" /> Back to Alpha Zoo
+          <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" /> {t("alpha.backToZoo")}
         </Link>
         <button
           type="button"
           onClick={() => navigate(benchHref)}
           className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-xs font-medium hover:opacity-90 transition"
         >
-          <Play className="h-3.5 w-3.5" aria-hidden="true" /> Run benchmark
+          <Play className="h-3.5 w-3.5" aria-hidden="true" /> {t("alpha.runBenchmark")}
         </button>
       </div>
 
@@ -559,26 +562,26 @@ function DetailView({ alphaId }: DetailProps) {
 
       {/* Formula */}
       <section className="space-y-2">
-        <h2 className="text-sm font-medium text-muted-foreground">Formula</h2>
+        <h2 className="text-sm font-medium text-muted-foreground">{t("alpha.formula")}</h2>
         <pre className="border rounded-xl bg-muted/30 p-4 overflow-x-auto text-xs leading-relaxed">
-          <code>{formulaLatex || "(no formula provided)"}</code>
+          <code>{formulaLatex || t("alpha.noFormula")}</code>
         </pre>
       </section>
 
       {/* Metadata */}
       <section className="space-y-2">
-        <h2 className="text-sm font-medium text-muted-foreground">Metadata</h2>
+        <h2 className="text-sm font-medium text-muted-foreground">{t("alpha.metadata")}</h2>
         <div className="border rounded-xl overflow-hidden">
           <table className="w-full text-sm">
             <tbody>
-              <MetaRow label="Theme" value={metaString(meta, "theme")} />
-              <MetaRow label="Universe" value={metaString(meta, "universe")} />
-              <MetaRow label="Frequency" value={metaString(meta, "frequency")} />
-              <MetaRow label="Decay horizon" value={metaString(meta, "decay_horizon")} />
-              <MetaRow label="Min warm-up bars" value={metaString(meta, "min_warmup_bars")} />
-              <MetaRow label="Requires sector" value={metaString(meta, "requires_sector")} />
-              <MetaRow label="Module path" value={a.module_path || "—"} />
-              <MetaRow label="Notes" value={metaString(meta, "notes")} last />
+              <MetaRow label={t("alpha.theme")} value={metaString(meta, "theme")} />
+              <MetaRow label={t("alpha.universe")} value={metaString(meta, "universe")} />
+              <MetaRow label={t("alpha.frequency")} value={metaString(meta, "frequency")} />
+              <MetaRow label={t("alpha.decayHorizon")} value={metaString(meta, "decay_horizon")} />
+              <MetaRow label={t("alpha.minWarmupBars")} value={metaString(meta, "min_warmup_bars")} />
+              <MetaRow label={t("alpha.requiresSector")} value={metaString(meta, "requires_sector")} />
+              <MetaRow label={t("alpha.modulePath")} value={a.module_path || "—"} />
+              <MetaRow label={t("alpha.notes")} value={metaString(meta, "notes")} last />
             </tbody>
           </table>
         </div>
@@ -586,13 +589,13 @@ function DetailView({ alphaId }: DetailProps) {
 
       {/* Source code */}
       <section className="space-y-2">
-        <h2 className="text-sm font-medium text-muted-foreground">Source code</h2>
+        <h2 className="text-sm font-medium text-muted-foreground">{t("alpha.sourceCode")}</h2>
         <details className="border rounded-xl bg-card group">
           <summary className="cursor-pointer px-4 py-3 text-sm font-medium hover:bg-muted/40 select-none">
-            View source ({(detail.source_code || "").split("\n").length} lines)
+            {t("alpha.viewSource", { count: (detail.source_code || "").split("\n").length })}
           </summary>
           <pre className="border-t bg-muted/30 p-4 overflow-x-auto text-xs leading-relaxed">
-            <code>{detail.source_code || "(no source available)"}</code>
+            <code>{detail.source_code || t("alpha.noSource")}</code>
           </pre>
         </details>
       </section>
@@ -620,6 +623,7 @@ interface BenchProgress {
 }
 
 function BenchView() {
+  const { t } = useTranslation();
   // Read prefill from query string (set by Detail "Run bench" button).
   const { search: locSearch } = useLocation();
   const initial = useMemo(() => {
@@ -757,14 +761,13 @@ function BenchView() {
 
       <div className="space-y-1">
         <div className="flex items-center gap-2 text-xs text-muted-foreground uppercase tracking-wide">
-          <Play className="h-3.5 w-3.5" aria-hidden="true" /> Benchmark runner
+          <Play className="h-3.5 w-3.5" aria-hidden="true" /> {t("alpha.benchmarkRunner")}
         </div>
         <h1 className="text-2xl md:text-3xl font-bold tracking-tight">
-          Score a zoo on a universe
+          {t("alpha.scoreTitle")}
         </h1>
         <p className="text-sm text-muted-foreground max-w-2xl">
-          Computes IC / IR for every alpha in the selected zoo over the chosen
-          universe and period, then bucketizes them as alive / reversed / dead.
+          {t("alpha.scoreSubtitle")}
         </p>
       </div>
 
@@ -774,7 +777,7 @@ function BenchView() {
         className="border rounded-xl p-4 bg-card grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end"
       >
         <div>
-          <label htmlFor="bench-zoo" className="text-xs text-muted-foreground block mb-1">Zoo</label>
+          <label htmlFor="bench-zoo" className="text-xs text-muted-foreground block mb-1">{t("alpha.zoo")}</label>
           <select
             id="bench-zoo"
             value={zoo}
@@ -790,7 +793,7 @@ function BenchView() {
           </select>
         </div>
         <div>
-          <label htmlFor="bench-universe" className="text-xs text-muted-foreground block mb-1">Universe</label>
+          <label htmlFor="bench-universe" className="text-xs text-muted-foreground block mb-1">{t("alpha.universe")}</label>
           <select
             id="bench-universe"
             value={universe}
@@ -806,7 +809,7 @@ function BenchView() {
           </select>
         </div>
         <div>
-          <label htmlFor="bench-period" className="text-xs text-muted-foreground block mb-1">Period</label>
+          <label htmlFor="bench-period" className="text-xs text-muted-foreground block mb-1">{t("alpha.period")}</label>
           <input
             id="bench-period"
             value={period}
@@ -817,7 +820,7 @@ function BenchView() {
           />
         </div>
         <div>
-          <label htmlFor="bench-top" className="text-xs text-muted-foreground block mb-1">Top</label>
+          <label htmlFor="bench-top" className="text-xs text-muted-foreground block mb-1">{t("alpha.top")}</label>
           <input
             id="bench-top"
             type="number"
@@ -841,11 +844,11 @@ function BenchView() {
           >
             {busy ? (
               <>
-                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> Running…
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> {t("alpha.running")}
               </>
             ) : (
               <>
-                <Play className="h-3.5 w-3.5" aria-hidden="true" /> Run benchmark
+                <Play className="h-3.5 w-3.5" aria-hidden="true" /> {t("alpha.runBenchmark")}
               </>
             )}
           </button>
@@ -878,6 +881,7 @@ function ProgressPanel({
   jobId: string | null;
   progress: BenchProgress | null;
 }) {
+  const { t } = useTranslation();
   const pct = progress && progress.n_total > 0
     ? Math.min(100, Math.round((progress.n_done / progress.n_total) * 100))
     : 0;
@@ -886,7 +890,7 @@ function ProgressPanel({
       <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span className="flex items-center gap-1.5">
           <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-          {jobId ? `Job ${jobId.slice(0, 12)}…` : "Submitting…"}
+          {jobId ? `Job ${jobId.slice(0, 12)}...` : t("alpha.submitting")}
         </span>
         {progress && (
           <span className="font-mono tabular-nums">
@@ -902,7 +906,7 @@ function ProgressPanel({
       </div>
       {progress?.current_alpha_id && (
         <p className="text-xs text-muted-foreground font-mono truncate">
-          Computing: {progress.current_alpha_id}
+          {t("alpha.computing", { id: progress.current_alpha_id })}
         </p>
       )}
     </div>
@@ -910,6 +914,7 @@ function ProgressPanel({
 }
 
 function ResultPanel({ result }: { result: AlphaBenchResult }) {
+  const { t } = useTranslation();
   const { dark } = useDarkMode();
   const chartRef = useRef<HTMLDivElement>(null);
 
@@ -959,10 +964,10 @@ function ResultPanel({ result }: { result: AlphaBenchResult }) {
   }, [result, dark]);
 
   const totals = [
-    { label: "Alive", value: result.alive, icon: CheckCircle2, tone: "text-green-600 dark:text-green-400" },
-    { label: "Reversed", value: result.reversed, icon: AlertTriangle, tone: "text-amber-600 dark:text-amber-400" },
-    { label: "Dead", value: result.dead, icon: XCircle, tone: "text-red-600 dark:text-red-400" },
-    { label: "Skipped", value: result.skipped ?? 0, icon: Loader2, tone: "text-muted-foreground" },
+    { label: t("alpha.alive"), value: result.alive, icon: CheckCircle2, tone: "text-green-600 dark:text-green-400" },
+    { label: t("alpha.reversed"), value: result.reversed, icon: AlertTriangle, tone: "text-amber-600 dark:text-amber-400" },
+    { label: t("alpha.dead"), value: result.dead, icon: XCircle, tone: "text-red-600 dark:text-red-400" },
+    { label: t("alpha.skipped"), value: result.skipped ?? 0, icon: Loader2, tone: "text-muted-foreground" },
   ];
 
   return (
@@ -982,15 +987,15 @@ function ResultPanel({ result }: { result: AlphaBenchResult }) {
 
       {/* Top tables */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <TopTable title="Top 5 by IR" rows={result.top5_by_ir || []} />
-        <TopTable title="Most reversed" rows={(result.dead_examples || []).slice(0, 3)} />
+        <TopTable title={t("alpha.topByIr")} rows={result.top5_by_ir || []} />
+        <TopTable title={t("alpha.mostReversed")} rows={(result.dead_examples || []).slice(0, 3)} />
       </div>
 
       {/* By-theme breakdown */}
       {result.by_theme && Object.keys(result.by_theme).length > 0 && (
         <div className="border rounded-xl p-4 bg-card">
           <h3 className="text-sm font-medium text-muted-foreground mb-2">
-            By theme
+            {t("alpha.byTheme")}
           </h3>
           <div ref={chartRef} style={{ height: 240 }} />
         </div>
@@ -1000,6 +1005,7 @@ function ResultPanel({ result }: { result: AlphaBenchResult }) {
 }
 
 function TopTable({ title, rows }: { title: string; rows: AlphaBenchTopRow[] }) {
+  const { t } = useTranslation();
   return (
     <div className="border rounded-xl overflow-hidden bg-card">
       <div className="px-4 py-2.5 border-b bg-muted/40">
@@ -1007,17 +1013,17 @@ function TopTable({ title, rows }: { title: string; rows: AlphaBenchTopRow[] }) 
       </div>
       {rows.length === 0 ? (
         <div className="px-4 py-6 text-xs text-muted-foreground text-center">
-          No rows.
+          {t("alpha.noRows")}
         </div>
       ) : (
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b">
               <th className="text-left px-4 py-2 text-xs text-muted-foreground font-medium">ID</th>
-              <th className="text-right px-4 py-2 text-xs text-muted-foreground font-medium">Mean IC</th>
+              <th className="text-right px-4 py-2 text-xs text-muted-foreground font-medium">{t("alpha.meanIc")}</th>
               <th className="text-right px-4 py-2 text-xs text-muted-foreground font-medium">IR</th>
-              <th className="text-left px-4 py-2 text-xs text-muted-foreground font-medium">Theme</th>
-              <th className="text-left px-4 py-2 text-xs text-muted-foreground font-medium">Category</th>
+              <th className="text-left px-4 py-2 text-xs text-muted-foreground font-medium">{t("alpha.theme")}</th>
+              <th className="text-left px-4 py-2 text-xs text-muted-foreground font-medium">{t("alpha.category")}</th>
             </tr>
           </thead>
           <tbody>
@@ -1096,6 +1102,7 @@ function parseAlphaIds(text: string): string[] {
  * the BrowseView multi-select — and remain editable as free text.
  */
 function CompareView() {
+  const { t } = useTranslation();
   const { search: locSearch } = useLocation();
   const initialIds = useMemo(() => {
     const q = new URLSearchParams(locSearch);
@@ -1157,7 +1164,7 @@ function CompareView() {
         sourceRef.current = null;
         return;
       }
-      let msg = "Compare stream error";
+      let msg = t("alpha.compareStreamError");
       try {
         const data = JSON.parse((e as MessageEvent).data || "{}");
         if (typeof data.message === "string") msg = data.message;
@@ -1175,7 +1182,7 @@ function CompareView() {
     e.preventDefault();
     if (status === "submitting" || status === "streaming") return;
     if (ids.length < 2) {
-      setFormError("Enter at least 2 distinct alpha ids to compare.");
+      setFormError(t("alpha.enterAtLeast2"));
       return;
     }
     setStatus("submitting");
@@ -1195,7 +1202,7 @@ function CompareView() {
       attachStream(res.job_id);
     } catch (err: unknown) {
       const msg =
-        err instanceof Error ? err.message : "Failed to start comparison";
+        err instanceof Error ? err.message : t("alpha.failedStartCompare");
       toast.error(msg);
       setStatus("error");
     }
@@ -1209,27 +1216,25 @@ function CompareView() {
         to="/alpha-zoo"
         className="text-sm text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
       >
-        <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" /> Back to Alpha Zoo
+        <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" /> {t("alpha.backToZoo")}
       </Link>
 
       <div className="space-y-1">
         <div className="flex items-center gap-2 text-xs text-muted-foreground uppercase tracking-wide">
-          <ArrowLeftRight className="h-3.5 w-3.5" aria-hidden="true" /> Head-to-head compare
+          <ArrowLeftRight className="h-3.5 w-3.5" aria-hidden="true" /> {t("alpha.compareKicker")}
         </div>
         <h1 className="text-2xl md:text-3xl font-bold tracking-tight">
-          Compare alphas side by side
+          {t("alpha.compareTitlePage")}
         </h1>
         <p className="text-sm text-muted-foreground max-w-2xl">
-          Benches just the alphas you pick on a universe and period, then ranks
-          them by IC / IR with the gap to the leader — far faster than benching a
-          whole zoo when you only care about a shortlist.
+          {t("alpha.compareSubtitle")}
         </p>
       </div>
 
       <form onSubmit={startCompare} className="border rounded-xl p-4 bg-card space-y-3">
         <div>
           <label htmlFor="compare-ids" className="text-xs text-muted-foreground block mb-1">
-            Alpha ids{ids.length > 0 ? ` (${ids.length} selected)` : ""}
+            {t("alpha.alphaIds")}{ids.length > 0 ? ` (${t("alpha.selectedCount", { count: ids.length })})` : ""}
           </label>
           <textarea
             id="compare-ids"
@@ -1241,14 +1246,13 @@ function CompareView() {
             className="w-full px-3 py-2 rounded-lg border bg-background text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50"
           />
           <p className="text-[11px] text-muted-foreground mt-1">
-            Separate ids with commas or spaces. Tip: tick alphas in the catalogue
-            and hit “Compare” to prefill this.
+            {t("alpha.idsHint")}
           </p>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div>
-            <label htmlFor="compare-universe" className="text-xs text-muted-foreground block mb-1">Universe</label>
+            <label htmlFor="compare-universe" className="text-xs text-muted-foreground block mb-1">{t("alpha.universe")}</label>
             <select
               id="compare-universe"
               value={universe}
@@ -1264,7 +1268,7 @@ function CompareView() {
             </select>
           </div>
           <div>
-            <label htmlFor="compare-period" className="text-xs text-muted-foreground block mb-1">Period</label>
+            <label htmlFor="compare-period" className="text-xs text-muted-foreground block mb-1">{t("alpha.period")}</label>
             <input
               id="compare-period"
               value={period}
@@ -1275,7 +1279,7 @@ function CompareView() {
             />
           </div>
           <div>
-            <label htmlFor="compare-sort" className="text-xs text-muted-foreground block mb-1">Rank by</label>
+            <label htmlFor="compare-sort" className="text-xs text-muted-foreground block mb-1">{t("alpha.rankBy")}</label>
             <select
               id="compare-sort"
               value={sort}
@@ -1300,16 +1304,16 @@ function CompareView() {
           >
             {busy ? (
               <>
-                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> Running…
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> {t("alpha.running")}
               </>
             ) : (
               <>
-                <ArrowLeftRight className="h-3.5 w-3.5" aria-hidden="true" /> Compare
+                <ArrowLeftRight className="h-3.5 w-3.5" aria-hidden="true" /> {t("alpha.compare")}
               </>
             )}
           </button>
           {ids.length < 2 && (
-            <span className="text-xs text-muted-foreground">Pick at least 2 alphas.</span>
+            <span className="text-xs text-muted-foreground">{t("alpha.pickAtLeast2")}</span>
           )}
         </div>
 
@@ -1330,20 +1334,21 @@ function CompareView() {
 }
 
 function CompareResultPanel({ result }: { result: AlphaCompareResult }) {
+  const { t } = useTranslation();
   const deltaKey = `delta_${result.sort}_vs_best`;
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
         <span className="inline-flex items-center gap-1.5 font-medium text-emerald-600 dark:text-emerald-400">
-          <CheckCircle2 className="h-4 w-4" aria-hidden="true" /> Winner:{" "}
+          <CheckCircle2 className="h-4 w-4" aria-hidden="true" /> {t("alpha.winner")}:{" "}
           <span className="font-mono">{result.winner}</span>
         </span>
         <span className="text-muted-foreground">
-          {result.n_compared} compared · ranked by {result.sort} · {result.universe} · {result.period}
+          {t("alpha.comparedSummary", { count: result.n_compared, sort: result.sort, universe: result.universe, period: result.period })}
         </span>
         {result.n_skipped > 0 && (
           <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
-            <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" /> {result.n_skipped} skipped
+            <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" /> {result.n_skipped} {t("alpha.skipped")}
           </span>
         )}
       </div>
@@ -1354,14 +1359,14 @@ function CompareResultPanel({ result }: { result: AlphaCompareResult }) {
             <thead>
               <tr className="border-b bg-muted/40 text-muted-foreground text-xs">
                 <th className="text-right px-3 py-2">#</th>
-                <th className="text-left px-3 py-2">Alpha</th>
-                <th className="text-left px-3 py-2 hidden sm:table-cell">Zoo</th>
-                <th className="text-right px-3 py-2">IC mean</th>
-                <th className="text-right px-3 py-2 hidden md:table-cell">IC std</th>
+                <th className="text-left px-3 py-2">{t("alpha.alpha")}</th>
+                <th className="text-left px-3 py-2 hidden sm:table-cell">{t("alpha.zoo")}</th>
+                <th className="text-right px-3 py-2">{t("alpha.meanIc")}</th>
+                <th className="text-right px-3 py-2 hidden md:table-cell">{t("alpha.icStd")}</th>
                 <th className="text-right px-3 py-2">IR</th>
-                <th className="text-right px-3 py-2 hidden md:table-cell" title="Share of periods with positive IC">IC&gt;0</th>
-                <th className="text-right px-3 py-2 hidden lg:table-cell" title="IC sample count">n</th>
-                <th className="text-right px-3 py-2" title={`Gap to the leader on ${result.sort}`}>Δ {result.sort}</th>
+                <th className="text-right px-3 py-2 hidden md:table-cell" title={t("alpha.icPositiveTitle")}>{t("alpha.icPositive")}</th>
+                <th className="text-right px-3 py-2 hidden lg:table-cell" title={t("alpha.icSampleTitle")}>n</th>
+                <th className="text-right px-3 py-2" title={t("alpha.gapTitle", { sort: result.sort })}>Δ {result.sort}</th>
               </tr>
             </thead>
             <tbody>
@@ -1400,7 +1405,7 @@ function CompareResultPanel({ result }: { result: AlphaCompareResult }) {
 
       {result.skipped.length > 0 && (
         <p className="text-xs text-muted-foreground">
-          <span className="font-medium">Skipped:</span>{" "}
+          <span className="font-medium">{t("alpha.skipped")}:</span>{" "}
           {result.skipped.map((s) => `${s.id} (${s.reason})`).join("; ")}
         </p>
       )}

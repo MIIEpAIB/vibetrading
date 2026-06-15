@@ -340,6 +340,33 @@ class UpdateGoalResponse(BaseModel):
     snapshot: GoalSnapshotResponse
 
 
+class StrategyLibraryItem(BaseModel):
+    """Personal strategy library item."""
+
+    id: str = Field(..., min_length=1, max_length=128)
+    name: str = Field(..., min_length=1, max_length=500)
+    description: str = ""
+    language: str = "python"
+    category: str = "trend"
+    status: str = "draft"
+    tags: List[str] = Field(default_factory=list)
+    code: str = Field(..., min_length=1)
+    createdAt: str
+    updatedAt: str
+
+
+class StrategyLibraryResponse(BaseModel):
+    """Strategy library list response."""
+
+    strategies: List[StrategyLibraryItem]
+
+
+class ReplaceStrategyLibraryRequest(BaseModel):
+    """Replace all strategy library rows."""
+
+    strategies: List[StrategyLibraryItem] = Field(default_factory=list)
+
+
 # ---- Live trading channel: consent commit + kill switch ----
 
 
@@ -586,6 +613,8 @@ _security = HTTPBearer(auto_error=False)
 _API_KEY = os.getenv("API_AUTH_KEY")
 _SHELL_TOOLS_ENV = "VIBE_TRADING_ENABLE_SHELL_TOOLS"
 _DOCKER_LOOPBACK_ENV = "VIBE_TRADING_TRUST_DOCKER_LOOPBACK"
+_DEV_PROXY_AUTH_ENV = "VIBE_DEV_PROXY_AUTH"
+_DEV_PROXY_AUTH_HEADER = "x-vibe-dev-proxy-auth"
 
 
 def _configured_api_key() -> str:
@@ -653,7 +682,7 @@ def _validate_api_auth(
     """Validate configured auth, preserving loopback-only dev mode."""
     # Loopback clients are always trusted, even when API_AUTH_KEY is set.
     # The key only gates non-local (LAN/remote) access.
-    if _is_local_client(request):
+    if _is_local_client(request) or _has_trusted_dev_proxy_auth(request):
         return
 
     api_key = _configured_api_key()
@@ -680,6 +709,21 @@ def _is_local_client(request: Request) -> bool:
     if ip.is_loopback:
         return True
     return _trusted_docker_loopback_ip(ip)
+
+
+def _has_trusted_dev_proxy_auth(request: Request) -> bool:
+    """Return whether this request was forwarded by the trusted dev proxy.
+
+    ``start-dev.sh`` injects a random per-worktree token into both the FastAPI
+    server and the Vite proxy. The browser never receives this token; it only
+    lets the public dev frontend forward requests without requiring users to
+    configure ``API_AUTH_KEY`` for quick server testing.
+    """
+    secret = os.getenv(_DEV_PROXY_AUTH_ENV, "").strip()
+    if len(secret) < 16:
+        return False
+    token = request.headers.get(_DEV_PROXY_AUTH_HEADER, "").strip()
+    return bool(token) and hmac.compare_digest(token, secret)
 
 
 def _env_flag_enabled(name: str) -> bool:
@@ -745,7 +789,7 @@ async def require_local_or_auth(
     if _configured_api_key():
         await require_auth(request, cred)
         return
-    if not _is_local_client(request):
+    if not (_is_local_client(request) or _has_trusted_dev_proxy_auth(request)):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Settings access requires API_AUTH_KEY or a local loopback client",
@@ -1554,11 +1598,11 @@ def _get_session_service():
         return None
 
     import asyncio
-    from src.session.store import SessionStore
     from src.session.events import EventBus
+    from src.session.factory import create_session_store
     from src.session.service import SessionService
 
-    store = SessionStore(base_dir=SESSIONS_DIR)
+    store = create_session_store(base_dir=SESSIONS_DIR)
     event_bus = EventBus()
 
     try:
@@ -1579,9 +1623,9 @@ def _get_goal_store():
     """Return the shared finance goal store."""
     global _goal_store
     if _goal_store is None:
-        from src.goal import GoalStore
+        from src.goal import create_goal_store
 
-        _goal_store = GoalStore()
+        _goal_store = create_goal_store()
     return _goal_store
 
 
@@ -1593,6 +1637,73 @@ def _get_existing_session_or_404(session_id: str):
     if not session:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     return svc, session
+
+
+# ============================================================================
+# Strategy Library API
+# ============================================================================
+
+_strategy_store = None
+
+
+def _get_strategy_store():
+    """Return the shared strategy library store when MySQL is configured."""
+    from src.persistence import mysql_configured
+
+    if not mysql_configured():
+        raise HTTPException(status_code=501, detail="Strategy library persistence requires MySQL")
+    global _strategy_store
+    if _strategy_store is None:
+        from src.strategies import MySQLStrategyStore
+
+        _strategy_store = MySQLStrategyStore()
+    return _strategy_store
+
+
+@app.get("/strategies", response_model=StrategyLibraryResponse, dependencies=[Depends(require_auth)])
+async def list_strategy_library():
+    """List persisted personal strategies."""
+    store = _get_strategy_store()
+    return {"strategies": [item.to_dict() for item in store.list_strategies()]}
+
+
+@app.put("/strategies", response_model=StrategyLibraryResponse, dependencies=[Depends(require_auth)])
+async def replace_strategy_library(req: ReplaceStrategyLibraryRequest):
+    """Replace the full persisted personal strategy library."""
+    from src.strategies import StrategyRecord
+
+    store = _get_strategy_store()
+    try:
+        records = [StrategyRecord.from_payload(item.model_dump()) for item in req.strategies]
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    saved = store.replace_all(records)
+    return {"strategies": [item.to_dict() for item in saved]}
+
+
+@app.put("/strategies/{strategy_id}", response_model=StrategyLibraryItem, dependencies=[Depends(require_auth)])
+async def upsert_strategy(strategy_id: str, item: StrategyLibraryItem):
+    """Create or update one persisted strategy."""
+    from src.strategies import StrategyRecord
+
+    if strategy_id != item.id:
+        raise HTTPException(status_code=400, detail="strategy id in path and body must match")
+    store = _get_strategy_store()
+    try:
+        record = StrategyRecord.from_payload(item.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return store.upsert_strategy(record).to_dict()
+
+
+@app.delete("/strategies/{strategy_id}", dependencies=[Depends(require_auth)])
+async def delete_strategy(strategy_id: str):
+    """Delete one persisted strategy."""
+    store = _get_strategy_store()
+    deleted = store.delete_strategy(strategy_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} not found")
+    return {"status": "deleted", "id": strategy_id}
 
 
 @app.post("/sessions", response_model=SessionResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_auth)])

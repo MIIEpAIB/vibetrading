@@ -27,9 +27,9 @@ def _get_goal_store():
     """Return the shared goal store, lazily initialized."""
     global _goal_store
     if _goal_store is None:
-        from src.goal import GoalStore
+        from src.goal import create_goal_store
 
-        _goal_store = GoalStore()
+        _goal_store = create_goal_store()
     return _goal_store
 
 
@@ -53,13 +53,13 @@ def _create_cli_session(ctx: Any, title: str) -> str | None:
         from cli._legacy import SESSIONS_DIR
         from src.session.models import Session, SessionStatus
         from src.session.search import get_shared_index
-        from src.session.store import SessionStore
+        from src.session.factory import create_session_store
 
         session = Session(
             title=(title[:60] or "Goal research"),
             status=SessionStatus.ACTIVE,
         )
-        SessionStore(base_dir=SESSIONS_DIR).create_session(session)
+        create_session_store(base_dir=SESSIONS_DIR).create_session(session)
         get_shared_index().index_session(session.session_id, session.title)
         if ctx is not None:
             setattr(ctx, "session_id", session.session_id)

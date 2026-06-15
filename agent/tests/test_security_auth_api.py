@@ -25,6 +25,7 @@ def _local_client() -> TestClient:
 def clear_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     """Start every auth test from dev-mode auth."""
     monkeypatch.delenv("API_AUTH_KEY", raising=False)
+    monkeypatch.delenv("VIBE_DEV_PROXY_AUTH", raising=False)
     monkeypatch.delenv("VIBE_TRADING_TRUST_DOCKER_LOOPBACK", raising=False)
     monkeypatch.delenv("VIBE_TRADING_ENABLE_SHELL_TOOLS", raising=False)
     monkeypatch.setattr(api_server, "_API_KEY", "")
@@ -94,6 +95,33 @@ def test_docker_network_peer_is_not_local_even_with_compose_trust_flag(
     )
 
     assert not api_server._is_local_client(request)
+
+
+def test_remote_request_accepts_trusted_dev_proxy_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "dev-proxy-secret-with-enough-entropy"
+    request = SimpleNamespace(
+        client=SimpleNamespace(host="203.0.113.10"),
+        headers={"x-vibe-dev-proxy-auth": secret},
+    )
+    monkeypatch.setenv("VIBE_DEV_PROXY_AUTH", secret)
+
+    api_server._validate_api_auth(request=request, cred=None)
+
+
+def test_remote_request_rejects_wrong_dev_proxy_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = SimpleNamespace(
+        client=SimpleNamespace(host="203.0.113.10"),
+        headers={"x-vibe-dev-proxy-auth": "wrong-secret-with-enough-entropy"},
+    )
+    monkeypatch.setenv("VIBE_DEV_PROXY_AUTH", "dev-proxy-secret-with-enough-entropy")
+
+    with pytest.raises(api_server.HTTPException) as excinfo:
+        api_server._validate_api_auth(request=request, cred=None)
+    assert excinfo.value.status_code == 403
 
 
 def test_configured_api_key_required_for_sensitive_reads(

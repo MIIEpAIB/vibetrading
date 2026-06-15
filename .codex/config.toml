@@ -1,0 +1,11 @@
+[features]
+hooks = true
+
+[[hooks.SessionStart]]
+matcher = "startup|resume"
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = 'bash "$(git rev-parse --show-toplevel)/start-dev.sh" up'
+timeout = 180
+statusMessage = "Ensuring Vibe-Trading dev environment"

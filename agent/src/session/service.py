@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 # Dedicated thread pool limited to four concurrent agents to avoid exhausting the default executor.
 _AGENT_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="agent")
+logger = logging.getLogger(__name__)
 
 from src.session.events import EventBus
 from src.session.models import (
@@ -65,7 +67,7 @@ class SessionService:
         """
         session = Session(title=title, config=config or {})
         self.store.create_session(session)
-        self._search_index.index_session(session.session_id, title)
+        self._index_session(session.session_id, title)
         self.event_bus.emit(session.session_id, "session.created", {"session_id": session.session_id, "title": title})
         return session
 
@@ -107,7 +109,7 @@ class SessionService:
 
         message = Message(session_id=session_id, role=role, content=content)
         self.store.append_message(message)
-        self._search_index.index_message(session_id, role, content)
+        self._index_message(session_id, role, content)
         self.event_bus.emit(session_id, "message.received", {"message_id": message.message_id, "role": role, "content": content})
 
         if role != "user":
@@ -127,6 +129,20 @@ class SessionService:
     def get_messages(self, session_id: str, limit: int = 100) -> list[Message]:
         """Return the message history."""
         return self.store.get_messages(session_id, limit)
+
+    def _index_session(self, session_id: str, title: str) -> None:
+        """Best-effort search indexing; session persistence is authoritative."""
+        try:
+            self._search_index.index_session(session_id, title)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Session search indexing skipped for %s: %s", session_id, exc)
+
+    def _index_message(self, session_id: str, role: str, content: str) -> None:
+        """Best-effort message indexing; session persistence is authoritative."""
+        try:
+            self._search_index.index_message(session_id, role, content)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Message search indexing skipped for %s: %s", session_id, exc)
 
     def cancel_current(self, session_id: str) -> bool:
         """Cancel the currently running AgentLoop for a session.
@@ -178,7 +194,7 @@ class SessionService:
                 metadata=reply_metadata,
             )
             self.store.append_message(reply)
-            self._search_index.index_message(session.session_id, "assistant", reply.content)
+            self._index_message(session.session_id, "assistant", reply.content)
             self.event_bus.emit(
                 session.session_id,
                 "attempt.completed" if attempt.status == AttemptStatus.COMPLETED else "attempt.failed",

@@ -13,6 +13,7 @@ from src.goal.models import (
 )
 from src.goal.policy import normalize_required_text, reject_live_execution_objective
 from src.goal.store import GoalStore
+from src.goal.factory import create_goal_store
 
 __all__ = [
     "AuditRow",
@@ -25,6 +26,7 @@ __all__ = [
     "GoalStore",
     "RiskTier",
     "StaleGoalError",
+    "create_goal_store",
     "normalize_required_text",
     "reject_live_execution_objective",
 ]

@@ -593,9 +593,9 @@ class AgentLoop:
                     if token_delta or turn_delta:
                         try:
                             if goal_store is None:
-                                from src.goal import GoalStore
+                                from src.goal import create_goal_store
 
-                                goal_store = GoalStore()
+                                goal_store = create_goal_store()
                             goal_store.account_usage(
                                 session_id=session_id,
                                 goal_id=active_goal_id,
@@ -641,9 +641,9 @@ class AgentLoop:
                     if active_goal_id and session_id and GOAL_MAX_CONTINUATIONS > 0:
                         try:
                             if goal_store is None:
-                                from src.goal import GoalStore
+                                from src.goal import create_goal_store
 
-                                goal_store = GoalStore()
+                                goal_store = create_goal_store()
                             continuation_snapshot = goal_store.get_goal_snapshot(active_goal_id)
                             should_continue_goal = bool(
                                 continuation_snapshot

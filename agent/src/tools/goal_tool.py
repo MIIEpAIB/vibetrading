@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from src.agent.tools import BaseTool
-from src.goal import AuditRow, EvidenceInput, GoalStatus, GoalStore, RiskTier, StaleGoalError
+from src.goal import AuditRow, EvidenceInput, GoalStatus, GoalStore, RiskTier, StaleGoalError, create_goal_store
 from src.goal.context import default_goal_criteria
 from src.tools.path_utils import safe_run_dir
 
@@ -122,7 +122,7 @@ class _GoalToolBase(BaseTool):
             event_callback: Optional host callback for live UI updates.
         """
         self._default_session_id = default_session_id
-        self._store = store or GoalStore()
+        self._store = store or create_goal_store()
         self._event_callback = event_callback
 
     def _session_id(self, kwargs: dict[str, Any]) -> str | None:

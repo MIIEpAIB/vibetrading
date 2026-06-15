@@ -29,6 +29,29 @@ class _DummyAgentLoop:
         return {"status": "completed"}
 
 
+class _BrokenIndex:
+    def index_session(self, session_id: str, title: str) -> None:
+        del session_id, title
+        raise RuntimeError("readonly index")
+
+    def index_message(self, session_id: str, role: str, content: str) -> None:
+        del session_id, role, content
+        raise RuntimeError("readonly index")
+
+
+def test_session_writes_do_not_depend_on_search_index(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("src.session.service.get_shared_index", lambda: _BrokenIndex())
+    service = SessionService(
+        store=SessionStore(tmp_path / "sessions"),
+        event_bus=EventBus(),
+        runs_dir=tmp_path / "runs",
+    )
+
+    session = service.create_session("search fallback")
+
+    assert service.get_session(session.session_id) is not None
+
+
 def test_run_with_agent_keeps_event_loop_responsive_during_registry_build(
     monkeypatch,
     tmp_path: Path,

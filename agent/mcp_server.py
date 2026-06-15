@@ -93,9 +93,9 @@ def _get_goal_store():
     """Return the shared finance goal store."""
     global _goal_store
     if _goal_store is None:
-        from src.goal import GoalStore
+        from src.goal import create_goal_store
 
-        _goal_store = GoalStore()
+        _goal_store = create_goal_store()
     return _goal_store
 
 

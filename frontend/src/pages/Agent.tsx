@@ -21,6 +21,7 @@ import {
   buildSwarmStatusFromStarted,
   buildSwarmStatusFromToolResultPreview,
 } from "@/lib/swarmStatus";
+import { useTranslation } from "@/i18n/I18nProvider";
 
 /* ---------- Message grouping ---------- */
 type MsgGroup =
@@ -107,6 +108,7 @@ function liveActionLabel(action: LiveAction): string {
 }
 
 function LiveActionChip({ action }: { action: LiveAction }) {
+  const { t } = useTranslation();
   const { icon: Icon, tone } = liveActionStyle(action.kind);
   return (
     <div className="flex gap-3">
@@ -114,7 +116,7 @@ function LiveActionChip({ action }: { action: LiveAction }) {
       <div className="flex-1 min-w-0">
         <div className={["inline-flex max-w-full flex-wrap items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs", tone].join(" ")}>
           <Icon className="h-3 w-3 shrink-0" />
-          <span className="shrink-0 font-medium uppercase tracking-wide text-[10px]">RUNTIME</span>
+          <span className="shrink-0 font-medium uppercase tracking-wide text-[10px]">{t("agent.runtime")}</span>
           <span className="shrink-0 font-medium">{liveActionLabel(action)}</span>
           {action.intent_normalized && (
             <span className="truncate text-foreground/80">· {action.intent_normalized}</span>
@@ -206,6 +208,7 @@ function goalContinuePrompt(snapshot: GoalSnapshot): string {
 
 /* ---------- Component ---------- */
 export function Agent() {
+  const { t } = useTranslation();
   const [input, setInput] = useState("");
   const [searchParams, setSearchParams] = useSearchParams();
   const listRef = useRef<HTMLDivElement>(null);
@@ -214,6 +217,7 @@ export function Agent() {
   const lastCompositionEndRef = useRef(0);
   const sseSessionRef = useRef<string | null>(null);
   const prevSseStatusRef = useRef<string>("disconnected");
+  const consumedPromptRef = useRef<string | null>(null);
   const genRef = useRef(0);
   const pendingGoalSessionRef = useRef<string | null>(null);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
@@ -306,11 +310,11 @@ export function Agent() {
   useEffect(() => {
     onStatusChange((s) => {
       act().setSseStatus(s);
-      if (s === "reconnecting" && prevSseStatusRef.current === "connected") toast.warning("Connection lost, reconnecting…");
-      else if (s === "connected" && prevSseStatusRef.current === "reconnecting") toast.success("Connection restored");
+      if (s === "reconnecting" && prevSseStatusRef.current === "connected") toast.warning(t("connection.reconnecting", { attempt: 1 }));
+      else if (s === "connected" && prevSseStatusRef.current === "reconnecting") toast.success(t("agent.connectionRestored"));
       prevSseStatusRef.current = s;
     });
-  }, [onStatusChange]);
+  }, [onStatusChange, t]);
 
   const doDisconnect = useCallback(() => {
     disconnect();
@@ -336,10 +340,10 @@ export function Agent() {
         setGoalDetailsOpen(false);
         setGoalEditActive(false);
       } else {
-        toast.error(error instanceof Error ? error.message : "Failed to load goal.");
+        toast.error(error instanceof Error ? error.message : t("agent.failedLoadGoal"));
       }
     }
-  }, []);
+  }, [t]);
 
   const loadSessionMessages = useCallback(async (sid: string, gen: number) => {
     try {
@@ -665,7 +669,7 @@ export function Agent() {
         // the RunnerStatus panel re-polls so its per-broker rows show "halted".
         setLiveHalted(halted);
         setLiveStatusRefresh((n) => n + 1);
-        toast.warning("Connector runtime halted — runner stopped, resting orders cancelled");
+        toast.warning(t("agent.connectorHaltedWarning"));
       },
 
       "live.resumed": (d) => {
@@ -675,7 +679,7 @@ export function Agent() {
         void d;
         setLiveHalted(null);
         setLiveStatusRefresh((n) => n + 1);
-        toast.success("Connector runtime resumed");
+        toast.success(t("agent.connectorResumed"));
       },
 
       "live.action": (d) => {
@@ -695,7 +699,7 @@ export function Agent() {
       heartbeat: () => {},
       reconnect: (d) => { act().setSseStatus("reconnecting", Number(d.attempt ?? 0)); },
     });
-  }, [connect, disconnect, loadGoalSnapshot, scrollToBottom]);
+  }, [connect, disconnect, loadGoalSnapshot, scrollToBottom, t]);
 
   useEffect(() => {
     const { sessionId: curSid, messages: curMsgs, cacheSession, reset, getCachedSession, switchSession } = act();
@@ -800,11 +804,11 @@ export function Agent() {
       if (lastEventRef.current && Date.now() - lastEventRef.current > sseTimeoutMsRef.current && act().status === "streaming") {
         setReasoningActive(false);
         act().setStatus("idle");
-        toast.warning("Execution timed out, automatically stopped");
+        toast.warning(t("agent.timeoutStopped"));
       }
     }, 10_000);
     return () => clearInterval(timer);
-  }, [status]);
+  }, [status, t]);
 
   const runPrompt = async (prompt: string) => {
     if (!prompt.trim() || status === "streaming") return;
@@ -818,7 +822,7 @@ export function Agent() {
         setGoalSnapshot(snapshot);
         setGoalComposerActive(false);
         setGoalDetailsOpen(true);
-        toast.success("Research goal attached");
+        toast.success(t("agent.goalAttached"));
         const kickoff = goalKickoffPrompt(prompt);
         act().addMessage({ id: "", type: "user", content: kickoff, timestamp: Date.now() });
         act().setStatus("streaming");
@@ -827,7 +831,7 @@ export function Agent() {
         await api.sendMessage(sid, kickoff);
       } catch (error) {
         act().setStatus("idle");
-        toast.error(error instanceof Error ? error.message : "Failed to start goal.");
+        toast.error(error instanceof Error ? error.message : t("agent.failedStartGoal"));
       }
       return;
     }
@@ -862,11 +866,37 @@ export function Agent() {
       await api.sendMessage(sid, finalPrompt);
     } catch (error) {
       act().setStatus("error");
-      const message = isAuthRequiredError(error) ? AUTH_REQUIRED_MESSAGE : "Failed to send message, please retry.";
+      const message = isAuthRequiredError(error) ? AUTH_REQUIRED_MESSAGE : t("agent.failedSend");
       toast.error(message);
       act().addMessage({ id: "", type: "error", content: message, timestamp: Date.now() });
     }
   };
+
+  useEffect(() => {
+    if (status === "streaming") return;
+    const promptKey = searchParams.get("promptKey");
+    const directPrompt = searchParams.get("prompt");
+    const prompt = promptKey ? window.sessionStorage.getItem(promptKey) : directPrompt;
+    const consumeId = promptKey || directPrompt;
+    if (!prompt?.trim() || !consumeId || consumedPromptRef.current === consumeId) return;
+
+    consumedPromptRef.current = consumeId;
+    if (promptKey) window.sessionStorage.removeItem(promptKey);
+
+    const next = new URLSearchParams(searchParams);
+    next.delete("promptKey");
+    next.delete("prompt");
+    next.delete("auto");
+    setSearchParams(next, { replace: true });
+
+    if (searchParams.get("auto") === "1") {
+      void runPrompt(prompt);
+      return;
+    }
+
+    setInput(prompt);
+    inputRef.current?.focus();
+  }, [searchParams, setSearchParams, status]);
 
   const ensureGoalSession = useCallback(async (title: string): Promise<string> => {
     let sid = act().sessionId;
@@ -893,9 +923,9 @@ export function Agent() {
       act().setStatus("idle");
       act().clearStreaming();
       useAgentStore.setState({ toolCalls: [] });
-      toast.info("Cancel request sent");
+      toast.info(t("agent.cancelRequestSent"));
     } catch {
-      toast.error("Cancel failed");
+      toast.error(t("agent.cancelFailed"));
     }
   };
 
@@ -913,13 +943,13 @@ export function Agent() {
       // optimistically and re-poll the runtime panel so the runner shows stopped.
       setLiveHalted((cur) => cur ?? { broker: null, by: "frontend", tripped_at: new Date().toISOString() });
       setLiveStatusRefresh((n) => n + 1);
-      toast.success("Connector runtime halted");
+      toast.success(t("agent.connectorHaltedToast"));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to halt connector runtime.");
+      toast.error(error instanceof Error ? error.message : t("agent.failedHaltConnector"));
     } finally {
       setHalting(false);
     }
-  }, [sessionId, halting]);
+  }, [sessionId, halting, t]);
 
   const handleCancelGoal = useCallback(async () => {
     if (!sessionId || !goalSnapshot) return;
@@ -932,11 +962,11 @@ export function Agent() {
       });
       setGoalSnapshot(null);
       setGoalDetailsOpen(false);
-      toast.success("Research goal cancelled");
+      toast.success(t("agent.goalCancelled"));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to cancel goal.");
+      toast.error(error instanceof Error ? error.message : t("agent.failedCancelGoal"));
     }
-  }, [goalSnapshot, sessionId]);
+  }, [goalSnapshot, sessionId, t]);
 
   const handleStartGoalEdit = useCallback(() => {
     if (!goalSnapshot) return;
@@ -955,11 +985,11 @@ export function Agent() {
       });
       setGoalSnapshot(response.snapshot);
       setGoalEditActive(false);
-      toast.success("Research goal updated");
+      toast.success(t("agent.goalUpdated"));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to update goal.");
+      toast.error(error instanceof Error ? error.message : t("agent.failedUpdateGoal"));
     }
-  }, [goalEditValue, goalSnapshot, sessionId]);
+  }, [goalEditValue, goalSnapshot, sessionId, t]);
 
   const handleContinueGoal = useCallback(async () => {
     if (!sessionId || !goalSnapshot || status === "streaming") return;
@@ -973,11 +1003,11 @@ export function Agent() {
       await api.sendMessage(sessionId, prompt);
     } catch (error) {
       act().setStatus("error");
-      const message = isAuthRequiredError(error) ? AUTH_REQUIRED_MESSAGE : "Failed to continue goal, please retry.";
+      const message = isAuthRequiredError(error) ? AUTH_REQUIRED_MESSAGE : t("agent.failedContinueGoal");
       toast.error(message);
       act().addMessage({ id: "", type: "error", content: message, timestamp: Date.now() });
     }
-  }, [forceScrollToBottom, goalSnapshot, sessionId, setupSSE, status]);
+  }, [forceScrollToBottom, goalSnapshot, sessionId, setupSSE, status, t]);
 
   const handleRetry = useCallback((errorMsg: AgentMessage) => {
     if (status === "streaming") return;
@@ -998,21 +1028,21 @@ export function Agent() {
 
   const handleExport = () => {
     if (messages.length === 0) return;
-    const lines: string[] = [`# Chat Export`, ``, `Export time: ${new Date().toLocaleString()}`, ``];
+    const lines: string[] = [`# ${t("agent.chatExportTitle")}`, ``, `${t("agent.chatExportTime")}: ${new Date().toLocaleString()}`, ``];
     for (const msg of messages) {
       const time = new Date(msg.timestamp).toLocaleString();
       if (msg.type === "user") {
-        lines.push(`## User (${time})`, ``, msg.content, ``);
+        lines.push(`## ${t("agent.exportUser")} (${time})`, ``, msg.content, ``);
       } else if (msg.type === "answer") {
-        lines.push(`## Assistant (${time})`, ``, msg.content, ``);
+        lines.push(`## ${t("agent.exportAssistant")} (${time})`, ``, msg.content, ``);
       } else if (msg.type === "error") {
-        lines.push(`## Error (${time})`, ``, msg.content, ``);
+        lines.push(`## ${t("agent.exportError")} (${time})`, ``, msg.content, ``);
       } else if (msg.type === "tool_call") {
-        lines.push(`> Tool call: ${msg.tool || "unknown"}`, ``);
+        lines.push(`> ${t("agent.exportToolCall")}: ${msg.tool || "unknown"}`, ``);
       } else if (msg.type === "swarm_status") {
-        lines.push(`> Swarm status: ${msg.swarmStatus?.preset || "swarm"} ${msg.swarmStatus?.status || ""}`, ``);
+        lines.push(`> ${t("agent.exportSwarmStatus")}: ${msg.swarmStatus?.preset || "swarm"} ${msg.swarmStatus?.status || ""}`, ``);
       } else if (msg.type === "run_complete") {
-        lines.push(`> Backtest complete: ${msg.runId || ""}`, ``);
+        lines.push(`> ${t("agent.exportBacktestComplete")}: ${msg.runId || ""}`, ``);
       }
     }
     const blob = new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" });
@@ -1035,11 +1065,11 @@ export function Agent() {
     ];
     const lowered = file.name.toLowerCase();
     if (blockedExts.some((ext) => lowered.endsWith(ext))) {
-      toast.error("Executables and archives are not allowed");
+      toast.error(t("agent.filesBlocked"));
       return;
     }
     if (file.size > 50 * 1024 * 1024) {
-      toast.error("File size exceeds 50 MB limit");
+      toast.error(t("agent.fileTooLarge"));
       return;
     }
     setUploading(true);
@@ -1047,13 +1077,13 @@ export function Agent() {
     try {
       const result = await api.uploadFile(file);
       setAttachment({ filename: result.filename, filePath: result.file_path });
-      toast.success(`Uploaded: ${result.filename}`);
+      toast.success(t("agent.uploaded", { filename: result.filename }));
     } catch (err) {
-      toast.error(`Upload failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+      toast.error(t("agent.uploadFailed", { message: err instanceof Error ? err.message : "Unknown error" }));
     } finally {
       setUploading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -1109,11 +1139,11 @@ export function Agent() {
   const providerLabel = providerOption?.label ?? "DeepSeek";
   const modelLabel = llmSettings?.model_name ?? "deepseek-v4-pro";
   const providerReady = llmSettings?.api_key_configured ?? true;
-  const sessionLabel = sessionId ? sessionId.slice(0, 8) : "new";
+  const sessionLabel = sessionId ? sessionId.slice(0, 8) : t("agent.newSession");
   const visibleMessageCount = messages.filter((message) => message.type === "user" || message.type === "answer").length;
   const runStateLabel = status === "streaming"
-    ? reasoningActive ? "Reasoning" : "Running"
-    : status === "error" ? "Needs attention" : "Ready";
+    ? reasoningActive ? t("agent.stateReasoning") : t("agent.stateRunning")
+    : status === "error" ? t("agent.stateAttention") : t("agent.stateReady");
 
   return (
     <div className="dark relative flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-[#050505] text-zinc-100">
@@ -1126,7 +1156,7 @@ export function Agent() {
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <span className="inline-flex items-center gap-2 rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1 text-xs font-semibold text-emerald-200">
                 <Bot className="h-3.5 w-3.5" />
-                Rui Desk
+                {t("agent.ruiDesk")}
               </span>
               <span className={[
                 "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold",
@@ -1139,7 +1169,7 @@ export function Agent() {
               </span>
             </div>
             <h1 className="truncate text-2xl font-semibold tracking-normal text-white sm:text-3xl">
-              Autonomous Research Command
+              {t("agent.commandTitle")}
             </h1>
             <p className="mt-1 max-w-2xl truncate text-sm text-zinc-400">
               {modelLabel}
@@ -1150,21 +1180,21 @@ export function Agent() {
             <div className="rounded-lg border border-white/10 bg-white/[0.045] px-3 py-2">
               <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
                 <Activity className="h-3.5 w-3.5 text-emerald-300" />
-                State
+                {t("agent.state")}
               </div>
               <div className="mt-1 truncate text-sm font-semibold text-white">{runStateLabel}</div>
             </div>
             <div className="rounded-lg border border-white/10 bg-white/[0.045] px-3 py-2">
               <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
                 <BrainCircuit className="h-3.5 w-3.5 text-sky-300" />
-                Session
+                {t("agent.session")}
               </div>
               <div className="mt-1 truncate font-mono text-sm font-semibold text-white">{sessionLabel}</div>
             </div>
             <div className="rounded-lg border border-white/10 bg-white/[0.045] px-3 py-2">
               <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
                 <Gauge className="h-3.5 w-3.5 text-orange-300" />
-                Turns
+                {t("agent.turns")}
               </div>
               <div className="mt-1 font-mono text-sm font-semibold text-white">{visibleMessageCount}</div>
             </div>
@@ -1235,7 +1265,7 @@ export function Agent() {
               <AgentAvatar />
               <div className="flex-1 min-w-0 flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-zinc-400">
                 <Loader2 className="h-3 w-3 animate-spin text-orange-300 shrink-0" />
-                <span>Rui is working…</span>
+                <span>{t("agent.working")}</span>
               </div>
             </div>
           )}
@@ -1248,7 +1278,7 @@ export function Agent() {
                 {reasoningActive && !streamingText && (
                   <div className="flex items-center gap-2 text-xs text-zinc-400">
                     <Loader2 className="h-3 w-3 animate-spin text-orange-300 shrink-0" />
-                    <span>Reasoning…</span>
+                    <span>{t("agent.reasoning")}</span>
                   </div>
                 )}
                 {streamingText && (
@@ -1270,7 +1300,7 @@ export function Agent() {
               <div className="h-0.5 flex-1 rounded-full bg-emerald-300/15 overflow-hidden">
                 <div className="h-full w-1/3 bg-gradient-to-r from-emerald-300 to-orange-300 rounded-full animate-[pulse-slide_2s_ease-in-out_infinite]" />
               </div>
-              <span className="text-[10px] text-zinc-500 shrink-0 tabular-nums">running</span>
+              <span className="text-[10px] text-zinc-500 shrink-0 tabular-nums">{t("agent.running")}</span>
             </div>
           )}
 
@@ -1282,7 +1312,7 @@ export function Agent() {
             onClick={forceScrollToBottom}
             className="sticky bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1 rounded-full bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white shadow-lg shadow-orange-500/25 transition hover:bg-orange-400 z-10"
           >
-            <ArrowDown className="h-3 w-3" /> New messages
+            <ArrowDown className="h-3 w-3" /> {t("agent.newMessages")}
           </button>
         )}
         <ConversationTimeline messages={messages} containerRef={listRef} />
@@ -1306,7 +1336,7 @@ export function Agent() {
             <div className="flex items-center gap-1">
               <span className="inline-flex items-center gap-1.5 rounded-lg border border-orange-300/20 bg-orange-400/10 px-2.5 py-1 text-xs font-semibold text-orange-200">
                 <Target className="h-3 w-3" />
-                New Research Goal
+                {t("agent.newResearchGoal")}
                 <button type="button" onClick={() => setGoalComposerActive(false)} className="transition-colors hover:text-rose-200">
                   <X className="h-3 w-3" />
                 </button>
@@ -1320,11 +1350,11 @@ export function Agent() {
                 onClick={() => setGoalDetailsOpen((open) => !open)}
                 className="inline-flex max-w-full items-center gap-1.5 justify-self-start rounded-lg border border-emerald-300/20 bg-emerald-300/10 px-2.5 py-1 text-left text-xs font-semibold text-emerald-200 transition-colors hover:bg-emerald-300/15"
                 title={goalSnapshot.goal.objective}
-                aria-label="Active research goal"
+                aria-label={t("agent.activeResearchGoal")}
                 aria-expanded={goalDetailsOpen}
               >
                 <Target className="h-3 w-3 shrink-0" />
-                <span className="shrink-0">Goal</span>
+                <span className="shrink-0">{t("agent.goal")}</span>
                 <span className="truncate text-zinc-400">
                   {goalSnapshot.goal.ui_summary || goalSnapshot.goal.objective}
                 </span>
@@ -1334,8 +1364,8 @@ export function Agent() {
                   </span>
                 )}
                 {goalProgress.evidenceTotal > 0 && (
-                  <span className="shrink-0 rounded border border-white/10 bg-black/30 px-1 font-mono text-[10px] text-orange-200" title="Evidence collected toward this research goal">
-                    {goalProgress.evidenceTotal} evidence
+                  <span className="shrink-0 rounded border border-white/10 bg-black/30 px-1 font-mono text-[10px] text-orange-200" title={t("agent.evidenceTooltip")}>
+                    {goalProgress.evidenceTotal} {t("agent.evidence")}
                   </span>
                 )}
                 <ChevronDown
@@ -1363,7 +1393,7 @@ export function Agent() {
                           className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-semibold text-zinc-400 transition-colors hover:text-white"
                         >
                           <X className="h-3 w-3" />
-                          Cancel
+                          {t("agent.cancel")}
                         </button>
                         <button
                           type="button"
@@ -1372,7 +1402,7 @@ export function Agent() {
                           className="inline-flex items-center gap-1 rounded-lg bg-orange-500 px-2 py-1 text-[11px] font-semibold text-white transition hover:bg-orange-400 disabled:opacity-40"
                         >
                           <Check className="h-3 w-3" />
-                          Save
+                          {t("agent.save")}
                         </button>
                       </div>
                     </div>
@@ -1384,7 +1414,7 @@ export function Agent() {
                   <div className="grid grid-cols-2 gap-2">
                     <div className="rounded-lg border border-white/10 bg-white/[0.04] p-2.5">
                       <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
-                        Criteria
+                        {t("agent.criteria")}
                       </div>
                       <div className="mt-1 font-mono text-base font-semibold text-white">
                         {goalProgress.label || "0/0"}
@@ -1392,7 +1422,7 @@ export function Agent() {
                     </div>
                     <div className="rounded-lg border border-white/10 bg-white/[0.04] p-2.5">
                       <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
-                        Evidence
+                        {t("agent.evidence")}
                       </div>
                       <div className="mt-1 font-mono text-base font-semibold text-white">
                         {goalProgress.evidenceTotal}
@@ -1420,7 +1450,7 @@ export function Agent() {
                             </span>
                           </span>
                           <span className="rounded-full border border-white/10 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500">
-                            {evidenceCount} ev
+                            {evidenceCount} {t("agent.evidenceShort")}
                           </span>
                         </div>
                       );
@@ -1429,7 +1459,7 @@ export function Agent() {
                   {goalSnapshot.evidence.length > 0 && (
                     <div className="grid gap-1.5 border-t border-white/10 pt-2">
                       <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
-                        Recent Evidence
+                        {t("agent.recentEvidence")}
                       </div>
                       {latestGoalEvidence(goalSnapshot).map((item) => (
                         <div key={item.evidence_id} className="rounded-lg bg-white/[0.04] px-2 py-1.5">
@@ -1452,7 +1482,7 @@ export function Agent() {
                       className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-semibold text-zinc-400 transition-colors hover:text-white disabled:opacity-40"
                     >
                       <Play className="h-3 w-3" />
-                      Continue
+                      {t("agent.continue")}
                     </button>
                     <button
                       type="button"
@@ -1461,7 +1491,7 @@ export function Agent() {
                       className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-semibold text-zinc-400 transition-colors hover:text-white disabled:opacity-40"
                     >
                       <Pencil className="h-3 w-3" />
-                      Edit
+                      {t("agent.edit")}
                     </button>
                     <button
                       type="button"
@@ -1469,7 +1499,7 @@ export function Agent() {
                       className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-semibold text-zinc-400 transition-colors hover:border-rose-400/40 hover:text-rose-300"
                     >
                       <X className="h-3 w-3" />
-                      Cancel Goal
+                      {t("agent.cancelGoal")}
                     </button>
                   </div>
                 </div>
@@ -1500,7 +1530,7 @@ export function Agent() {
           {uploading && (
             <div className="flex items-center gap-1.5 text-xs text-zinc-400">
               <Loader2 className="h-3 w-3 animate-spin" />
-              Uploading...
+              {t("agent.uploading")}
             </div>
           )}
           {/* Persistent kill switch — distinct from the per-turn Stop button
@@ -1510,7 +1540,7 @@ export function Agent() {
               {liveIsHalted ? (
                 <span className="inline-flex items-center gap-1.5 rounded-lg border border-rose-400/30 bg-rose-400/10 px-2.5 py-1 text-xs font-semibold text-rose-300">
                   <OctagonX className="h-3 w-3" />
-                  Connector runtime halted
+                  {t("agent.connectorRuntimeHalted")}
                 </span>
               ) : (
                 <button
@@ -1518,10 +1548,10 @@ export function Agent() {
                   onClick={handleHaltLive}
                   disabled={halting}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-rose-400/40 bg-rose-400/5 px-2.5 py-1 text-xs font-semibold text-rose-300 transition-colors hover:bg-rose-400/10 disabled:opacity-40"
-                  title="Instantly halt connector runtime activity"
+                  title={t("agent.haltConnectorRuntimeTitle")}
                 >
                   {halting ? <Loader2 className="h-3 w-3 animate-spin" /> : <OctagonX className="h-3 w-3" />}
-                  Halt connector runtime
+                  {t("agent.haltConnectorRuntime")}
                 </button>
               )}
             </div>
@@ -1534,7 +1564,7 @@ export function Agent() {
                 onClick={() => setShowUploadMenu(prev => !prev)}
                 disabled={status === "streaming" || uploading}
                 className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.045] text-zinc-400 transition-colors hover:bg-white/[0.08] hover:text-white disabled:opacity-40"
-                title="More options"
+                title={t("agent.moreOptions")}
               >
                 <Plus className="h-4 w-4" />
               </button>
@@ -1546,7 +1576,7 @@ export function Agent() {
                     className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-white"
                   >
                     <Paperclip className="h-4 w-4" />
-                    Upload PDF document
+                    {t("agent.uploadPdf")}
                   </button>
                   <div className="my-1 border-t border-white/10" />
                   <button
@@ -1560,20 +1590,20 @@ export function Agent() {
                     className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-white"
                   >
                     <Target className="h-4 w-4" />
-                    Research Goal
+                    {t("agent.researchGoal")}
                   </button>
                   <button
                     type="button"
                     onClick={() => {
                       setShowUploadMenu(false);
                       setGoalComposerActive(false);
-                      setSwarmPreset({ name: "auto", title: "Rui Swarm" });
+                      setSwarmPreset({ name: "auto", title: t("agent.ruiSwarm") });
                       inputRef.current?.focus();
                     }}
                     className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-white"
                   >
                     <Users className="h-4 w-4" />
-                    Rui Swarm
+                    {t("agent.ruiSwarm")}
                   </button>
                   <div className="my-1 border-t border-white/10" />
                   <button
@@ -1585,7 +1615,7 @@ export function Agent() {
                     className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-white"
                   >
                     <Landmark className="h-4 w-4" />
-                    Check Trading Connector
+                    {t("agent.checkConnector")}
                   </button>
                   <button
                     type="button"
@@ -1596,7 +1626,7 @@ export function Agent() {
                     className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-white"
                   >
                     <Landmark className="h-4 w-4" />
-                    Analyze Connector Portfolio
+                    {t("agent.analyzeConnectorPortfolio")}
                   </button>
                 </div>
               )}
@@ -1642,8 +1672,8 @@ export function Agent() {
               }}
               placeholder={
                 goalComposerActive
-                  ? "Describe the research goal to attach to this session"
-                  : "e.g. Create a dual MA crossover strategy for 000001.SZ, backtest 2024"
+                  ? t("agent.goalPlaceholder")
+                  : t("agent.promptPlaceholder")
               }
               className="max-h-32 flex-1 resize-none overflow-y-auto rounded-lg border border-white/10 bg-white/[0.045] px-4 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 transition-shadow focus:outline-none focus:ring-2 focus:ring-orange-400/35"
               disabled={status === "streaming"}
@@ -1653,7 +1683,7 @@ export function Agent() {
                 type="button"
                 onClick={handleExport}
                 className="rounded-lg border border-white/10 bg-white/[0.045] px-3 py-2.5 text-zinc-400 transition-colors hover:bg-white/[0.08] hover:text-white"
-                title="Export chat"
+                title={t("agent.exportChat")}
               >
                 <Download className="h-4 w-4" />
               </button>
@@ -1663,7 +1693,7 @@ export function Agent() {
                 type="button"
                 onClick={handleCancel}
                 className="rounded-lg bg-rose-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-rose-400"
-                title="Stop generation"
+                title={t("agent.stopGeneration")}
               >
                 <Square className="h-4 w-4" />
               </button>

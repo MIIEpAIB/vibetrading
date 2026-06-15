@@ -170,9 +170,9 @@ def get_current_goal_context(session_id: str) -> tuple[str, str | None]:
     """
     if not session_id.strip():
         return "", None
-    from src.goal.store import GoalStore
+    from src.goal.factory import create_goal_store
 
-    snapshot = GoalStore().get_current_snapshot(session_id)
+    snapshot = create_goal_store().get_current_snapshot(session_id)
     if snapshot is None:
         return "", None
     return format_goal_context(snapshot), str(snapshot["goal"]["goal_id"])

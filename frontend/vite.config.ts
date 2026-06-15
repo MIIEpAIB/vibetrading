@@ -8,6 +8,7 @@ const PROXY_PATHS = [
   "/swarm/runs",
   "/settings/llm",
   "/settings/data-sources",
+  "/strategies",
   "/mandate",
   "/live",
   "/upload",
@@ -17,7 +18,17 @@ const PROXY_PATHS = [
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const apiTarget = env.VITE_API_URL || "http://127.0.0.1:8899";
-  const apiProxy = { target: apiTarget, changeOrigin: true };
+  const devProxyAuth = env.VIBE_DEV_PROXY_AUTH || "";
+  const apiProxy = {
+    target: apiTarget,
+    changeOrigin: true,
+    configure(proxy: { on: (event: "proxyReq", handler: (proxyReq: { setHeader: (name: string, value: string) => void }) => void) => void }) {
+      if (!devProxyAuth) return;
+      proxy.on("proxyReq", (proxyReq) => {
+        proxyReq.setHeader("x-vibe-dev-proxy-auth", devProxyAuth);
+      });
+    },
+  };
   const apiProxyWithHtmlFallback = {
     ...apiProxy,
     bypass(req: { headers: { accept?: string } }) {

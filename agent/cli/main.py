@@ -335,9 +335,9 @@ def _session_store() -> Any:
     global _SESSION_STORE_CACHE
     if _SESSION_STORE_CACHE is None:
         from cli._legacy import SESSIONS_DIR  # filesystem path constant
-        from src.session.store import SessionStore
+        from src.session.factory import create_session_store
 
-        _SESSION_STORE_CACHE = SessionStore(base_dir=SESSIONS_DIR)
+        _SESSION_STORE_CACHE = create_session_store(base_dir=SESSIONS_DIR)
     return _SESSION_STORE_CACHE
 
 

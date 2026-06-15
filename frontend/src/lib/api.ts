@@ -105,6 +105,21 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(body),
     }),
+  listStrategies: () => request<StrategyLibraryResponse>("/strategies"),
+  replaceStrategies: (strategies: StrategyLibraryItem[]) =>
+    request<StrategyLibraryResponse>("/strategies", {
+      method: "PUT",
+      body: JSON.stringify({ strategies }),
+    }),
+  upsertStrategy: (strategy: StrategyLibraryItem) =>
+    request<StrategyLibraryItem>(`/strategies/${encodeURIComponent(strategy.id)}`, {
+      method: "PUT",
+      body: JSON.stringify(strategy),
+    }),
+  deleteStrategy: (strategyId: string) =>
+    request<{ status: string; id: string }>(`/strategies/${encodeURIComponent(strategyId)}`, {
+      method: "DELETE",
+    }),
   sseUrl: (sid: string, options?: { replay?: "active" }) => {
     let url = withAuthQuery(`${BASE}/sessions/${sid}/events`);
     if (options?.replay) url = appendQueryParam(url, "replay", options.replay);
@@ -617,6 +632,23 @@ export interface UpdateGoalStatusRequest {
 export interface UpdateGoalStatusResponse {
   goal: GoalRecord;
   snapshot: GoalSnapshot;
+}
+
+export interface StrategyLibraryItem {
+  id: string;
+  name: string;
+  description: string;
+  language: string;
+  category: string;
+  status: string;
+  tags: string[];
+  code: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StrategyLibraryResponse {
+  strategies: StrategyLibraryItem[];
 }
 
 // --- Alpha Zoo types ---

@@ -26,9 +26,15 @@
   npm install
   npm run dev
 
-  打开：
+ # 后端
+  cd /opt/Vibe-Trading
+  .venv/bin/vibe-trading serve --host 127.0.0.1 --port 8899
 
-  http://localhost:8765
+  # 前端
+  cd /opt/Vibe-Trading/frontend
+  npm run dev -- --host 0.0.0.0 --port 8765 --strictPort
+
+
 
   前端 Vite 默认绑定 0.0.0.0:8765，并把 API 请求代理到 http://127.0.0.1:8899，见 frontend/vite.config.ts:1。
 
