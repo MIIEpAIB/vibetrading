@@ -127,7 +127,8 @@ class MySQLStrategyStore:
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS strategy_library (
-                        id VARCHAR(128) PRIMARY KEY,
+                        id VARCHAR(128) NOT NULL,
+                        user_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
                         name TEXT NOT NULL,
                         description TEXT NOT NULL,
                         language VARCHAR(32) NOT NULL,
@@ -137,55 +138,83 @@ class MySQLStrategyStore:
                         code MEDIUMTEXT NOT NULL,
                         created_at VARCHAR(64) NOT NULL,
                         updated_at VARCHAR(64) NOT NULL,
+                        PRIMARY KEY (user_id, id),
+                        INDEX idx_strategy_user_updated (user_id, updated_at),
                         INDEX idx_strategy_updated_at (updated_at),
                         INDEX idx_strategy_status (status),
                         INDEX idx_strategy_category (category)
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
                     """
                 )
+                self._migrate_legacy_columns(cur)
+                self._ensure_column(cur, "strategy_library", "user_id", "BIGINT UNSIGNED NOT NULL DEFAULT 0")
+                cur.execute("UPDATE strategy_library SET user_id = 0 WHERE user_id IS NULL")
+                cur.execute("ALTER TABLE strategy_library MODIFY COLUMN user_id BIGINT UNSIGNED NOT NULL DEFAULT 0")
+                self._ensure_index(cur, "strategy_library", "idx_strategy_user_updated", "user_id, updated_at")
+                self._ensure_composite_primary_key(cur)
 
-    def list_strategies(self) -> list[StrategyRecord]:
+    def list_strategies(self, user_id: int | None = None) -> list[StrategyRecord]:
         with self._lock, mysql_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT * FROM strategy_library
-                    ORDER BY updated_at DESC, id
-                    """
-                )
+                if user_id is None:
+                    cur.execute(
+                        """
+                        SELECT * FROM strategy_library
+                        ORDER BY updated_at DESC, id
+                        """
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT * FROM strategy_library
+                        WHERE user_id = %s
+                        ORDER BY updated_at DESC, id
+                        """,
+                        (self._scope_user_id(user_id),),
+                    )
                 rows = cur.fetchall()
         return [self._from_row(row) for row in rows]
 
-    def replace_all(self, strategies: list[StrategyRecord]) -> list[StrategyRecord]:
+    def replace_all(self, strategies: list[StrategyRecord], user_id: int | None = None) -> list[StrategyRecord]:
         with self._lock, self._transaction() as conn:
             with conn.cursor() as cur:
-                cur.execute("DELETE FROM strategy_library")
+                if user_id is None:
+                    cur.execute("DELETE FROM strategy_library")
+                else:
+                    cur.execute("DELETE FROM strategy_library WHERE user_id = %s", (self._scope_user_id(user_id),))
                 for strategy in strategies:
-                    self._upsert_with_cursor(cur, strategy)
+                    self._upsert_with_cursor(cur, strategy, user_id=user_id)
         return strategies
 
-    def upsert_strategy(self, strategy: StrategyRecord) -> StrategyRecord:
+    def upsert_strategy(self, strategy: StrategyRecord, user_id: int | None = None) -> StrategyRecord:
         with self._lock, self._transaction() as conn:
             with conn.cursor() as cur:
-                self._upsert_with_cursor(cur, strategy)
+                self._upsert_with_cursor(cur, strategy, user_id=user_id)
         return strategy
 
-    def delete_strategy(self, strategy_id: str) -> bool:
+    def delete_strategy(self, strategy_id: str, user_id: int | None = None) -> bool:
         with self._lock, self._transaction() as conn:
             with conn.cursor() as cur:
-                cur.execute("DELETE FROM strategy_library WHERE id = %s", (strategy_id,))
+                if user_id is None:
+                    cur.execute("DELETE FROM strategy_library WHERE id = %s", (strategy_id,))
+                else:
+                    cur.execute(
+                        "DELETE FROM strategy_library WHERE id = %s AND user_id = %s",
+                        (strategy_id, self._scope_user_id(user_id)),
+                    )
                 return cur.rowcount > 0
 
     @staticmethod
-    def _upsert_with_cursor(cur: Any, strategy: StrategyRecord) -> None:
+    def _upsert_with_cursor(cur: Any, strategy: StrategyRecord, user_id: int | None = None) -> None:
         cur.execute(
             """
             INSERT INTO strategy_library (
-                id, name, description, language, category, status, tags_json,
+                id, user_id, name, description, language, category, status, tags_json,
                 code, created_at, updated_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
+                user_id = VALUES(user_id),
                 name = VALUES(name),
                 description = VALUES(description),
                 language = VALUES(language),
@@ -198,6 +227,7 @@ class MySQLStrategyStore:
             """,
             (
                 strategy.id,
+                MySQLStrategyStore._scope_user_id(user_id),
                 strategy.name,
                 strategy.description,
                 strategy.language,
@@ -209,6 +239,90 @@ class MySQLStrategyStore:
                 strategy.updatedAt,
             ),
         )
+
+    @staticmethod
+    def _ensure_column(cur: Any, table: str, column: str, definition: str) -> None:
+        cur.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = %s
+              AND COLUMN_NAME = %s
+            """,
+            (table, column),
+        )
+        row = cur.fetchone() or {}
+        if int(row.get("count") or 0) == 0:
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    @staticmethod
+    def _ensure_index(cur: Any, table: str, index_name: str, columns: str) -> None:
+        cur.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM information_schema.STATISTICS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = %s
+              AND INDEX_NAME = %s
+            """,
+            (table, index_name),
+        )
+        row = cur.fetchone() or {}
+        if int(row.get("count") or 0) == 0:
+            cur.execute(f"CREATE INDEX {index_name} ON {table} ({columns})")
+
+    @staticmethod
+    def _column_exists(cur: Any, table: str, column: str) -> bool:
+        cur.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = %s
+              AND COLUMN_NAME = %s
+            """,
+            (table, column),
+        )
+        row = cur.fetchone() or {}
+        return int(row.get("count") or 0) > 0
+
+    @staticmethod
+    def _migrate_legacy_columns(cur: Any) -> None:
+        """Bring deploy/mysql_schema-era table names in line with this store."""
+        has_id = MySQLStrategyStore._column_exists(cur, "strategy_library", "id")
+        has_strategy_id = MySQLStrategyStore._column_exists(cur, "strategy_library", "strategy_id")
+        if not has_id and has_strategy_id:
+            cur.execute("ALTER TABLE strategy_library CHANGE COLUMN strategy_id id VARCHAR(128) NOT NULL")
+
+        has_tags_json = MySQLStrategyStore._column_exists(cur, "strategy_library", "tags_json")
+        has_tags = MySQLStrategyStore._column_exists(cur, "strategy_library", "tags")
+        if not has_tags_json and has_tags:
+            cur.execute("ALTER TABLE strategy_library CHANGE COLUMN tags tags_json JSON NOT NULL")
+
+    @staticmethod
+    def _ensure_composite_primary_key(cur: Any) -> None:
+        cur.execute(
+            """
+            SELECT COLUMN_NAME AS column_name
+            FROM information_schema.KEY_COLUMN_USAGE
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'strategy_library'
+              AND CONSTRAINT_NAME = 'PRIMARY'
+            ORDER BY ORDINAL_POSITION
+            """
+        )
+        rows = cur.fetchall() or []
+        columns = [str(row.get("column_name") or row.get("COLUMN_NAME")) for row in rows]
+        if columns == ["user_id", "id"]:
+            return
+        if columns:
+            cur.execute("ALTER TABLE strategy_library DROP PRIMARY KEY")
+        cur.execute("ALTER TABLE strategy_library ADD PRIMARY KEY (user_id, id)")
+
+    @staticmethod
+    def _scope_user_id(user_id: int | None) -> int:
+        return int(user_id) if user_id is not None else 0
 
     @staticmethod
     def _from_row(row: dict[str, Any]) -> StrategyRecord:

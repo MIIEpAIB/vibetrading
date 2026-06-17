@@ -16,39 +16,67 @@ CREATE TABLE IF NOT EXISTS app_settings (
   PRIMARY KEY (setting_key)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS users (
+  user_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  username VARCHAR(191) NOT NULL,
+  display_name VARCHAR(191) NOT NULL,
+  password_hash VARCHAR(512) NOT NULL,
+  created_at DATETIME(6) NOT NULL,
+  updated_at DATETIME(6) NOT NULL,
+  PRIMARY KEY (user_id),
+  UNIQUE KEY uq_users_username (username)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS auth_tokens (
+  token_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id BIGINT UNSIGNED NOT NULL,
+  token_hash CHAR(64) NOT NULL,
+  created_at DATETIME(6) NOT NULL,
+  expires_at DATETIME(6) NOT NULL,
+  last_used_at DATETIME(6) NULL,
+  revoked_at DATETIME(6) NULL,
+  PRIMARY KEY (token_id),
+  UNIQUE KEY uq_auth_tokens_hash (token_hash),
+  KEY idx_auth_tokens_user (user_id),
+  KEY idx_auth_tokens_expires (expires_at),
+  CONSTRAINT fk_auth_tokens_user
+    FOREIGN KEY (user_id) REFERENCES users(user_id)
+    ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS strategy_library (
-  strategy_id VARCHAR(128) NOT NULL,
-  owner_session_id VARCHAR(64) NULL,
-  name VARCHAR(512) NOT NULL,
+  id VARCHAR(128) NOT NULL,
+  user_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  name TEXT NOT NULL,
   description TEXT NOT NULL,
   language VARCHAR(32) NOT NULL,
   category VARCHAR(64) NOT NULL,
-  status VARCHAR(32) NOT NULL DEFAULT 'draft',
-  tags JSON NOT NULL,
-  code LONGTEXT NOT NULL,
-  created_at DATETIME(6) NOT NULL,
-  updated_at DATETIME(6) NOT NULL,
-  metadata JSON NULL,
-  PRIMARY KEY (strategy_id),
-  KEY idx_strategy_library_owner_updated (owner_session_id, updated_at),
-  KEY idx_strategy_library_status_updated (status, updated_at),
-  KEY idx_strategy_library_category (category),
-  FULLTEXT KEY ftx_strategy_library_text (name, description, code)
+  status VARCHAR(32) NOT NULL,
+  tags_json JSON NOT NULL,
+  code MEDIUMTEXT NOT NULL,
+  created_at VARCHAR(64) NOT NULL,
+  updated_at VARCHAR(64) NOT NULL,
+  PRIMARY KEY (user_id, id),
+  KEY idx_strategy_user_updated (user_id, updated_at),
+  KEY idx_strategy_updated_at (updated_at),
+  KEY idx_strategy_status (status),
+  KEY idx_strategy_category (category)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS assistant_prompts (
   prompt_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   owner_session_id VARCHAR(64) NULL,
   strategy_id VARCHAR(128) NULL,
+  strategy_user_id BIGINT UNSIGNED NULL,
   title VARCHAR(255) NOT NULL,
   prompt LONGTEXT NOT NULL,
   category VARCHAR(64) NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (prompt_id),
   KEY idx_assistant_prompts_session_created (owner_session_id, created_at),
-  KEY idx_assistant_prompts_strategy (strategy_id),
+  KEY idx_assistant_prompts_strategy (strategy_user_id, strategy_id),
   CONSTRAINT fk_assistant_prompts_strategy
-    FOREIGN KEY (strategy_id) REFERENCES strategy_library(strategy_id)
+    FOREIGN KEY (strategy_user_id, strategy_id) REFERENCES strategy_library(user_id, id)
     ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -61,39 +89,41 @@ CREATE TABLE IF NOT EXISTS uploaded_files (
   size_bytes BIGINT UNSIGNED NULL,
   sha256 CHAR(64) NULL,
   uploaded_by_session_id VARCHAR(64) NULL,
+  uploaded_by_user_id BIGINT UNSIGNED NULL,
   metadata JSON NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (file_id),
   UNIQUE KEY uq_uploaded_files_path (file_path),
   KEY idx_uploaded_files_session (uploaded_by_session_id),
+  KEY idx_uploaded_files_user (uploaded_by_user_id),
   KEY idx_uploaded_files_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS sessions (
-  session_id VARCHAR(64) NOT NULL,
-  title VARCHAR(512) NOT NULL DEFAULT '',
-  status VARCHAR(32) NOT NULL DEFAULT 'active',
-  created_at DATETIME(6) NOT NULL,
-  updated_at DATETIME(6) NOT NULL,
+  session_id VARCHAR(64) PRIMARY KEY,
+  title TEXT NOT NULL,
+  status VARCHAR(32) NOT NULL,
+  created_at VARCHAR(64) NOT NULL,
+  updated_at VARCHAR(64) NOT NULL,
   last_attempt_id VARCHAR(64) NULL,
-  config JSON NULL,
-  PRIMARY KEY (session_id),
-  KEY idx_sessions_updated (updated_at),
-  KEY idx_sessions_status_updated (status, updated_at)
+  user_id BIGINT UNSIGNED NULL,
+  config_json JSON NOT NULL,
+  KEY idx_sessions_user_updated (user_id, updated_at),
+  KEY idx_sessions_updated_at (updated_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS session_messages (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   message_id VARCHAR(64) NOT NULL,
   session_id VARCHAR(64) NOT NULL,
   role VARCHAR(32) NOT NULL,
-  content LONGTEXT NOT NULL,
-  created_at DATETIME(6) NOT NULL,
+  content MEDIUMTEXT NOT NULL,
+  created_at VARCHAR(64) NOT NULL,
   linked_attempt_id VARCHAR(64) NULL,
-  metadata JSON NULL,
-  PRIMARY KEY (message_id),
-  KEY idx_session_messages_session_created (session_id, created_at),
-  KEY idx_session_messages_attempt (linked_attempt_id),
-  FULLTEXT KEY ftx_session_messages_content (content),
+  metadata_json JSON NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_session_messages_message_id (message_id),
+  KEY idx_messages_session_created (session_id, id),
   CONSTRAINT fk_session_messages_session
     FOREIGN KEY (session_id) REFERENCES sessions(session_id)
     ON DELETE CASCADE
@@ -104,25 +134,19 @@ CREATE TABLE IF NOT EXISTS session_attempts (
   session_id VARCHAR(64) NOT NULL,
   parent_attempt_id VARCHAR(64) NULL,
   status VARCHAR(32) NOT NULL DEFAULT 'pending',
-  prompt LONGTEXT NOT NULL,
-  run_id VARCHAR(128) NULL,
-  run_dir VARCHAR(768) NULL,
-  summary LONGTEXT NULL,
-  react_trace JSON NULL,
-  created_at DATETIME(6) NOT NULL,
-  completed_at DATETIME(6) NULL,
-  error LONGTEXT NULL,
-  metrics JSON NULL,
+  prompt MEDIUMTEXT NOT NULL,
+  run_dir TEXT NULL,
+  summary MEDIUMTEXT NULL,
+  react_trace_json JSON NOT NULL,
+  created_at VARCHAR(64) NOT NULL,
+  completed_at VARCHAR(64) NULL,
+  error MEDIUMTEXT NULL,
+  metrics_json JSON NULL,
   PRIMARY KEY (attempt_id),
   KEY idx_session_attempts_session_created (session_id, created_at),
-  KEY idx_session_attempts_status (status),
-  KEY idx_session_attempts_run_id (run_id),
   CONSTRAINT fk_session_attempts_session
     FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-    ON DELETE CASCADE,
-  CONSTRAINT fk_session_attempts_parent
-    FOREIGN KEY (parent_attempt_id) REFERENCES session_attempts(attempt_id)
-    ON DELETE SET NULL
+    ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS runs (
@@ -322,6 +346,8 @@ CREATE TABLE IF NOT EXISTS goal_audits (
 
 CREATE TABLE IF NOT EXISTS swarm_runs (
   swarm_run_id VARCHAR(128) NOT NULL,
+  user_id BIGINT UNSIGNED NULL,
+  owner_session_id VARCHAR(64) NULL,
   preset_name VARCHAR(255) NOT NULL,
   status VARCHAR(32) NOT NULL DEFAULT 'pending',
   user_vars JSON NULL,
@@ -337,6 +363,8 @@ CREATE TABLE IF NOT EXISTS swarm_runs (
   grounding_data JSON NULL,
   raw_run JSON NULL,
   PRIMARY KEY (swarm_run_id),
+  KEY idx_swarm_runs_user_created (user_id, created_at),
+  KEY idx_swarm_runs_session_created (owner_session_id, created_at),
   KEY idx_swarm_runs_status_created (status, created_at),
   KEY idx_swarm_runs_preset_created (preset_name, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

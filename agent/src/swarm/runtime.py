@@ -88,6 +88,8 @@ class SwarmRuntime:
         user_vars: dict[str, str],
         live_callback: Callable | None = None,
         include_shell_tools: bool = False,
+        owner_user_id: int | None = None,
+        owner_session_id: str | None = None,
     ) -> SwarmRun:
         """Start a swarm run. Returns immediately, execution happens in background.
 
@@ -96,6 +98,8 @@ class SwarmRuntime:
             user_vars: User-provided variables for prompt templates.
             live_callback: Optional callback invoked for each event in real-time.
             include_shell_tools: Whether workers may register shell tools.
+            owner_user_id: Application user id for API ownership checks.
+            owner_session_id: Session id that launched the run, when any.
 
         Returns:
             The created SwarmRun instance (status=pending initially).
@@ -117,6 +121,8 @@ class SwarmRuntime:
 
         run = build_run_from_preset(preset_name, user_vars)
         validate_dag(run.tasks)
+        run.owner_user_id = owner_user_id
+        run.owner_session_id = owner_session_id
 
         # Capture which provider/model the run was launched against so the
         # serialized run.json carries enough context for cost audits and

@@ -15,6 +15,7 @@ const apiTarget = process.env.API_URL || process.env.VITE_API_URL || "http://127
 
 const apiPrefixes = [
   "/alpha",
+  "/auth",
   "/correlation",
   "/crypto",
   "/health",

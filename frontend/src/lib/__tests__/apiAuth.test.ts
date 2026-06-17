@@ -1,4 +1,12 @@
-import { getApiAuthKey, setApiAuthKey, authHeaders, authQuerySuffix, withAuthQuery } from "../apiAuth";
+import {
+  getApiAuthKey,
+  setApiAuthKey,
+  authHeaders,
+  authQuerySuffix,
+  withAuthQuery,
+  setAuthSession,
+  clearAuthSession,
+} from "../apiAuth";
 
 describe("apiAuth", () => {
   beforeEach(() => {
@@ -39,6 +47,18 @@ describe("apiAuth", () => {
     it("returns Bearer header when key exists", () => {
       setApiAuthKey("token-xyz");
       expect(authHeaders()).toEqual({ Authorization: "Bearer token-xyz" });
+    });
+    it("prefers user auth token over operator API key", () => {
+      setApiAuthKey("operator-key");
+      setAuthSession("user-token", {
+        user_id: 1,
+        username: "alice",
+        display_name: "Alice",
+        created_at: "2026-01-01T00:00:00",
+      });
+      expect(authHeaders()).toEqual({ Authorization: "Bearer user-token" });
+      clearAuthSession();
+      expect(authHeaders()).toEqual({ Authorization: "Bearer operator-key" });
     });
   });
 

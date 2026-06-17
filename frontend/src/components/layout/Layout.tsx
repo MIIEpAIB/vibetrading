@@ -1,6 +1,6 @@
 ﻿import { useEffect, useState } from "react";
-import { Link, Outlet, useLocation, useSearchParams } from "react-router-dom";
-import { BarChart3, Bot, Moon, Sun, Plus, Trash2, Pencil, MessageSquare, ChevronsLeft, ChevronsRight, Settings, Layers, Loader2, Library } from "lucide-react";
+import { Link, Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { BarChart3, Bot, Moon, Sun, Plus, Trash2, Pencil, MessageSquare, ChevronsLeft, ChevronsRight, Settings, Layers, Loader2, Library, LogOut, User } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
 import { api, type SessionItem } from "@/lib/api";
@@ -8,6 +8,7 @@ import { useAgentStore } from "@/stores/agent";
 import { ConnectionBanner } from "@/components/layout/ConnectionBanner";
 import { LanguageToggle } from "@/components/layout/LanguageToggle";
 import { useTranslation } from "@/i18n/I18nProvider";
+import { useAuthStore } from "@/stores/auth";
 
 // Bump on each release; one place keeps the footer in sync with package.json.
 const APP_VERSION = "v0.1.9";
@@ -24,6 +25,7 @@ const NAV = [
 export function Layout() {
   const { t } = useTranslation();
   const { pathname } = useLocation();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { dark, toggle } = useDarkMode();
   const [sessions, setSessions] = useState<SessionItem[]>([]);
@@ -31,6 +33,9 @@ export function Layout() {
   const sseStatus = useAgentStore(s => s.sseStatus);
   const sseRetryAttempt = useAgentStore(s => s.sseRetryAttempt);
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem("qa-sidebar") === "collapsed");
+  const user = useAuthStore((s) => s.user);
+  const logout = useAuthStore((s) => s.logout);
+  const resetAgent = useAgentStore((s) => s.reset);
 
   const activeSessionId = searchParams.get("session");
   const streamingSessionId = useAgentStore(s => s.streamingSessionId);
@@ -70,6 +75,12 @@ export function Layout() {
       setSessions((prev) => prev.map((s) => s.session_id === sid ? { ...s, title: renameValue.trim() } : s));
     } catch { /* ignore */ }
     setRenameTarget(null);
+  };
+
+  const handleLogout = async () => {
+    await logout();
+    resetAgent();
+    navigate("/login", { replace: true });
   };
 
   return (
@@ -215,6 +226,9 @@ export function Layout() {
           {collapsed ? (
             <>
               <LanguageToggle collapsed />
+              <button onClick={handleLogout} className="p-1.5 text-muted-foreground hover:text-foreground rounded transition-colors" title="Sign out">
+                <LogOut className="h-3.5 w-3.5" />
+              </button>
               <button onClick={toggle} className="p-1.5 text-muted-foreground hover:text-foreground rounded transition-colors" title={dark ? t("layout.light") : t("layout.dark")}>
                 {dark ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
               </button>
@@ -225,6 +239,21 @@ export function Layout() {
           ) : (
             <>
               <LanguageToggle />
+              <div className="flex items-center justify-between gap-2 rounded-md bg-muted/40 px-2 py-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  <User className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <span className="truncate text-xs text-muted-foreground">
+                    {user?.display_name || user?.username}
+                  </span>
+                </div>
+                <button
+                  onClick={handleLogout}
+                  className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground"
+                  title="Sign out"
+                >
+                  <LogOut className="h-3.5 w-3.5" />
+                </button>
+              </div>
               <div className="flex items-center justify-between">
                 <button
                   onClick={toggle}

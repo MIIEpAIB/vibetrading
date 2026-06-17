@@ -17,6 +17,7 @@ import signal
 import time
 import csv
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -240,6 +241,9 @@ class CryptoMarketRowResponse(BaseModel):
     symbol: str
     base: str
     name: str
+    icon_url: str
+    icon_bg: str
+    icon_fg: str
     price: float
     change_24h: float
     high_24h: float
@@ -286,6 +290,41 @@ class CryptoKlinesResponse(BaseModel):
     updated_at: str
     storage: CryptoStorageStatusResponse
     bars: List[CryptoKlineBarResponse]
+
+
+# ---- User Auth Models ----
+
+class RegisterRequest(BaseModel):
+    """Create an application user."""
+
+    username: str = Field(..., min_length=3, max_length=64)
+    password: str = Field(..., min_length=8, max_length=256)
+    display_name: Optional[str] = Field(None, max_length=191)
+
+
+class LoginRequest(BaseModel):
+    """Login with username and password."""
+
+    username: str = Field(..., min_length=1, max_length=64)
+    password: str = Field(..., min_length=1, max_length=256)
+
+
+class AuthUserResponse(BaseModel):
+    """Public authenticated user profile."""
+
+    user_id: int
+    username: str
+    display_name: str
+    created_at: str
+
+
+class AuthTokenResponse(BaseModel):
+    """Login/register response carrying a bearer token."""
+
+    token: str
+    token_type: str = "bearer"
+    expires_at: str
+    user: AuthUserResponse
 
 
 # ---- V4 Session Models ----
@@ -696,6 +735,36 @@ _SHELL_TOOLS_ENV = "VIBE_TRADING_ENABLE_SHELL_TOOLS"
 _DOCKER_LOOPBACK_ENV = "VIBE_TRADING_TRUST_DOCKER_LOOPBACK"
 _DEV_PROXY_AUTH_ENV = "VIBE_DEV_PROXY_AUTH"
 _DEV_PROXY_AUTH_HEADER = "x-vibe-dev-proxy-auth"
+_USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{3,64}$")
+
+
+@dataclass(frozen=True)
+class AuthContext:
+    """Resolved API caller context."""
+
+    user: Any | None = None
+    operator: bool = False
+
+    @property
+    def user_id(self) -> int | None:
+        return int(self.user.user_id) if self.user is not None else None
+
+
+_auth_store = None
+
+
+def _get_auth_store():
+    """Return the MySQL-backed auth store."""
+    from src.persistence import mysql_configured
+
+    if not mysql_configured():
+        raise HTTPException(status_code=501, detail="User login requires MySQL persistence")
+    global _auth_store
+    if _auth_store is None:
+        from src.auth import MySQLAuthStore
+
+        _auth_store = MySQLAuthStore()
+    return _auth_store
 
 
 def _configured_api_key() -> str:
@@ -706,7 +775,7 @@ def _configured_api_key() -> str:
 async def require_auth(
     request: Request,
     cred: Optional[HTTPAuthorizationCredentials] = Security(_security),
-) -> None:
+) -> AuthContext:
     """Validate Bearer token for sensitive API endpoints.
 
     Args:
@@ -717,14 +786,14 @@ async def require_auth(
         HTTPException: 403 when dev-mode auth is reached from a non-local client.
         HTTPException: 401 when API_AUTH_KEY is set but the token is missing or wrong.
     """
-    _validate_api_auth(request=request, cred=cred)
+    return _resolve_auth_context(request=request, cred=cred)
 
 
 async def require_event_stream_auth(
     request: Request,
     api_key: Optional[str] = Query(None),
     cred: Optional[HTTPAuthorizationCredentials] = Security(_security),
-) -> None:
+) -> AuthContext:
     """Validate auth for browser EventSource streams.
 
     Native EventSource cannot send custom Authorization headers, so event
@@ -736,7 +805,7 @@ async def require_event_stream_auth(
         api_key: Optional query-string API key for EventSource clients.
         cred: HTTP Bearer credentials extracted from the Authorization header.
     """
-    _validate_api_auth(request=request, cred=cred, query_api_key=api_key, allow_query=True)
+    return _resolve_auth_context(request=request, cred=cred, query_api_key=api_key, allow_query=True)
 
 
 def _auth_credential_from_header_or_query(
@@ -776,6 +845,37 @@ def _validate_api_auth(
     token = _auth_credential_from_header_or_query(cred, query_api_key, allow_query=allow_query)
     if not token or not hmac.compare_digest(token, api_key):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
+def _resolve_user_from_token(token: str) -> Any | None:
+    """Return a user for an app auth token, or None when unavailable/invalid."""
+    if not token:
+        return None
+    try:
+        return _get_auth_store().user_for_token(token)
+    except HTTPException:
+        return None
+
+
+def _resolve_auth_context(
+    *,
+    request: Request,
+    cred: Optional[HTTPAuthorizationCredentials],
+    query_api_key: Optional[str] = None,
+    allow_query: bool = False,
+) -> AuthContext:
+    """Resolve app-user auth first, then fall back to legacy operator auth."""
+    token = _auth_credential_from_header_or_query(cred, query_api_key, allow_query=allow_query)
+    api_key = _configured_api_key()
+    if api_key and token and hmac.compare_digest(token, api_key):
+        return AuthContext(user=None, operator=True)
+
+    user = _resolve_user_from_token(token)
+    if user is not None:
+        return AuthContext(user=user, operator=False)
+
+    _validate_api_auth(request=request, cred=cred, query_api_key=query_api_key, allow_query=allow_query)
+    return AuthContext(user=None, operator=True)
 
 
 def _is_local_client(request: Request) -> bool:
@@ -868,13 +968,87 @@ async def require_local_or_auth(
     credential reads or writes in dev mode.
     """
     if _configured_api_key():
-        await require_auth(request, cred)
+        _validate_api_auth(request=request, cred=cred)
         return
     if not (_is_local_client(request) or _has_trusted_dev_proxy_auth(request)):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Settings access requires API_AUTH_KEY or a local loopback client",
         )
+
+
+async def require_operator_auth(
+    request: Request,
+    cred: Optional[HTTPAuthorizationCredentials] = Security(_security),
+) -> None:
+    """Require local/operator API access, not an application user token."""
+    _validate_api_auth(request=request, cred=cred)
+
+
+def _validate_username(username: str) -> str:
+    normalized = username.strip().lower()
+    if not _USERNAME_RE.fullmatch(normalized):
+        raise HTTPException(
+            status_code=400,
+            detail="Username must be 3-64 characters and use letters, numbers, dot, dash, or underscore.",
+        )
+    return normalized
+
+
+def _auth_response(user: Any, token: str, expires_at: str) -> AuthTokenResponse:
+    return AuthTokenResponse(
+        token=token,
+        expires_at=expires_at,
+        user=AuthUserResponse(**user.to_dict()),
+    )
+
+
+@app.post("/auth/register", response_model=AuthTokenResponse, status_code=status.HTTP_201_CREATED)
+async def register_user(payload: RegisterRequest):
+    """Register a new application user and return a bearer token."""
+    username = _validate_username(payload.username)
+    store = _get_auth_store()
+    try:
+        user = store.create_user(username, payload.password, payload.display_name)
+    except Exception as exc:
+        if exc.__class__.__name__ == "IntegrityError":
+            raise HTTPException(status_code=409, detail="Username already exists") from exc
+        raise
+    token, expires_at = store.issue_token(user.user_id)
+    return _auth_response(user, token, expires_at)
+
+
+@app.post("/auth/login", response_model=AuthTokenResponse)
+async def login_user(payload: LoginRequest):
+    """Authenticate an application user."""
+    username = payload.username.strip().lower()
+    user = _get_auth_store().authenticate(username, payload.password)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    token, expires_at = _get_auth_store().issue_token(user.user_id)
+    return _auth_response(user, token, expires_at)
+
+
+@app.get("/auth/me", response_model=AuthUserResponse)
+async def current_user(ctx: AuthContext = Depends(require_auth)):
+    """Return the currently logged-in application user."""
+    if ctx.user is None:
+        raise HTTPException(status_code=401, detail="Login required")
+    return AuthUserResponse(**ctx.user.to_dict())
+
+
+@app.post("/auth/logout")
+async def logout_user(
+    ctx: AuthContext = Depends(require_auth),
+    cred: Optional[HTTPAuthorizationCredentials] = Security(_security),
+):
+    """Revoke the current user token."""
+    if ctx.user is None:
+        return {"status": "ok"}
+    token = cred.credentials if cred and cred.credentials else ""
+    if token:
+        _get_auth_store().revoke_token(token)
+    return {"status": "ok"}
 
 
 # ============================================================================
@@ -1304,12 +1478,82 @@ def _validate_path_param(value: str, kind: str) -> None:
         raise HTTPException(status_code=400, detail=f"invalid {kind}")
 
 
+def _session_belongs_to_context(session: Any, ctx: AuthContext) -> bool:
+    """Return whether a session is visible to the current auth context."""
+    if ctx.operator:
+        return True
+    if ctx.user_id is None:
+        return False
+    return getattr(session, "owner_user_id", None) == ctx.user_id
+
+
+def _require_user_session(session_id: str, ctx: AuthContext):
+    """Load a session and enforce app-user ownership."""
+    svc, session = _get_existing_session_or_404(session_id)
+    if not _session_belongs_to_context(session, ctx):
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    return svc, session
+
+
+def _session_id_from_run_dir(run_dir: Path) -> str | None:
+    req = _load_json_file(run_dir / "req.json") or {}
+    context = req.get("context") if isinstance(req, dict) else None
+    if isinstance(context, dict):
+        value = str(context.get("session_id") or "").strip()
+        return value or None
+    return None
+
+
+def _run_belongs_to_context(run_dir: Path, ctx: AuthContext) -> bool:
+    if ctx.operator:
+        return True
+    if ctx.user_id is None:
+        return False
+    session_id = _session_id_from_run_dir(run_dir)
+    if not session_id:
+        return False
+    try:
+        svc, session = _get_existing_session_or_404(session_id)
+    except HTTPException:
+        return False
+    return _session_belongs_to_context(session, ctx)
+
+
+def _require_run_access(run_id: str, ctx: AuthContext) -> Path:
+    _validate_path_param(run_id, "run_id")
+    run_dir = RUNS_DIR / run_id
+    if not run_dir.exists() or not _run_belongs_to_context(run_dir, ctx):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Run {run_id} not found")
+    return run_dir
+
+
+def _swarm_run_belongs_to_context(run: Any, ctx: AuthContext) -> bool:
+    if ctx.operator:
+        return True
+    if ctx.user_id is None:
+        return False
+    owner_user_id = getattr(run, "owner_user_id", None)
+    if owner_user_id is not None:
+        try:
+            return int(owner_user_id) == ctx.user_id
+        except (TypeError, ValueError):
+            return False
+    owner_session_id = getattr(run, "owner_session_id", None)
+    if owner_session_id:
+        try:
+            _svc, session = _get_existing_session_or_404(str(owner_session_id))
+        except HTTPException:
+            return False
+        return _session_belongs_to_context(session, ctx)
+    return False
+
+
 # ============================================================================
 # API Endpoints
 # ============================================================================
 
-@app.get("/runs/{run_id}/code", dependencies=[Depends(require_auth)])
-async def get_run_code(run_id: str):
+@app.get("/runs/{run_id}/code")
+async def get_run_code(run_id: str, ctx: AuthContext = Depends(require_auth)):
     """Return strategy source files for a run.
 
     Args:
@@ -1318,8 +1562,7 @@ async def get_run_code(run_id: str):
     Returns:
         Map filename -> source text.
     """
-    _validate_path_param(run_id, "run_id")
-    run_dir = RUNS_DIR / run_id / "code"
+    run_dir = _require_run_access(run_id, ctx) / "code"
     if not run_dir.exists():
         raise HTTPException(status_code=404, detail=f"Code directory for run {run_id} not found")
     result = {}
@@ -1330,8 +1573,8 @@ async def get_run_code(run_id: str):
     return result
 
 
-@app.get("/runs/{run_id}/pine", dependencies=[Depends(require_auth)])
-async def get_run_pine(run_id: str):
+@app.get("/runs/{run_id}/pine")
+async def get_run_pine(run_id: str, ctx: AuthContext = Depends(require_auth)):
     """Return Pine Script file for a run.
 
     Args:
@@ -1340,8 +1583,7 @@ async def get_run_pine(run_id: str):
     Returns:
         Object with pine script content and exists flag.
     """
-    _validate_path_param(run_id, "run_id")
-    pine_path = RUNS_DIR / run_id / "artifacts" / "strategy.pine"
+    pine_path = _require_run_access(run_id, ctx) / "artifacts" / "strategy.pine"
     if not pine_path.exists():
         return {"exists": False, "content": None}
     return {
@@ -1350,25 +1592,18 @@ async def get_run_pine(run_id: str):
     }
 
 
-@app.get("/runs/{run_id}", response_model=RunResponse, dependencies=[Depends(require_auth)])
-async def get_run_result(run_id: str):
+@app.get("/runs/{run_id}", response_model=RunResponse)
+async def get_run_result(run_id: str, ctx: AuthContext = Depends(require_auth)):
     """Fetch full details for a historical run by ``run_id``."""
-    _validate_path_param(run_id, "run_id")
-    run_dir = RUNS_DIR / run_id
-
-    if not run_dir.exists():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Run {run_id} not found"
-        )
+    run_dir = _require_run_access(run_id, ctx)
 
     response = _build_response_from_run_dir(run_dir, elapsed=0.0, include_analysis=True)
 
     return response
 
 
-@app.get("/runs", response_model=List[RunInfo], dependencies=[Depends(require_auth)])
-async def list_runs(limit: int = 20):
+@app.get("/runs", response_model=List[RunInfo])
+async def list_runs(limit: int = 20, ctx: AuthContext = Depends(require_auth)):
     """List recent runs with summary fields."""
     limit = min(max(1, limit), 100)
     runs_dir = RUNS_DIR
@@ -1383,7 +1618,11 @@ async def list_runs(limit: int = 20):
     )
 
     results = []
-    for d in run_dirs[:limit]:
+    for d in run_dirs:
+        if len(results) >= limit:
+            break
+        if not _run_belongs_to_context(d, ctx):
+            continue
         run_id = d.name
 
         # Status from state.json or artifacts
@@ -1653,7 +1892,7 @@ def _terminate_current_process() -> None:
     os.kill(os.getpid(), signal.SIGTERM)
 
 
-@app.post("/system/shutdown", dependencies=[Depends(require_auth)])
+@app.post("/system/shutdown", dependencies=[Depends(require_operator_auth)])
 async def shutdown_local_api(background_tasks: BackgroundTasks, request: Request):
     """Shut down the local API server when requested from loopback clients."""
     client_host = request.client.host if request.client else ""
@@ -1774,15 +2013,15 @@ def _get_strategy_store():
     return _strategy_store
 
 
-@app.get("/strategies", response_model=StrategyLibraryResponse, dependencies=[Depends(require_auth)])
-async def list_strategy_library():
+@app.get("/strategies", response_model=StrategyLibraryResponse)
+async def list_strategy_library(ctx: AuthContext = Depends(require_auth)):
     """List persisted personal strategies."""
     store = _get_strategy_store()
-    return {"strategies": [item.to_dict() for item in store.list_strategies()]}
+    return {"strategies": [item.to_dict() for item in store.list_strategies(user_id=ctx.user_id)]}
 
 
-@app.put("/strategies", response_model=StrategyLibraryResponse, dependencies=[Depends(require_auth)])
-async def replace_strategy_library(req: ReplaceStrategyLibraryRequest):
+@app.put("/strategies", response_model=StrategyLibraryResponse)
+async def replace_strategy_library(req: ReplaceStrategyLibraryRequest, ctx: AuthContext = Depends(require_auth)):
     """Replace the full persisted personal strategy library."""
     from src.strategies import StrategyRecord
 
@@ -1791,12 +2030,16 @@ async def replace_strategy_library(req: ReplaceStrategyLibraryRequest):
         records = [StrategyRecord.from_payload(item.model_dump()) for item in req.strategies]
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    saved = store.replace_all(records)
+    saved = store.replace_all(records, user_id=ctx.user_id)
     return {"strategies": [item.to_dict() for item in saved]}
 
 
-@app.put("/strategies/{strategy_id}", response_model=StrategyLibraryItem, dependencies=[Depends(require_auth)])
-async def upsert_strategy(strategy_id: str, item: StrategyLibraryItem):
+@app.put("/strategies/{strategy_id}", response_model=StrategyLibraryItem)
+async def upsert_strategy(
+    strategy_id: str,
+    item: StrategyLibraryItem,
+    ctx: AuthContext = Depends(require_auth),
+):
     """Create or update one persisted strategy."""
     from src.strategies import StrategyRecord
 
@@ -1807,26 +2050,26 @@ async def upsert_strategy(strategy_id: str, item: StrategyLibraryItem):
         record = StrategyRecord.from_payload(item.model_dump())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return store.upsert_strategy(record).to_dict()
+    return store.upsert_strategy(record, user_id=ctx.user_id).to_dict()
 
 
-@app.delete("/strategies/{strategy_id}", dependencies=[Depends(require_auth)])
-async def delete_strategy(strategy_id: str):
+@app.delete("/strategies/{strategy_id}")
+async def delete_strategy(strategy_id: str, ctx: AuthContext = Depends(require_auth)):
     """Delete one persisted strategy."""
     store = _get_strategy_store()
-    deleted = store.delete_strategy(strategy_id)
+    deleted = store.delete_strategy(strategy_id, user_id=ctx.user_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} not found")
     return {"status": "deleted", "id": strategy_id}
 
 
-@app.post("/sessions", response_model=SessionResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_auth)])
-async def create_session(request: CreateSessionRequest):
+@app.post("/sessions", response_model=SessionResponse, status_code=status.HTTP_201_CREATED)
+async def create_session(request: CreateSessionRequest, ctx: AuthContext = Depends(require_auth)):
     """Create a chat session."""
     svc = _get_session_service()
     if not svc:
         raise HTTPException(status_code=501, detail="Session runtime not enabled")
-    session = svc.create_session(title=request.title, config=request.config)
+    session = svc.create_session(title=request.title, config=request.config, user_id=ctx.user_id)
     return SessionResponse(
         session_id=session.session_id,
         title=session.title,
@@ -1837,13 +2080,18 @@ async def create_session(request: CreateSessionRequest):
     )
 
 
-@app.get("/sessions", response_model=List[SessionResponse], dependencies=[Depends(require_auth)])
-async def list_sessions(limit: int = Query(50, ge=1, le=200)):
+@app.get("/sessions", response_model=List[SessionResponse])
+async def list_sessions(limit: int = Query(50, ge=1, le=200), ctx: AuthContext = Depends(require_auth)):
     """List sessions."""
     svc = _get_session_service()
     if not svc:
         raise HTTPException(status_code=501, detail="Session runtime not enabled")
-    sessions = svc.list_sessions(limit=limit)
+    if ctx.operator:
+        sessions = svc.list_sessions(limit=limit)
+    elif hasattr(svc.store, "list_sessions_for_user") and ctx.user_id is not None:
+        sessions = svc.store.list_sessions_for_user(ctx.user_id, limit=limit)
+    else:
+        sessions = [s for s in svc.list_sessions(limit=200) if _session_belongs_to_context(s, ctx)][:limit]
     return [
         SessionResponse(
             session_id=s.session_id,
@@ -1857,16 +2105,11 @@ async def list_sessions(limit: int = Query(50, ge=1, le=200)):
     ]
 
 
-@app.get("/sessions/{session_id}", response_model=SessionResponse, dependencies=[Depends(require_auth)])
-async def get_session(session_id: str):
+@app.get("/sessions/{session_id}", response_model=SessionResponse)
+async def get_session(session_id: str, ctx: AuthContext = Depends(require_auth)):
     """Get one session by id."""
     _validate_path_param(session_id, "session_id")
-    svc = _get_session_service()
-    if not svc:
-        raise HTTPException(status_code=501, detail="Session runtime not enabled")
-    session = svc.get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    _svc, session = _require_user_session(session_id, ctx)
     return SessionResponse(
         session_id=session.session_id,
         title=session.title,
@@ -1881,12 +2124,11 @@ async def get_session(session_id: str):
     "/sessions/{session_id}/goal",
     response_model=GoalSnapshotResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_auth)],
 )
-async def create_session_goal(session_id: str, req: CreateGoalRequest):
+async def create_session_goal(session_id: str, req: CreateGoalRequest, ctx: AuthContext = Depends(require_auth)):
     """Create or replace the current finance research goal for a session."""
     _validate_path_param(session_id, "session_id")
-    svc, _session = _get_existing_session_or_404(session_id)
+    svc, _session = _require_user_session(session_id, ctx)
     from src.goal import RiskTier
 
     criteria = [item.strip() for item in req.criteria if item.strip()]
@@ -1925,12 +2167,11 @@ async def create_session_goal(session_id: str, req: CreateGoalRequest):
 @app.get(
     "/sessions/{session_id}/goal",
     response_model=GoalSnapshotResponse,
-    dependencies=[Depends(require_auth)],
 )
-async def get_session_goal(session_id: str):
+async def get_session_goal(session_id: str, ctx: AuthContext = Depends(require_auth)):
     """Return the current finance research goal snapshot for a session."""
     _validate_path_param(session_id, "session_id")
-    _get_existing_session_or_404(session_id)
+    _require_user_session(session_id, ctx)
     snapshot = _get_goal_store().get_current_snapshot(session_id)
     if snapshot is None:
         raise HTTPException(status_code=404, detail="No current goal")
@@ -1940,12 +2181,11 @@ async def get_session_goal(session_id: str):
 @app.patch(
     "/sessions/{session_id}/goal",
     response_model=UpdateGoalResponse,
-    dependencies=[Depends(require_auth)],
 )
-async def update_session_goal(session_id: str, req: UpdateGoalRequest):
+async def update_session_goal(session_id: str, req: UpdateGoalRequest, ctx: AuthContext = Depends(require_auth)):
     """Edit the current finance research goal without replacing the session."""
     _validate_path_param(session_id, "session_id")
-    svc, _session = _get_existing_session_or_404(session_id)
+    svc, _session = _require_user_session(session_id, ctx)
     from src.goal import StaleGoalError
 
     if req.objective is None and req.ui_summary is None:
@@ -1976,12 +2216,17 @@ async def update_session_goal(session_id: str, req: UpdateGoalRequest):
     "/sessions/{session_id}/goal/evidence",
     response_model=AddGoalEvidenceResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_auth)],
 )
-async def add_session_goal_evidence(session_id: str, req: AddGoalEvidenceRequest):
+async def add_session_goal_evidence(
+    session_id: str,
+    req: AddGoalEvidenceRequest,
+    ctx: AuthContext = Depends(require_auth),
+):
     """Append traceable evidence to the current finance research goal."""
     _validate_path_param(session_id, "session_id")
-    svc, _session = _get_existing_session_or_404(session_id)
+    svc, _session = _require_user_session(session_id, ctx)
+    if req.run_id:
+        _require_run_access(req.run_id, ctx)
     from dataclasses import asdict
     from src.goal import EvidenceInput, StaleGoalError
 
@@ -2033,12 +2278,15 @@ async def add_session_goal_evidence(session_id: str, req: AddGoalEvidenceRequest
 @app.patch(
     "/sessions/{session_id}/goal/status",
     response_model=UpdateGoalStatusResponse,
-    dependencies=[Depends(require_auth)],
 )
-async def update_session_goal_status(session_id: str, req: UpdateGoalStatusRequest):
+async def update_session_goal_status(
+    session_id: str,
+    req: UpdateGoalStatusRequest,
+    ctx: AuthContext = Depends(require_auth),
+):
     """Update the current finance research goal status."""
     _validate_path_param(session_id, "session_id")
-    svc, _session = _get_existing_session_or_404(session_id)
+    svc, _session = _require_user_session(session_id, ctx)
     from src.goal import AuditRow, GoalStatus, StaleGoalError
 
     try:
@@ -2076,13 +2324,11 @@ async def update_session_goal_status(session_id: str, req: UpdateGoalStatusReque
     return {"goal": snapshot["goal"], "snapshot": snapshot}
 
 
-@app.delete("/sessions/{session_id}", dependencies=[Depends(require_auth)])
-async def delete_session(session_id: str):
+@app.delete("/sessions/{session_id}")
+async def delete_session(session_id: str, ctx: AuthContext = Depends(require_auth)):
     """Delete a session."""
     _validate_path_param(session_id, "session_id")
-    svc = _get_session_service()
-    if not svc:
-        raise HTTPException(status_code=501, detail="Session runtime not enabled")
+    svc, _session = _require_user_session(session_id, ctx)
     deleted = svc.delete_session(session_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
@@ -2095,16 +2341,11 @@ class UpdateSessionRequest(BaseModel):
     title: Optional[str] = None
 
 
-@app.patch("/sessions/{session_id}", dependencies=[Depends(require_auth)])
-async def update_session(session_id: str, req: UpdateSessionRequest):
+@app.patch("/sessions/{session_id}")
+async def update_session(session_id: str, req: UpdateSessionRequest, ctx: AuthContext = Depends(require_auth)):
     """Update session fields (e.g. title)."""
     _validate_path_param(session_id, "session_id")
-    svc = _get_session_service()
-    if not svc:
-        raise HTTPException(status_code=501, detail="Session runtime not enabled")
-    session = svc.store.get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    svc, session = _require_user_session(session_id, ctx)
     if req.title is not None:
         session.title = req.title
     from datetime import datetime
@@ -2113,13 +2354,16 @@ async def update_session(session_id: str, req: UpdateSessionRequest):
     return {"status": "updated", "session_id": session_id}
 
 
-@app.post("/sessions/{session_id}/messages", dependencies=[Depends(require_auth)])
-async def send_message(session_id: str, payload: SendMessageRequest, http_request: Request):
+@app.post("/sessions/{session_id}/messages")
+async def send_message(
+    session_id: str,
+    payload: SendMessageRequest,
+    http_request: Request,
+    ctx: AuthContext = Depends(require_auth),
+):
     """Send a user message and start the agent loop (natural language strategy)."""
     _validate_path_param(session_id, "session_id")
-    svc = _get_session_service()
-    if not svc:
-        raise HTTPException(status_code=501, detail="Session runtime not enabled")
+    svc, _session = _require_user_session(session_id, ctx)
     try:
         result = await svc.send_message(
             session_id=session_id,
@@ -2131,26 +2375,26 @@ async def send_message(session_id: str, payload: SendMessageRequest, http_reques
         raise HTTPException(status_code=404, detail=str(exc))
 
 
-@app.post("/sessions/{session_id}/cancel", dependencies=[Depends(require_auth)])
-async def cancel_session(session_id: str):
+@app.post("/sessions/{session_id}/cancel")
+async def cancel_session(session_id: str, ctx: AuthContext = Depends(require_auth)):
     """Cancel the in-flight agent loop for this session."""
     _validate_path_param(session_id, "session_id")
-    svc = _get_session_service()
-    if not svc:
-        raise HTTPException(status_code=501, detail="Session runtime not enabled")
+    svc, _session = _require_user_session(session_id, ctx)
     cancelled = svc.cancel_current(session_id)
     if not cancelled:
         return {"status": "no_active_loop"}
     return {"status": "cancelled"}
 
 
-@app.get("/sessions/{session_id}/messages", response_model=List[MessageResponse], dependencies=[Depends(require_auth)])
-async def get_messages(session_id: str, limit: int = Query(100, ge=1, le=1000)):
+@app.get("/sessions/{session_id}/messages", response_model=List[MessageResponse])
+async def get_messages(
+    session_id: str,
+    limit: int = Query(100, ge=1, le=1000),
+    ctx: AuthContext = Depends(require_auth),
+):
     """List messages for a session."""
     _validate_path_param(session_id, "session_id")
-    svc = _get_session_service()
-    if not svc:
-        raise HTTPException(status_code=501, detail="Session runtime not enabled")
+    svc, _session = _require_user_session(session_id, ctx)
     messages = svc.get_messages(session_id, limit=limit)
     return [
         MessageResponse(
@@ -2166,21 +2410,17 @@ async def get_messages(session_id: str, limit: int = Query(100, ge=1, le=1000)):
     ]
 
 
-@app.get("/sessions/{session_id}/events", dependencies=[Depends(require_event_stream_auth)])
+@app.get("/sessions/{session_id}/events")
 async def session_events(
     session_id: str,
     request: Request,
     last_event_id: Optional[str] = Query(None, alias="Last-Event-ID"),
     replay: Optional[str] = Query(None),
+    ctx: AuthContext = Depends(require_event_stream_auth),
 ):
     """SSE stream for agent events."""
     _validate_path_param(session_id, "session_id")
-    svc = _get_session_service()
-    if not svc:
-        raise HTTPException(status_code=501, detail="Session runtime not enabled")
-    session = svc.get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    svc, session = _require_user_session(session_id, ctx)
 
     header_id = request.headers.get("Last-Event-ID")
     event_id = header_id or last_event_id
@@ -2242,7 +2482,7 @@ _BLOCKED_UPLOAD_NAMES = {
 _SHADOW_ID_RE = __import__("re").compile(r"^shadow_[0-9a-f]{8}$")
 
 
-@app.get("/shadow-reports/{shadow_id}", dependencies=[Depends(require_auth)])
+@app.get("/shadow-reports/{shadow_id}", dependencies=[Depends(require_operator_auth)])
 async def get_shadow_report(shadow_id: str, format: str = "html"):
     """Serve a rendered Shadow Account report (HTML by default, PDF if available).
 
@@ -2267,8 +2507,8 @@ async def get_shadow_report(shadow_id: str, format: str = "html"):
     )
 
 
-@app.post("/upload", dependencies=[Depends(require_auth)])
-async def upload_file(file: UploadFile):
+@app.post("/upload")
+async def upload_file(file: UploadFile, ctx: AuthContext = Depends(require_auth)):
     """Upload any document or data file (max 50MB).
 
     Accepts most common formats: PDF, Word, Excel, PowerPoint, images,
@@ -2318,6 +2558,60 @@ async def upload_file(file: UploadFile):
     finally:
         await file.close()
 
+    if ctx.user_id is not None:
+        try:
+            from src.persistence import mysql_configured
+            from src.persistence.mysql import mysql_connection
+
+            if mysql_configured():
+                with mysql_connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            CREATE TABLE IF NOT EXISTS uploaded_files (
+                                file_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                                file_path VARCHAR(768) NOT NULL,
+                                filename VARCHAR(255) NOT NULL,
+                                original_filename VARCHAR(255) NULL,
+                                content_type VARCHAR(255) NULL,
+                                size_bytes BIGINT UNSIGNED NULL,
+                                uploaded_by_user_id BIGINT UNSIGNED NULL,
+                                metadata JSON NULL,
+                                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                                PRIMARY KEY (file_id),
+                                UNIQUE KEY uq_uploaded_files_path (file_path),
+                                KEY idx_uploaded_files_user (uploaded_by_user_id)
+                            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                            """
+                        )
+                        cur.execute(
+                            """
+                            INSERT INTO uploaded_files (
+                                file_path, filename, original_filename, content_type,
+                                size_bytes, uploaded_by_user_id, metadata
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                            ON DUPLICATE KEY UPDATE
+                                filename = VALUES(filename),
+                                original_filename = VALUES(original_filename),
+                                content_type = VALUES(content_type),
+                                size_bytes = VALUES(size_bytes),
+                                uploaded_by_user_id = VALUES(uploaded_by_user_id)
+                            """,
+                            (
+                                f"uploads/{safe_name}",
+                                safe_name,
+                                filename,
+                                file.content_type,
+                                total_size,
+                                ctx.user_id,
+                                json.dumps({}, ensure_ascii=False),
+                            ),
+                        )
+                    conn.commit()
+        except Exception:
+            logger.debug("failed to persist upload ownership for %s", safe_name, exc_info=True)
+
     return {
         "status": "ok",
         "file_path": f"uploads/{safe_name}",
@@ -2356,8 +2650,12 @@ async def list_swarm_presets():
     return list_presets()
 
 
-@app.post("/swarm/runs", dependencies=[Depends(require_auth)])
-async def create_swarm_run(payload: dict, http_request: Request):
+@app.post("/swarm/runs")
+async def create_swarm_run(
+    payload: dict,
+    http_request: Request,
+    ctx: AuthContext = Depends(require_auth),
+):
     """Start a swarm run: body must include preset_name and user_vars."""
     runtime = _get_swarm_runtime()
     preset_name = payload.get("preset_name", "")
@@ -2367,6 +2665,7 @@ async def create_swarm_run(payload: dict, http_request: Request):
             preset_name,
             user_vars,
             include_shell_tools=_shell_tools_enabled_for_request(http_request),
+            owner_user_id=ctx.user_id,
         )
         return {"id": run.id, "status": run.status.value, "preset_name": run.preset_name}
     except FileNotFoundError as e:
@@ -2375,13 +2674,15 @@ async def create_swarm_run(payload: dict, http_request: Request):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.get("/swarm/runs", dependencies=[Depends(require_auth)])
-async def list_swarm_runs(limit: int = Query(20, ge=1, le=100)):
+@app.get("/swarm/runs")
+async def list_swarm_runs(limit: int = Query(20, ge=1, le=100), ctx: AuthContext = Depends(require_auth)):
     """List swarm runs (newest first), reconciled."""
     runtime = _get_swarm_runtime()
     runs = runtime._store.list_runs(limit=limit)
     items = []
     for r in runs:
+        if not _swarm_run_belongs_to_context(r, ctx):
+            continue
         # Reconcile each row: a zombie running run will be auto-finalized so
         # the dashboard never shows a permanent "running" stuck row.
         reconciled = runtime._store.reconcile_run(r, write=True)
@@ -2400,13 +2701,13 @@ async def list_swarm_runs(limit: int = Query(20, ge=1, le=100)):
     return items
 
 
-@app.get("/swarm/runs/{run_id}", dependencies=[Depends(require_auth)])
-async def get_swarm_run(run_id: str):
+@app.get("/swarm/runs/{run_id}")
+async def get_swarm_run(run_id: str, ctx: AuthContext = Depends(require_auth)):
     """Swarm run detail including task statuses (reconciled)."""
     _validate_path_param(run_id, "run_id")
     runtime = _get_swarm_runtime()
     loaded = runtime._store.load_run(run_id)
-    if not loaded:
+    if not loaded or not _swarm_run_belongs_to_context(loaded, ctx):
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
     run = runtime._store.reconcile_run(loaded, write=True)
@@ -2425,13 +2726,21 @@ async def get_swarm_run(run_id: str):
     }
 
 
-@app.get("/swarm/runs/{run_id}/events", dependencies=[Depends(require_event_stream_auth)])
-async def swarm_run_events(run_id: str, request: Request, last_index: int = Query(0, ge=0)):
+@app.get("/swarm/runs/{run_id}/events")
+async def swarm_run_events(
+    run_id: str,
+    request: Request,
+    last_index: int = Query(0, ge=0),
+    ctx: AuthContext = Depends(require_event_stream_auth),
+):
     """SSE stream for a swarm run."""
     import asyncio
 
     _validate_path_param(run_id, "run_id")
     runtime = _get_swarm_runtime()
+    loaded = runtime._store.load_run(run_id)
+    if not loaded or not _swarm_run_belongs_to_context(loaded, ctx):
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
     async def event_stream():
         idx = last_index
@@ -2456,19 +2765,26 @@ async def swarm_run_events(run_id: str, request: Request, last_index: int = Quer
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-@app.post("/swarm/runs/{run_id}/cancel", dependencies=[Depends(require_auth)])
-async def cancel_swarm_run(run_id: str):
+@app.post("/swarm/runs/{run_id}/cancel")
+async def cancel_swarm_run(run_id: str, ctx: AuthContext = Depends(require_auth)):
     """Cancel an active swarm run."""
     _validate_path_param(run_id, "run_id")
     runtime = _get_swarm_runtime()
+    loaded = runtime._store.load_run(run_id)
+    if not loaded or not _swarm_run_belongs_to_context(loaded, ctx):
+        raise HTTPException(status_code=404, detail=f"No active run {run_id}")
     ok = runtime.cancel_run(run_id)
     if not ok:
         raise HTTPException(status_code=404, detail=f"No active run {run_id}")
     return {"status": "cancelled"}
 
 
-@app.post("/swarm/runs/{run_id}/retry", dependencies=[Depends(require_auth)])
-async def retry_swarm_run(run_id: str, http_request: Request):
+@app.post("/swarm/runs/{run_id}/retry")
+async def retry_swarm_run(
+    run_id: str,
+    http_request: Request,
+    ctx: AuthContext = Depends(require_auth),
+):
     """Retry a failed, stale, or cancelled swarm run.
 
     Creates a new run with the same preset and user_vars as the original.
@@ -2476,7 +2792,7 @@ async def retry_swarm_run(run_id: str, http_request: Request):
     _validate_path_param(run_id, "run_id")
     runtime = _get_swarm_runtime()
     loaded = runtime._store.load_run(run_id)
-    if not loaded:
+    if not loaded or not _swarm_run_belongs_to_context(loaded, ctx):
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
     # Reconcile first so a stale "running" run whose host died gets demoted
@@ -2492,6 +2808,7 @@ async def retry_swarm_run(run_id: str, http_request: Request):
             reconciled.preset_name,
             reconciled.user_vars or {},
             include_shell_tools=_shell_tools_enabled_for_request(http_request),
+            owner_user_id=ctx.user_id,
         )
         return {"id": new_run.id, "status": new_run.status.value, "preset_name": new_run.preset_name}
     except FileNotFoundError as e:
@@ -2744,7 +3061,7 @@ def _fetch_broker_ceilings(broker: str) -> Optional[Dict[str, Any]]:
     }
 
 
-@app.post("/mandate/commit", dependencies=[Depends(require_auth)])
+@app.post("/mandate/commit", dependencies=[Depends(require_operator_auth)])
 async def commit_mandate_endpoint(payload: CommitMandateRequest):
     """Commit a user-selected mandate profile — the only mandate write path.
 
@@ -2792,7 +3109,7 @@ async def commit_mandate_endpoint(payload: CommitMandateRequest):
     return result
 
 
-@app.post("/live/halt", dependencies=[Depends(require_auth)])
+@app.post("/live/halt", dependencies=[Depends(require_operator_auth)])
 async def halt_live_endpoint(payload: LiveHaltRequest):
     """Trip the live kill switch (privileged surface action, Consent §4).
 
@@ -2817,7 +3134,7 @@ async def halt_live_endpoint(payload: LiveHaltRequest):
     return result
 
 
-@app.post("/live/resume", dependencies=[Depends(require_auth)])
+@app.post("/live/resume", dependencies=[Depends(require_operator_auth)])
 async def resume_live_endpoint(payload: LiveHaltRequest):
     """Clear the live kill switch (privileged surface action, Consent §4).
 
@@ -2949,7 +3266,7 @@ def _runner_liveness_state(broker: str) -> RunnerLivenessState:
     return RunnerLivenessState(broker=broker, alive=alive, last_tick=tick, last_tick_age_seconds=age)
 
 
-@app.get("/live/status", response_model=LiveStatusResponse, dependencies=[Depends(require_auth)])
+@app.get("/live/status", response_model=LiveStatusResponse, dependencies=[Depends(require_operator_auth)])
 async def live_status_endpoint(broker: Optional[str] = Query(None, max_length=64)):
     """Return live-channel status: auth, active mandate, runner liveness, halt (C2).
 
@@ -2990,7 +3307,7 @@ async def live_status_endpoint(broker: Optional[str] = Query(None, max_length=64
     return LiveStatusResponse(global_halted=halt_flag_set(broker=None), brokers=statuses)
 
 
-@app.post("/live/authorize", dependencies=[Depends(require_auth)])
+@app.post("/live/authorize", dependencies=[Depends(require_operator_auth)])
 async def live_authorize_endpoint(payload: LiveAuthorizeRequest):
     """Describe the OAuth bootstrap on-ramp for a live broker (C2 web on-ramp).
 
@@ -3195,7 +3512,7 @@ async def _drive_runner(runner: Any) -> None:
         await asyncio.get_running_loop().run_in_executor(None, lambda: result)
 
 
-@app.post("/live/runner/start", dependencies=[Depends(require_auth)])
+@app.post("/live/runner/start", dependencies=[Depends(require_operator_auth)])
 async def start_runner_endpoint(payload: LiveRunnerControlRequest):
     """Start the persistent live runner for a broker (SPEC §7.5).
 
@@ -3250,7 +3567,7 @@ async def start_runner_endpoint(payload: LiveRunnerControlRequest):
     return {"broker": broker, "started": True, "already_running": False}
 
 
-@app.post("/live/runner/stop", dependencies=[Depends(require_auth)])
+@app.post("/live/runner/stop", dependencies=[Depends(require_operator_auth)])
 async def stop_runner_endpoint(payload: LiveRunnerControlRequest):
     """Stop the persistent live runner for a broker (SPEC §7.5).
 

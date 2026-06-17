@@ -1,7 +1,8 @@
 import { Suspense, lazy, type ComponentType } from "react";
-import { createBrowserRouter } from "react-router-dom";
+import { createBrowserRouter, Navigate, Outlet, useLocation } from "react-router-dom";
 import { Layout } from "@/components/layout/Layout";
 import { useTranslation } from "@/i18n/I18nProvider";
+import { useAuthStore } from "@/stores/auth";
 
 const Home = lazy(() => import("@/pages/Home").then((m) => ({ default: m.Home })));
 const Agent = lazy(() => import("@/pages/Agent").then((m) => ({ default: m.Agent })));
@@ -23,6 +24,7 @@ const AlphaZoo = lazy(() =>
 const StrategyLibrary = lazy(() =>
   import("@/pages/StrategyLibrary").then((m) => ({ default: m.StrategyLibrary })),
 );
+const Auth = lazy(() => import("@/pages/Auth").then((m) => ({ default: m.Auth })));
 
 function PageLoader() {
   const { t } = useTranslation();
@@ -41,21 +43,34 @@ function wrap(Component: ComponentType) {
   );
 }
 
+function RequireAuth() {
+  const location = useLocation();
+  const user = useAuthStore((s) => s.user);
+  if (!user) return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />;
+  return <Outlet />;
+}
+
 export const router = createBrowserRouter([
+  { path: "/login", element: wrap(Auth) },
   {
-    element: <Layout />,
+    element: <RequireAuth />,
     children: [
-      { path: "/", element: wrap(Home) },
-      { path: "/agent", element: wrap(Agent) },
-      { path: "/strategies", element: wrap(StrategyLibrary) },
-      { path: "/settings", element: wrap(Settings) },
-      { path: "/runs/:runId", element: wrap(RunDetail) },
-      { path: "/compare", element: wrap(Compare) },
-      { path: "/correlation", element: wrap(Correlation) },
-      { path: "/alpha-zoo", element: wrap(AlphaZoo) },
-      { path: "/alpha-zoo/bench", element: wrap(AlphaZoo) },
-      { path: "/alpha-zoo/compare", element: wrap(AlphaZoo) },
-      { path: "/alpha-zoo/:alphaId", element: wrap(AlphaZoo) },
+      {
+        element: <Layout />,
+        children: [
+          { path: "/", element: wrap(Home) },
+          { path: "/agent", element: wrap(Agent) },
+          { path: "/strategies", element: wrap(StrategyLibrary) },
+          { path: "/settings", element: wrap(Settings) },
+          { path: "/runs/:runId", element: wrap(RunDetail) },
+          { path: "/compare", element: wrap(Compare) },
+          { path: "/correlation", element: wrap(Correlation) },
+          { path: "/alpha-zoo", element: wrap(AlphaZoo) },
+          { path: "/alpha-zoo/bench", element: wrap(AlphaZoo) },
+          { path: "/alpha-zoo/compare", element: wrap(AlphaZoo) },
+          { path: "/alpha-zoo/:alphaId", element: wrap(AlphaZoo) },
+        ],
+      },
     ],
   },
 ]);

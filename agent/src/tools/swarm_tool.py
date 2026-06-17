@@ -658,6 +658,7 @@ class SwarmTool(BaseTool):
         *,
         include_shell_tools: bool = False,
         event_callback: Any | None = None,
+        session_id: str | None = None,
     ) -> None:
         """Initialize the swarm launcher.
 
@@ -665,9 +666,11 @@ class SwarmTool(BaseTool):
             include_shell_tools: Whether worker registries may include shell
                 execution tools requested by presets.
             event_callback: Optional session event bridge used by the web chat.
+            session_id: Current chat session id for ownership metadata.
         """
         self.include_shell_tools = include_shell_tools
         self._event_callback = event_callback
+        self._session_id = session_id
 
     def _emit_session_event(self, event_type: str, data: dict[str, Any]) -> None:
         """Forward swarm status to the hosting session SSE channel if present."""
@@ -748,6 +751,7 @@ class SwarmTool(BaseTool):
                 variables,
                 live_callback=_live_callback if self._event_callback is not None else None,
                 include_shell_tools=self.include_shell_tools,
+                owner_session_id=self._session_id,
             )
         except FileNotFoundError as exc:
             return json.dumps(

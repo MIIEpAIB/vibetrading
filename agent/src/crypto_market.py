@@ -8,8 +8,10 @@ exchange/fallback data still works when storage is unavailable.
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import os
+import random
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -45,6 +47,22 @@ _SYMBOL_NAMES: Mapping[str, str] = {
     "LINK/USDT": "Chainlink",
     "TON/USDT": "Toncoin",
     "DOT/USDT": "Polkadot",
+}
+
+_SYMBOL_ICON_COLORS: Mapping[str, tuple[str, str]] = {
+    "BTC": ("#f7931a", "#111827"),
+    "ETH": ("#627eea", "#ffffff"),
+    "BNB": ("#f3ba2f", "#111827"),
+    "SOL": ("#14f195", "#111827"),
+    "XRP": ("#d1d5db", "#111827"),
+    "DOGE": ("#c2a633", "#111827"),
+    "ADA": ("#3468d1", "#ffffff"),
+    "TRX": ("#ef0027", "#ffffff"),
+    "AVAX": ("#e84142", "#ffffff"),
+    "SHIB": ("#f00500", "#ffffff"),
+    "LINK": ("#2a5ada", "#ffffff"),
+    "TON": ("#0098ea", "#ffffff"),
+    "DOT": ("#e6007a", "#ffffff"),
 }
 
 _FALLBACK_PRICES: Mapping[str, float] = {
@@ -83,6 +101,9 @@ class CryptoMarketRow:
     symbol: str
     base: str
     name: str
+    icon_url: str
+    icon_bg: str
+    icon_fg: str
     price: float
     change_24h: float
     high_24h: float
@@ -262,12 +283,15 @@ def _market_row(
     market_cap = quote_volume_24h * (18 + rank * 1.7)
     open_interest = quote_volume_24h * (0.18 + rank * 0.006)
     liquidation = quote_volume_24h * (0.003 + rank * 0.00015)
-    funding = math.sin(rank * 1.37) * 0.028
+    funding = _fallback_funding(rank, symbol)
     return CryptoMarketRow(
         rank=rank,
         symbol=symbol,
         base=base,
         name=_SYMBOL_NAMES[symbol],
+        icon_url=f"/coin-icons/{base.lower()}.svg",
+        icon_bg=_SYMBOL_ICON_COLORS.get(base, ("#3f3f46", "#ffffff"))[0],
+        icon_fg=_SYMBOL_ICON_COLORS.get(base, ("#3f3f46", "#ffffff"))[1],
         price=round(price, 10),
         change_24h=round(change_24h, 4),
         high_24h=round(high_24h, 10),
@@ -327,18 +351,38 @@ def _fallback_bars(symbol: str, timeframe: str, limit: int) -> list[CryptoKlineB
     now = int(time.time() * 1000)
     aligned_now = now - (now % step)
     base_price = _FALLBACK_PRICES[symbol]
-    seed = TOP_SYMBOLS.index(symbol) + 1
+    rank = TOP_SYMBOLS.index(symbol) + 1
+    rng = _deterministic_rng("klines", symbol, timeframe, limit, aligned_now)
     bars: list[CryptoKlineBar] = []
-    prev_close = base_price
+    prev_close = round(base_price * (1 + rng.uniform(-0.006, 0.006)), 10)
+    timeframe_volatility = {
+        "1m": 0.0012,
+        "5m": 0.0020,
+        "15m": 0.0032,
+        "30m": 0.0042,
+        "1h": 0.0055,
+        "4h": 0.0100,
+        "1d": 0.0240,
+    }[timeframe]
+    base_volume = _fallback_volume(rank, symbol) * (_TIMEFRAME_SECONDS[timeframe] / 86_400)
+    min_price = max(base_price * 0.0001, 1e-12)
+
     for i in range(limit):
         ts = aligned_now - (limit - i - 1) * step
-        wave = math.sin((i + seed) / 7) * 0.012 + math.cos((i + seed) / 13) * 0.008
-        drift = (i - limit / 2) / max(limit, 1) * 0.04
-        close = base_price * (1 + wave + drift)
         open_ = prev_close
-        high = max(open_, close) * (1 + 0.004 + abs(math.sin(i + seed)) * 0.004)
-        low = min(open_, close) * (1 - 0.004 - abs(math.cos(i + seed)) * 0.004)
-        volume = _fallback_volume(seed, symbol) / 24 * (1 + abs(wave) * 20)
+        mean_reversion = ((base_price - open_) / base_price) * 0.015
+        raw_return = rng.gauss(mean_reversion, timeframe_volatility)
+        bounded_return = max(-timeframe_volatility * 4.0, min(timeframe_volatility * 4.0, raw_return))
+        close = round(max(min_price, open_ * (1 + bounded_return)), 10)
+        body_top = max(open_, close)
+        body_bottom = min(open_, close)
+        upper_wick = rng.uniform(0.001, 0.006) + abs(bounded_return) * rng.uniform(0.15, 0.75)
+        lower_wick = rng.uniform(0.001, 0.006) + abs(bounded_return) * rng.uniform(0.15, 0.75)
+        high = max(body_top, body_top * (1 + upper_wick))
+        low = max(min_price, body_bottom * (1 - lower_wick))
+        volume_noise = rng.uniform(0.72, 1.36)
+        volume_move_boost = 1 + abs(bounded_return) * rng.uniform(24, 90)
+        volume = base_volume * volume_noise * volume_move_boost
         bars.append(
             CryptoKlineBar(
                 time=_iso_from_ms(ts),
@@ -384,7 +428,7 @@ def _write_redis(key: str, bars: list[CryptoKlineBar], symbol: str, timeframe: s
         "bars": [asdict(bar) for bar in bars],
     }
     try:
-        client.setex(key, int(os.getenv("CRYPTO_REDIS_TTL_SECONDS", "60")), json.dumps(payload, ensure_ascii=False))
+        client.setex(key, int(os.getenv("CRYPTO_REDIS_TTL_SECONDS", "86400")), json.dumps(payload, ensure_ascii=False))
         return "stored"
     except Exception as exc:  # noqa: BLE001
         return f"degraded: {type(exc).__name__}"
@@ -497,11 +541,24 @@ def _timescale_dsn() -> str:
 
 def _redis_key(symbol: str, timeframe: str, limit: int) -> str:
     compact = symbol.replace("/", "")
-    return f"crypto:klines:{compact}:{timeframe}:{limit}"
+    version = os.getenv("CRYPTO_KLINE_CACHE_VERSION", "v2").strip() or "v2"
+    return f"crypto:klines:{version}:{compact}:{timeframe}:{limit}"
+
+
+def _deterministic_rng(*parts: object) -> random.Random:
+    material = "|".join(str(part) for part in parts)
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()
+    return random.Random(int(digest[:16], 16))
+
+
+def _fallback_funding(rank: int, symbol: str) -> float:
+    rng = _deterministic_rng("funding", symbol, rank)
+    return round(rng.uniform(-0.028, 0.028), 5)
 
 
 def _fallback_change(rank: int) -> float:
-    return round(math.sin(rank * 1.11) * 4.8 + math.cos(rank * 0.53) * 1.6, 4)
+    rng = _deterministic_rng("change", rank)
+    return round(rng.uniform(-4.8, 5.6), 4)
 
 
 def _fallback_volume(rank: int, symbol: str) -> float:

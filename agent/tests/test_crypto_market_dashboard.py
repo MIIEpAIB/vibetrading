@@ -70,6 +70,21 @@ def test_klines_fallback_degrades_storage_without_failing(monkeypatch: pytest.Mo
     first = payload["bars"][0]
     assert {"time", "timestamp", "symbol", "open", "high", "low", "close", "volume"} <= set(first)
 
+    for previous, current in zip(payload["bars"], payload["bars"][1:]):
+        assert current["open"] == previous["close"]
+    for bar in payload["bars"]:
+        assert bar["high"] >= max(bar["open"], bar["close"])
+        assert bar["low"] <= min(bar["open"], bar["close"])
+        assert bar["volume"] > 0
+
+
+def test_crypto_kline_redis_key_is_versioned(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CRYPTO_KLINE_CACHE_VERSION", raising=False)
+    assert crypto_market._redis_key("BTC/USDT", "1h", 180) == "crypto:klines:v2:BTCUSDT:1h:180"
+
+    monkeypatch.setenv("CRYPTO_KLINE_CACHE_VERSION", "v3")
+    assert crypto_market._redis_key("ETH/USDT", "4h", 20) == "crypto:klines:v3:ETHUSDT:4h:20"
+
 
 def test_crypto_api_returns_rows_and_hides_credentials(
     monkeypatch: pytest.MonkeyPatch,

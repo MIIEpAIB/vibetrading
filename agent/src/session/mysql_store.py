@@ -59,11 +59,17 @@ class MySQLSessionStore:
                         created_at VARCHAR(64) NOT NULL,
                         updated_at VARCHAR(64) NOT NULL,
                         last_attempt_id VARCHAR(64),
+                        user_id BIGINT UNSIGNED NULL,
                         config_json JSON NOT NULL,
-                        INDEX idx_sessions_updated_at (updated_at)
+                        INDEX idx_sessions_updated_at (updated_at),
+                        INDEX idx_sessions_user_updated (user_id, updated_at)
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
                     """
                 )
+                self._ensure_column(cur, "sessions", "config_json", "JSON NULL")
+                self._ensure_column(cur, "sessions", "user_id", "BIGINT UNSIGNED NULL")
+                self._copy_column_if_present(cur, "sessions", "config", "config_json")
+                self._ensure_index(cur, "sessions", "idx_sessions_user_updated", "user_id, updated_at")
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS session_messages (
@@ -82,6 +88,10 @@ class MySQLSessionStore:
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
                     """
                 )
+                self._ensure_message_order_column(cur)
+                self._ensure_column(cur, "session_messages", "metadata_json", "JSON NULL")
+                self._copy_column_if_present(cur, "session_messages", "metadata", "metadata_json")
+                self._ensure_index(cur, "session_messages", "idx_messages_session_created", "session_id, id")
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS session_attempts (
@@ -104,6 +114,10 @@ class MySQLSessionStore:
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
                     """
                 )
+                self._ensure_column(cur, "session_attempts", "react_trace_json", "JSON NULL")
+                self._ensure_column(cur, "session_attempts", "metrics_json", "JSON NULL")
+                self._copy_column_if_present(cur, "session_attempts", "react_trace", "react_trace_json")
+                self._copy_column_if_present(cur, "session_attempts", "metrics", "metrics_json")
 
     # ---- Session CRUD ----
 
@@ -114,9 +128,9 @@ class MySQLSessionStore:
                     """
                     INSERT INTO sessions (
                         session_id, title, status, created_at, updated_at,
-                        last_attempt_id, config_json
+                        last_attempt_id, user_id, config_json
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         session.session_id,
@@ -125,6 +139,7 @@ class MySQLSessionStore:
                         session.created_at,
                         session.updated_at,
                         session.last_attempt_id,
+                        session.owner_user_id,
                         _json_dumps(session.config),
                     ),
                 )
@@ -144,7 +159,7 @@ class MySQLSessionStore:
                     """
                     UPDATE sessions
                     SET title = %s, status = %s, created_at = %s, updated_at = %s,
-                        last_attempt_id = %s, config_json = %s
+                        last_attempt_id = %s, config_json = %s, user_id = %s
                     WHERE session_id = %s
                     """,
                     (
@@ -154,6 +169,7 @@ class MySQLSessionStore:
                         session.updated_at,
                         session.last_attempt_id,
                         _json_dumps(session.config),
+                        session.owner_user_id,
                         session.session_id,
                     ),
                 )
@@ -177,6 +193,30 @@ class MySQLSessionStore:
                 )
                 rows = cur.fetchall()
         return [self._session_from_row(row) for row in rows]
+
+    def list_sessions_for_user(self, user_id: int, limit: int = 50) -> List[Session]:
+        with self._lock, mysql_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT * FROM sessions
+                    WHERE user_id = %s
+                    ORDER BY updated_at DESC
+                    LIMIT %s
+                    """,
+                    (int(user_id), int(limit)),
+                )
+                rows = cur.fetchall()
+        return [self._session_from_row(row) for row in rows]
+
+    def session_belongs_to_user(self, session_id: str, user_id: int) -> bool:
+        with self._lock, mysql_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM sessions WHERE session_id = %s AND user_id = %s LIMIT 1",
+                    (session_id, int(user_id)),
+                )
+                return cur.fetchone() is not None
 
     # ---- Message Append-Only Log ----
 
@@ -296,7 +336,73 @@ class MySQLSessionStore:
                 )
 
     @staticmethod
+    def _ensure_column(cur: Any, table: str, column: str, definition: str) -> None:
+        if MySQLSessionStore._column_exists(cur, table, column):
+            return
+        cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    @staticmethod
+    def _column_exists(cur: Any, table: str, column: str) -> bool:
+        cur.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = %s
+              AND COLUMN_NAME = %s
+            """,
+            (table, column),
+        )
+        row = cur.fetchone() or {}
+        return int(row.get("count") or 0) > 0
+
+    @staticmethod
+    def _copy_column_if_present(cur: Any, table: str, source: str, target: str) -> None:
+        if not MySQLSessionStore._column_exists(cur, table, source):
+            return
+        if not MySQLSessionStore._column_exists(cur, table, target):
+            return
+        cur.execute(
+            f"""
+            UPDATE {table}
+            SET {target} = {source}
+            WHERE {target} IS NULL
+              AND {source} IS NOT NULL
+            """
+        )
+
+    @staticmethod
+    def _ensure_message_order_column(cur: Any) -> None:
+        if MySQLSessionStore._column_exists(cur, "session_messages", "id"):
+            return
+        cur.execute(
+            """
+            ALTER TABLE session_messages
+            ADD COLUMN id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT UNIQUE FIRST
+            """
+        )
+
+    @staticmethod
+    def _ensure_index(cur: Any, table: str, index_name: str, columns: str) -> None:
+        cur.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM information_schema.STATISTICS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = %s
+              AND INDEX_NAME = %s
+            """,
+            (table, index_name),
+        )
+        row = cur.fetchone() or {}
+        if int(row.get("count") or 0) == 0:
+            cur.execute(f"CREATE INDEX {index_name} ON {table} ({columns})")
+
+    @staticmethod
     def _session_from_row(row: dict[str, Any]) -> Session:
+        config = dict(_json_loads(row.get("config_json"), {}))
+        if row.get("user_id") is not None and config.get("user_id") is None:
+            config["user_id"] = int(row["user_id"])
         return Session.from_dict(
             {
                 "session_id": row["session_id"],
@@ -305,7 +411,7 @@ class MySQLSessionStore:
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
                 "last_attempt_id": row["last_attempt_id"],
-                "config": dict(_json_loads(row.get("config_json"), {})),
+                "config": config,
             }
         )
 

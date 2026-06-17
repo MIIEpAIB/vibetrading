@@ -60,6 +60,15 @@ class Session:
         data["status"] = self.status.value
         return data
 
+    @property
+    def owner_user_id(self) -> Optional[int]:
+        """Return the owning application user id, when present."""
+        raw = self.config.get("user_id")
+        try:
+            return int(raw) if raw is not None else None
+        except (TypeError, ValueError):
+            return None
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> Session:
         """Deserialize a session from a dictionary.

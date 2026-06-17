@@ -55,17 +55,26 @@ class SessionService:
         self._active_loops: Dict[str, "AgentLoop"] = {}
         self._search_index = get_shared_index()
 
-    def create_session(self, title: str = "", config: Optional[Dict[str, Any]] = None) -> Session:
+    def create_session(
+        self,
+        title: str = "",
+        config: Optional[Dict[str, Any]] = None,
+        user_id: int | None = None,
+    ) -> Session:
         """Create a new session.
 
         Args:
             title: Session title.
             config: Session configuration.
+            user_id: Owning application user id.
 
         Returns:
             The newly created Session.
         """
-        session = Session(title=title, config=config or {})
+        session_config = dict(config or {})
+        if user_id is not None:
+            session_config["user_id"] = int(user_id)
+        session = Session(title=title, config=session_config)
         self.store.create_session(session)
         self._index_session(session.session_id, title)
         self.event_bus.emit(session.session_id, "session.created", {"session_id": session.session_id, "title": title})

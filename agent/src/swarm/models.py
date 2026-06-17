@@ -191,6 +191,8 @@ class SwarmRun(BaseModel):
     provider: str | None = None
     model: str | None = None
     grounding_data: dict[str, list[dict]] | None = None
+    owner_user_id: int | None = None
+    owner_session_id: str | None = None
 
 
 class WorkerResult(BaseModel):

@@ -1,4 +1,5 @@
-import { authHeaders, withAuthQuery } from "@/lib/apiAuth";
+import { authHeaders, operatorAuthHeaders, withAuthQuery } from "@/lib/apiAuth";
+import type { AuthUser } from "@/lib/apiAuth";
 
 const BASE = "";
 
@@ -13,7 +14,7 @@ export class ApiError extends Error {
 }
 
 export const AUTH_REQUIRED_MESSAGE =
-  "Remote API access requires an API key. Add it in Settings, or run the backend on localhost for local-only use.";
+  "Please log in to access your workspace. Operator-only settings still require the server API key.";
 
 export function isAuthRequiredError(error: unknown): boolean {
   return error instanceof ApiError && (error.status === 401 || error.status === 403);
@@ -31,9 +32,13 @@ async function errorFromResponse(res: Response): Promise<ApiError> {
   return new ApiError(detail, res.status);
 }
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
+async function request<T>(
+  path: string,
+  options?: RequestInit,
+  authHeaderFactory: () => Record<string, string> = authHeaders,
+): Promise<T> {
   const { headers, ...rest } = options ?? {};
-  const mergedHeaders: Record<string, string> = { "Content-Type": "application/json", ...authHeaders() };
+  const mergedHeaders: Record<string, string> = { "Content-Type": "application/json", ...authHeaderFactory() };
   if (headers) {
     new Headers(headers).forEach((value, key) => {
       mergedHeaders[key] = value;
@@ -84,6 +89,18 @@ function appendQueryParam(url: string, key: string, value: string): string {
 }
 
 export const api = {
+  register: (username: string, password: string, display_name?: string) =>
+    request<AuthTokenResponse>("/auth/register", {
+      method: "POST",
+      body: JSON.stringify({ username, password, display_name }),
+    }),
+  login: (username: string, password: string) =>
+    request<AuthTokenResponse>("/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    }),
+  logout: () => request<{ status: string }>("/auth/logout", { method: "POST" }),
+  me: () => request<AuthUser>("/auth/me"),
   uploadFile,
   listRuns: () => request<RunListItem[]>("/runs"),
   getRun: (id: string) => request<RunData>(`/runs/${id}`),
@@ -152,18 +169,18 @@ export const api = {
     request<{ status: string }>(`/swarm/runs/${id}/cancel`, { method: "POST" }),
   retrySwarmRun: (id: string) =>
     request<{ id: string; status: string; preset_name: string }>(`/swarm/runs/${id}/retry`, { method: "POST" }),
-  getLLMSettings: () => request<LLMSettings>("/settings/llm"),
+  getLLMSettings: () => request<LLMSettings>("/settings/llm", undefined, operatorAuthHeaders),
   updateLLMSettings: (settings: UpdateLLMSettingsRequest) =>
     request<LLMSettings>("/settings/llm", {
       method: "PUT",
       body: JSON.stringify(settings),
-    }),
-  getDataSourceSettings: () => request<DataSourceSettings>("/settings/data-sources"),
+    }, operatorAuthHeaders),
+  getDataSourceSettings: () => request<DataSourceSettings>("/settings/data-sources", undefined, operatorAuthHeaders),
   updateDataSourceSettings: (settings: UpdateDataSourceSettingsRequest) =>
     request<DataSourceSettings>("/settings/data-sources", {
       method: "PUT",
       body: JSON.stringify(settings),
-    }),
+    }, operatorAuthHeaders),
 
   // Alpha Zoo API
   listAlphas: (params: AlphaListParams = {}) => {
@@ -198,31 +215,31 @@ export const api = {
     request<CommitMandateResponse>("/mandate/commit", {
       method: "POST",
       body: JSON.stringify(body),
-    }),
+    }, operatorAuthHeaders),
   haltLive: (session_id?: string, broker?: string, reason?: string) =>
     request<HaltLiveResponse>("/live/halt", {
       method: "POST",
       body: JSON.stringify({ session_id, broker, reason }),
-    }),
+    }, operatorAuthHeaders),
   // Read the persistent runtime status across all authorized brokers (SPEC §7.5).
   // Polled by the RunnerStatus panel; a plain authenticated GET, never a chat message.
-  getLiveStatus: () => request<LiveStatus>("/live/status"),
+  getLiveStatus: () => request<LiveStatus>("/live/status", undefined, operatorAuthHeaders),
   authorizeLive: (broker: string) =>
     request<LiveAuthorizeResponse>("/live/authorize", {
       method: "POST",
       body: JSON.stringify({ broker }),
-    }),
+    }, operatorAuthHeaders),
   // Start/stop the persistent runner (SPEC §7.5). Privileged surface actions, not agent tools.
   startLiveRunner: (broker: string) =>
     request<LiveRunnerResponse>("/live/runner/start", {
       method: "POST",
       body: JSON.stringify({ broker }),
-    }),
+    }, operatorAuthHeaders),
   stopLiveRunner: (broker: string) =>
     request<LiveRunnerResponse>("/live/runner/stop", {
       method: "POST",
       body: JSON.stringify({ broker }),
-    }),
+    }, operatorAuthHeaders),
   getCryptoMarkets: (limit = 13) =>
     request<CryptoMarketsResponse>(`/crypto/markets?limit=${encodeURIComponent(String(limit))}`),
   getCryptoKlines: (symbol: string, timeframe = "1h", limit = 180) => {
@@ -371,6 +388,13 @@ export interface UpdateDataSourceSettingsRequest {
 }
 
 // --- Types matching backend API contracts ---
+
+export interface AuthTokenResponse {
+  token: string;
+  token_type: "bearer";
+  expires_at: string;
+  user: AuthUser;
+}
 
 export interface RunListItem {
   run_id: string;

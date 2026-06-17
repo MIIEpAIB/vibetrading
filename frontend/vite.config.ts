@@ -1,9 +1,11 @@
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
+import fs from "fs";
 
 const PROXY_PATHS = [
   "/sessions",
+  "/auth",
   "/swarm/presets",
   "/swarm/runs",
   "/settings/llm",
@@ -15,6 +17,19 @@ const PROXY_PATHS = [
   "/upload",
   "/shadow-reports",
 ];
+
+function cleanBuildArtifacts() {
+  const outDir = path.resolve(__dirname, "dist");
+  const removable = ["assets", "coin-icons", "favicon.svg", "index.html", "logo.svg"];
+  return {
+    name: "clean-build-artifacts",
+    buildStart() {
+      for (const entry of removable) {
+        fs.rmSync(path.join(outDir, entry), { force: true, recursive: true });
+      }
+    },
+  };
+}
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
@@ -40,7 +55,7 @@ export default defineConfig(({ mode }) => {
   };
 
   return {
-    plugins: [react()],
+    plugins: [cleanBuildArtifacts(), react()],
     resolve: {
       alias: { "@": path.resolve(__dirname, "./src") },
     },
@@ -60,6 +75,7 @@ export default defineConfig(({ mode }) => {
       },
     },
     build: {
+      emptyOutDir: false,
       rollupOptions: {
         output: {
           manualChunks: {
