@@ -246,6 +246,23 @@ export const api = {
     const q = new URLSearchParams({ symbol, timeframe, limit: String(limit) });
     return request<CryptoKlinesResponse>(`/crypto/klines?${q.toString()}`);
   },
+  getShadowAccount: () => request<ShadowAccountResponse>("/shadow/account"),
+  listShadowOrders: () => request<ShadowOrder[]>("/shadow/orders"),
+  placeShadowOrder: (body: ShadowPlaceOrderRequest) =>
+    request<ShadowOrder>("/shadow/orders", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  cancelShadowOrder: (orderId: string) =>
+    request<ShadowOrder>(`/shadow/orders/${encodeURIComponent(orderId)}/cancel`, {
+      method: "POST",
+    }),
+  updateShadowMarketPrice: (body: ShadowMarketPriceRequest) =>
+    request<ShadowMarketPriceResponse>("/shadow/market-price", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  resetShadowAccount: () => request<ShadowAccountResponse>("/shadow/reset", { method: "POST" }),
 };
 
 // --- Swarm types ---
@@ -342,6 +359,61 @@ export interface CryptoKlinesResponse {
   updated_at: string;
   storage: CryptoStorageStatus;
   bars: CryptoKlineBar[];
+}
+
+export interface ShadowWallet {
+  user_id: string;
+  account_type: "VIRTUAL" | "REAL" | string;
+  asset_name: string;
+  balance: number;
+  frozen: number;
+  equity: number;
+}
+
+export interface ShadowOrder {
+  order_id: string;
+  user_id: string;
+  account_type: "VIRTUAL" | "REAL" | string;
+  symbol: string;
+  side: "BUY" | "SELL";
+  type: "MARKET" | "LIMIT";
+  price: number;
+  quantity: number;
+  status: "PENDING" | "FILLED" | "CANCELED" | "REJECTED";
+  executed_price: number;
+  reserved_asset: string;
+  reserved_amount: number;
+  rejection_reason?: string;
+  timestamp: number;
+  updated_at: number;
+}
+
+export interface ShadowAccountResponse {
+  user_id: string;
+  account_type: "VIRTUAL" | string;
+  wallets: ShadowWallet[];
+  orders: ShadowOrder[];
+  market_prices: Record<string, number>;
+}
+
+export interface ShadowPlaceOrderRequest {
+  symbol: string;
+  side: "BUY" | "SELL";
+  order_type: "MARKET" | "LIMIT";
+  quantity: number;
+  price?: number;
+}
+
+export interface ShadowMarketPriceRequest {
+  symbol: string;
+  price: number;
+}
+
+export interface ShadowMarketPriceResponse {
+  symbol: string;
+  price: number;
+  filled_orders: ShadowOrder[];
+  account: ShadowAccountResponse;
 }
 
 export interface LLMSettings {

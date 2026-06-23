@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ from src.persistence.mysql import mysql_connection
 VALID_LANGUAGES = {"python", "pine", "javascript"}
 VALID_STATUSES = {"draft", "testing", "live", "archived"}
 VALID_CATEGORIES = {"trend", "mean_reversion", "grid", "risk", "portfolio", "arbitrage", "utility"}
+logger = logging.getLogger(__name__)
 
 
 def _now_iso() -> str:
@@ -32,6 +34,12 @@ def _json_loads(value: str | bytes | None, default: object) -> object:
     if not value:
         return default
     return json.loads(value)
+
+
+def _row_text(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value or "")
 
 
 @dataclass(frozen=True)
@@ -148,6 +156,7 @@ class MySQLStrategyStore:
                 )
                 self._migrate_legacy_columns(cur)
                 self._ensure_column(cur, "strategy_library", "user_id", "BIGINT UNSIGNED NOT NULL DEFAULT 0")
+                self._ensure_timestamp_text_columns(cur)
                 cur.execute("UPDATE strategy_library SET user_id = 0 WHERE user_id IS NULL")
                 cur.execute("ALTER TABLE strategy_library MODIFY COLUMN user_id BIGINT UNSIGNED NOT NULL DEFAULT 0")
                 self._ensure_index(cur, "strategy_library", "idx_strategy_user_updated", "user_id, updated_at")
@@ -301,6 +310,43 @@ class MySQLStrategyStore:
             cur.execute("ALTER TABLE strategy_library CHANGE COLUMN tags tags_json JSON NOT NULL")
 
     @staticmethod
+    def _column_type(cur: Any, table: str, column: str) -> str:
+        cur.execute(
+            """
+            SELECT DATA_TYPE AS data_type
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = %s
+              AND COLUMN_NAME = %s
+            """,
+            (table, column),
+        )
+        row = cur.fetchone() or {}
+        return str(row.get("data_type") or row.get("DATA_TYPE") or "").lower()
+
+    @staticmethod
+    def _ensure_timestamp_text_columns(cur: Any) -> None:
+        """Normalize legacy DATETIME timestamps to API string fields."""
+        for column in ("created_at", "updated_at"):
+            data_type = MySQLStrategyStore._column_type(cur, "strategy_library", column)
+            if data_type and data_type != "varchar":
+                cur.execute(f"ALTER TABLE strategy_library MODIFY COLUMN {column} VARCHAR(64) NOT NULL")
+
+    @staticmethod
+    def _has_inbound_foreign_keys(cur: Any, table: str) -> bool:
+        cur.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM information_schema.KEY_COLUMN_USAGE
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND REFERENCED_TABLE_NAME = %s
+            """,
+            (table,),
+        )
+        row = cur.fetchone() or {}
+        return int(row.get("count") or 0) > 0
+
+    @staticmethod
     def _ensure_composite_primary_key(cur: Any) -> None:
         cur.execute(
             """
@@ -314,7 +360,12 @@ class MySQLStrategyStore:
         )
         rows = cur.fetchall() or []
         columns = [str(row.get("column_name") or row.get("COLUMN_NAME")) for row in rows]
-        if columns == ["user_id", "id"]:
+        if columns == ["user_id", "id"] or set(columns) == {"user_id", "id"}:
+            return
+        if columns == ["id"] and MySQLStrategyStore._has_inbound_foreign_keys(cur, "strategy_library"):
+            logger.warning(
+                "Leaving legacy strategy_library primary key on id because inbound foreign keys reference it"
+            )
             return
         if columns:
             cur.execute("ALTER TABLE strategy_library DROP PRIMARY KEY")
@@ -335,6 +386,6 @@ class MySQLStrategyStore:
             status=row["status"],
             tags=list(_json_loads(row["tags_json"], [])),
             code=row["code"],
-            createdAt=row["created_at"],
-            updatedAt=row["updated_at"],
+            createdAt=_row_text(row["created_at"]),
+            updatedAt=_row_text(row["updated_at"]),
         )

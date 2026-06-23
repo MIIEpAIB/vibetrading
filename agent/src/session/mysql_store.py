@@ -29,6 +29,12 @@ def _json_loads(value: str | bytes | None, default: object) -> object:
     return json.loads(value)
 
 
+def _row_text(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value or "")
+
+
 class MySQLSessionStore:
     """MySQL-backed persistent storage matching the filesystem SessionStore API."""
 
@@ -408,8 +414,8 @@ class MySQLSessionStore:
                 "session_id": row["session_id"],
                 "title": row["title"],
                 "status": row["status"],
-                "created_at": row["created_at"],
-                "updated_at": row["updated_at"],
+                "created_at": _row_text(row["created_at"]),
+                "updated_at": _row_text(row["updated_at"]),
                 "last_attempt_id": row["last_attempt_id"],
                 "config": config,
             }
@@ -423,7 +429,7 @@ class MySQLSessionStore:
                 "session_id": row["session_id"],
                 "role": row["role"],
                 "content": row["content"],
-                "created_at": row["created_at"],
+                "created_at": _row_text(row["created_at"]),
                 "linked_attempt_id": row["linked_attempt_id"],
                 "metadata": dict(_json_loads(row.get("metadata_json"), {})),
             }
@@ -441,8 +447,8 @@ class MySQLSessionStore:
                 "run_dir": row["run_dir"],
                 "summary": row["summary"],
                 "react_trace": list(_json_loads(row.get("react_trace_json"), [])),
-                "created_at": row["created_at"] or datetime.now().isoformat(),
-                "completed_at": row["completed_at"],
+                "created_at": _row_text(row["created_at"]) or datetime.now().isoformat(),
+                "completed_at": _row_text(row["completed_at"]) if row["completed_at"] else None,
                 "error": row["error"],
                 "metrics": (
                     dict(_json_loads(row.get("metrics_json"), {}))

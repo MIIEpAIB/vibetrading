@@ -25,6 +25,7 @@ const apiPrefixes = [
   "/sessions",
   "/settings/data-sources",
   "/settings/llm",
+  "/shadow",
   "/shadow-reports",
   "/strategies",
   "/swarm/presets",
@@ -33,7 +34,12 @@ const apiPrefixes = [
 ];
 
 const spaHtmlExactPaths = new Set([
+  "/api-docs",
+  "/community",
   "/correlation",
+  "/library",
+  "/market",
+  "/masters",
   "/strategies",
 ]);
 

@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
-import { BarChart3, Eye, EyeOff, Loader2, LogIn, UserPlus } from "lucide-react";
+import { Eye, EyeOff, Loader2, LogIn, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import { useAuthStore } from "@/stores/auth";
 
@@ -21,7 +21,7 @@ export function Auth() {
   const [submitting, setSubmitting] = useState(false);
 
   if (user) {
-    return <Navigate to={(location.state as { from?: string } | null)?.from || "/"} replace />;
+    return <Navigate to={(location.state as { from?: string } | null)?.from || "/dashboard"} replace />;
   }
 
   const submit = async (event: FormEvent) => {
@@ -33,7 +33,7 @@ export function Auth() {
       } else {
         await register(username, password, displayName || undefined);
       }
-      navigate((location.state as { from?: string } | null)?.from || "/", { replace: true });
+      navigate((location.state as { from?: string } | null)?.from || "/dashboard", { replace: true });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Authentication failed");
     } finally {
@@ -47,8 +47,8 @@ export function Auth() {
     <main className="flex min-h-screen bg-background">
       <section className="hidden min-h-screen w-[42%] border-r bg-card px-10 py-12 lg:flex lg:flex-col">
         <div className="flex items-center gap-2 text-lg font-semibold">
-          <BarChart3 className="h-5 w-5 text-primary" />
-          Vibe-Trading
+          <img src="/favicon.svg" alt="" className="h-6 w-6" />
+          Venus
         </div>
         <div className="mt-auto max-w-md space-y-4 pb-16">
           <div className="text-sm font-medium text-primary">Private workspace</div>
@@ -64,8 +64,8 @@ export function Auth() {
       <section className="flex flex-1 items-center justify-center px-5 py-10">
         <form onSubmit={submit} className="w-full max-w-sm rounded-lg border bg-card p-6 shadow-sm">
           <div className="mb-6 flex items-center gap-2 lg:hidden">
-            <BarChart3 className="h-5 w-5 text-primary" />
-            <span className="font-semibold">Vibe-Trading</span>
+            <img src="/favicon.svg" alt="" className="h-6 w-6" />
+            <span className="font-semibold">Venus</span>
           </div>
 
           <div className="mb-5 space-y-1">

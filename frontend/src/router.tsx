@@ -24,7 +24,19 @@ const AlphaZoo = lazy(() =>
 const StrategyLibrary = lazy(() =>
   import("@/pages/StrategyLibrary").then((m) => ({ default: m.StrategyLibrary })),
 );
+const StrategyCockpit = lazy(() =>
+  import("@/pages/StrategyCockpit").then((m) => ({ default: m.StrategyCockpit })),
+);
+const ShadowTrading = lazy(() =>
+  import("@/pages/ShadowTrading").then((m) => ({ default: m.ShadowTrading })),
+);
 const Auth = lazy(() => import("@/pages/Auth").then((m) => ({ default: m.Auth })));
+const PublicLayout = lazy(() =>
+  import("@/pages/PublicPages").then((m) => ({ default: m.PublicLayout })),
+);
+const PublicPage = lazy(() =>
+  import("@/pages/PublicPages").then((m) => ({ default: m.PublicPage })),
+);
 
 function PageLoader() {
   const { t } = useTranslation();
@@ -53,14 +65,28 @@ function RequireAuth() {
 export const router = createBrowserRouter([
   { path: "/login", element: wrap(Auth) },
   {
+    element: wrap(PublicLayout),
+    children: [
+      { path: "/", element: wrap(PublicPage) },
+      { path: "/market", element: wrap(PublicPage) },
+      { path: "/masters", element: wrap(PublicPage) },
+      { path: "/library", element: wrap(PublicPage) },
+      { path: "/community", element: wrap(PublicPage) },
+      { path: "/api-docs", element: wrap(PublicPage) },
+      { path: "/public/:pageId", element: wrap(PublicPage) },
+    ],
+  },
+  {
     element: <RequireAuth />,
     children: [
       {
         element: <Layout />,
         children: [
-          { path: "/", element: wrap(Home) },
+          { path: "/dashboard", element: wrap(Home) },
+          { path: "/cockpit", element: wrap(StrategyCockpit) },
           { path: "/agent", element: wrap(Agent) },
           { path: "/strategies", element: wrap(StrategyLibrary) },
+          { path: "/shadow-trading", element: wrap(ShadowTrading) },
           { path: "/settings", element: wrap(Settings) },
           { path: "/runs/:runId", element: wrap(RunDetail) },
           { path: "/compare", element: wrap(Compare) },

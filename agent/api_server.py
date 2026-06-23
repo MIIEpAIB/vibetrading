@@ -292,6 +292,73 @@ class CryptoKlinesResponse(BaseModel):
     bars: List[CryptoKlineBarResponse]
 
 
+class ShadowWalletResponse(BaseModel):
+    """Virtual shadow wallet row."""
+
+    user_id: str
+    account_type: str
+    asset_name: str
+    balance: float
+    frozen: float
+    equity: float
+
+
+class ShadowOrderResponse(BaseModel):
+    """Virtual shadow order state."""
+
+    order_id: str
+    user_id: str
+    account_type: str
+    symbol: str
+    side: str
+    type: str
+    price: float
+    quantity: float
+    status: str
+    executed_price: float
+    reserved_asset: str
+    reserved_amount: float
+    rejection_reason: str = ""
+    timestamp: float
+    updated_at: float
+
+
+class ShadowAccountResponse(BaseModel):
+    """Virtual account snapshot for the Web UI."""
+
+    user_id: str
+    account_type: str
+    wallets: List[ShadowWalletResponse]
+    orders: List[ShadowOrderResponse]
+    market_prices: Dict[str, float]
+
+
+class ShadowPlaceOrderRequest(BaseModel):
+    """Place a virtual shadow order."""
+
+    symbol: str = Field(..., min_length=3, max_length=32)
+    side: str = Field(..., description="BUY or SELL")
+    order_type: str = Field("MARKET", description="MARKET or LIMIT")
+    quantity: float = Field(..., gt=0)
+    price: float = Field(0.0, ge=0)
+
+
+class ShadowPriceUpdateRequest(BaseModel):
+    """Inject a latest-market-price update for virtual limit order matching."""
+
+    symbol: str = Field(..., min_length=3, max_length=32)
+    price: float = Field(..., gt=0)
+
+
+class ShadowPriceUpdateResponse(BaseModel):
+    """Result of a virtual market-price update."""
+
+    symbol: str
+    price: float
+    filled_orders: List[ShadowOrderResponse]
+    account: ShadowAccountResponse
+
+
 # ---- User Auth Models ----
 
 class RegisterRequest(BaseModel):
@@ -1835,6 +1902,118 @@ async def get_crypto_markets(
     from src.crypto_market import get_market_dashboard
 
     return get_market_dashboard(limit=limit)
+
+
+def _shadow_user_id(ctx: AuthContext) -> str:
+    """Resolve the isolated virtual-account key for the current caller."""
+    if ctx.user_id is not None:
+        return f"user:{ctx.user_id}"
+    return "operator"
+
+
+def _parse_shadow_side(value: str):
+    from src.shadow_trading import OrderSide, ShadowTradingError
+
+    clean = (value or "").strip().upper()
+    try:
+        return OrderSide(clean)
+    except ValueError as exc:
+        raise ShadowTradingError("side must be BUY or SELL") from exc
+
+
+def _parse_shadow_order_type(value: str):
+    from src.shadow_trading import OrderType, ShadowTradingError
+
+    clean = (value or "MARKET").strip().upper()
+    try:
+        return OrderType(clean)
+    except ValueError as exc:
+        raise ShadowTradingError("order_type must be MARKET or LIMIT") from exc
+
+
+def _shadow_http_error(exc: Exception) -> HTTPException:
+    message = str(exc) or "shadow trading request failed"
+    not_found = "not found" in message.lower()
+    return HTTPException(status_code=404 if not_found else 400, detail=message)
+
+
+@app.get("/shadow/account", response_model=ShadowAccountResponse)
+async def get_shadow_account(ctx: AuthContext = Depends(require_auth)):
+    """Return the caller's isolated virtual trading account."""
+    from src.shadow_trading import ShadowTradingError, shadow_trading_service
+
+    try:
+        return await shadow_trading_service.account_snapshot(_shadow_user_id(ctx))
+    except ShadowTradingError as exc:
+        raise _shadow_http_error(exc) from exc
+
+
+@app.get("/shadow/orders", response_model=List[ShadowOrderResponse])
+async def list_shadow_orders(ctx: AuthContext = Depends(require_auth)):
+    """List virtual orders for the caller."""
+    from src.shadow_trading import shadow_trading_service
+
+    return [order.to_dict() for order in await shadow_trading_service.list_orders(_shadow_user_id(ctx))]
+
+
+@app.post("/shadow/orders", response_model=ShadowOrderResponse)
+async def place_shadow_order(payload: ShadowPlaceOrderRequest, ctx: AuthContext = Depends(require_auth)):
+    """Place a virtual market or limit order against the shadow ledger."""
+    from src.shadow_trading import AccountType, ShadowTradingError, shadow_trading_service
+
+    try:
+        order = await shadow_trading_service.place_order(
+            user_id=_shadow_user_id(ctx),
+            account_type=AccountType.VIRTUAL,
+            symbol=payload.symbol,
+            side=_parse_shadow_side(payload.side),
+            order_type=_parse_shadow_order_type(payload.order_type),
+            quantity=payload.quantity,
+            price=payload.price,
+        )
+        return order.to_dict()
+    except ShadowTradingError as exc:
+        raise _shadow_http_error(exc) from exc
+
+
+@app.post("/shadow/orders/{order_id}/cancel", response_model=ShadowOrderResponse)
+async def cancel_shadow_order(order_id: str, ctx: AuthContext = Depends(require_auth)):
+    """Cancel a pending virtual limit order and release frozen funds."""
+    from src.shadow_trading import ShadowTradingError, shadow_trading_service
+
+    try:
+        order = await shadow_trading_service.cancel_order(_shadow_user_id(ctx), order_id)
+        return order.to_dict()
+    except ShadowTradingError as exc:
+        raise _shadow_http_error(exc) from exc
+
+
+@app.post("/shadow/market-price", response_model=ShadowPriceUpdateResponse)
+async def update_shadow_market_price(payload: ShadowPriceUpdateRequest, ctx: AuthContext = Depends(require_auth)):
+    """Update latest price and trigger eligible virtual limit orders."""
+    from src.shadow_trading import ShadowTradingError, normalize_symbol, shadow_trading_service
+
+    user_id = _shadow_user_id(ctx)
+    try:
+        filled_orders = await shadow_trading_service.update_market_price(payload.symbol, payload.price, user_id=user_id)
+        return {
+            "symbol": normalize_symbol(payload.symbol),
+            "price": payload.price,
+            "filled_orders": [order.to_dict() for order in filled_orders],
+            "account": await shadow_trading_service.account_snapshot(user_id),
+        }
+    except ShadowTradingError as exc:
+        raise _shadow_http_error(exc) from exc
+
+
+@app.post("/shadow/reset", response_model=ShadowAccountResponse)
+async def reset_shadow_account(ctx: AuthContext = Depends(require_auth)):
+    """Reset the caller's virtual account to its initial ledger state."""
+    from src.shadow_trading import shadow_trading_service
+
+    user_id = _shadow_user_id(ctx)
+    await shadow_trading_service.reset_user(user_id)
+    return await shadow_trading_service.account_snapshot(user_id)
 
 
 @app.get(

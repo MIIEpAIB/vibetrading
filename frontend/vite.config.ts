@@ -64,6 +64,7 @@ export default defineConfig(({ mode }) => {
       port: 8765,
       proxy: {
         ...Object.fromEntries(PROXY_PATHS.map((p) => [p, apiProxy])),
+        "^/shadow(?:/|$)": apiProxy,
         // SPA RunDetail page — only the two-segment ``/runs/{id}``
         // form should fall back to ``index.html`` on browser navigation.
         // ``/runs/{id}/code`` and ``/runs/{id}/pine`` are API-only and

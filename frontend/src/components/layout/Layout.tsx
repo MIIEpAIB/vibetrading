@@ -1,6 +1,6 @@
 ﻿import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { BarChart3, Bot, Moon, Sun, Plus, Trash2, Pencil, MessageSquare, ChevronsLeft, ChevronsRight, Settings, Layers, Loader2, Library, LogOut, User } from "lucide-react";
+import { BarChart3, Bot, Moon, Sun, Plus, Trash2, Pencil, MessageSquare, ChevronsLeft, ChevronsRight, Settings, Layers, Loader2, Library, LogOut, Route, User, WalletCards, ShoppingBag, Star, BookOpen, Users, Code2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
 import { api, type SessionItem } from "@/lib/api";
@@ -14,9 +14,16 @@ import { useAuthStore } from "@/stores/auth";
 const APP_VERSION = "v0.1.9";
 
 const NAV = [
-  { to: "/", icon: BarChart3, labelKey: "nav.home" },
+  { to: "/dashboard", icon: BarChart3, labelKey: "nav.home" },
+  { to: "/cockpit", icon: Route, labelKey: "nav.cockpit" },
   { to: "/agent", icon: Bot, labelKey: "nav.agent" },
   { to: "/strategies", icon: Library, labelKey: "nav.strategies" },
+  { to: "/market", icon: ShoppingBag, labelKey: "nav.market" },
+  { to: "/masters", icon: Star, labelKey: "nav.masters" },
+  { to: "/library", icon: BookOpen, labelKey: "nav.library" },
+  { to: "/community", icon: Users, labelKey: "nav.community" },
+  { to: "/api-docs", icon: Code2, labelKey: "nav.apiDocs" },
+  { to: "/shadow-trading", icon: WalletCards, labelKey: "nav.shadowTrading" },
   { to: "/alpha-zoo", icon: Layers, labelKey: "nav.alphaZoo" },
   { to: "/settings", icon: Settings, labelKey: "nav.settings" },
   { to: "/correlation", icon: BarChart3, labelKey: "nav.correlation" },
@@ -92,9 +99,9 @@ export function Layout() {
       )}>
         {/* Brand */}
         <div className={cn("border-b", collapsed ? "p-2 flex justify-center" : "p-4")}>
-          <Link to="/" className={cn("flex items-center font-bold text-base tracking-tight", collapsed ? "justify-center" : "gap-2")}>
-            <BarChart3 className="h-5 w-5 text-primary shrink-0" />
-            {!collapsed && "Vibe-Trading"}
+          <Link to="/dashboard" className={cn("flex items-center font-bold text-base tracking-tight", collapsed ? "justify-center" : "gap-2")}>
+            <img src="/favicon.svg" alt="" className="h-6 w-6 shrink-0" />
+            {!collapsed && "Venus"}
           </Link>
         </div>
 
@@ -109,7 +116,7 @@ export function Layout() {
                 className={cn(
                   "flex items-center rounded-md text-sm transition-colors",
                   collapsed ? "justify-center p-2" : "gap-3 px-3 py-2",
-                  (to === "/" ? pathname === "/" : pathname.startsWith(to))
+                  pathname === to || pathname.startsWith(`${to}/`)
                     ? "bg-primary/10 text-primary font-medium"
                     : "text-muted-foreground hover:bg-muted hover:text-foreground"
                 )}

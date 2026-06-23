@@ -25,6 +25,7 @@ import {
   Upload,
   WandSparkles,
   X,
+  type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -537,6 +538,16 @@ function statusTone(status: StrategyStatus) {
   return "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300";
 }
 
+function MetricPill({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value: number }) {
+  return (
+    <div className="inline-flex min-w-0 items-center gap-2 rounded-md border bg-background px-2.5 py-1.5">
+      <Icon className="h-3.5 w-3.5 shrink-0 text-primary" />
+      <span className="truncate">{label}</span>
+      <span className="font-mono font-semibold text-foreground">{value.toLocaleString()}</span>
+    </div>
+  );
+}
+
 function sortStrategies(items: StrategyItem[], mode: SortMode): StrategyItem[] {
   const statusRank: Record<StrategyStatus, number> = {
     live: 0,
@@ -873,82 +884,56 @@ export function StrategyLibrary() {
               <h1 className="text-2xl font-semibold tracking-normal text-foreground sm:text-3xl">
                 {t("strategy.title")}
               </h1>
-              <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">
+              <p className="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">
                 {t("strategy.subtitle")}
               </p>
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:justify-end">
               <button
                 type="button"
                 onClick={() => importInputRef.current?.click()}
-                className="inline-flex items-center gap-2 rounded-lg border bg-background px-3 py-2 text-sm font-semibold transition hover:bg-muted"
+                className="inline-flex min-w-0 items-center justify-center gap-2 rounded-md border bg-background px-3 py-2 text-sm font-semibold transition hover:bg-muted"
               >
-                <Upload className="h-4 w-4" />
-                {t("strategy.import")}
+                <Upload className="h-4 w-4 shrink-0" />
+                <span className="truncate">{t("strategy.import")}</span>
               </button>
               <button
                 type="button"
-                onClick={() => handleExport(strategies, "vibe-strategy-library.json")}
-                className="inline-flex items-center gap-2 rounded-lg border bg-background px-3 py-2 text-sm font-semibold transition hover:bg-muted"
+                onClick={() => handleExport(strategies, "venus-strategy-library.json")}
+                className="inline-flex min-w-0 items-center justify-center gap-2 rounded-md border bg-background px-3 py-2 text-sm font-semibold transition hover:bg-muted"
               >
-                <Download className="h-4 w-4" />
-                {t("strategy.exportAll")}
+                <Download className="h-4 w-4 shrink-0" />
+                <span className="truncate">{t("strategy.exportAll")}</span>
               </button>
               <button
                 type="button"
                 onClick={() => openAssistant(t("strategy.defaultPrompt"), false)}
-                className="inline-flex items-center gap-2 rounded-lg border bg-background px-3 py-2 text-sm font-semibold transition hover:bg-muted"
+                className="inline-flex min-w-0 items-center justify-center gap-2 rounded-md border bg-background px-3 py-2 text-sm font-semibold transition hover:bg-muted"
               >
-                <WandSparkles className="h-4 w-4 text-primary" />
-                {t("strategy.aiCreate")}
+                <WandSparkles className="h-4 w-4 shrink-0 text-primary" />
+                <span className="truncate">{t("strategy.aiCreate")}</span>
               </button>
               <button
                 type="button"
                 onClick={handleNew}
-                className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90"
+                className="inline-flex min-w-0 items-center justify-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90"
               >
-                <Plus className="h-4 w-4" />
-                {t("strategy.new")}
+                <Plus className="h-4 w-4 shrink-0" />
+                <span className="truncate">{t("strategy.new")}</span>
               </button>
             </div>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <div className="rounded-lg border bg-background p-3">
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("strategy.count")}</span>
-                <Library className="h-4 w-4 text-primary" />
-              </div>
-              <div className="mt-2 font-mono text-2xl font-semibold">{strategies.length}</div>
-            </div>
-            <div className="rounded-lg border bg-background p-3">
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("strategy.testing")}</span>
-                <ListChecks className="h-4 w-4 text-sky-500" />
-              </div>
-              <div className="mt-2 font-mono text-2xl font-semibold">
-                {strategies.filter((strategy) => strategy.status === "testing").length}
-              </div>
-            </div>
-            <div className="rounded-lg border bg-background p-3">
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("strategy.filtered")}</span>
-                <Filter className="h-4 w-4 text-amber-500" />
-              </div>
-              <div className="mt-2 font-mono text-2xl font-semibold">{filteredStrategies.length}</div>
-            </div>
-            <div className="rounded-lg border bg-background p-3">
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("strategy.lines")}</span>
-                <Code2 className="h-4 w-4 text-emerald-500" />
-              </div>
-              <div className="mt-2 font-mono text-2xl font-semibold">{totalCodeLines}</div>
-            </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <MetricPill icon={Library} label={t("strategy.count")} value={strategies.length} />
+            <MetricPill icon={ListChecks} label={t("strategy.testing")} value={strategies.filter((strategy) => strategy.status === "testing").length} />
+            <MetricPill icon={Filter} label={t("strategy.filtered")} value={filteredStrategies.length} />
+            <MetricPill icon={Code2} label={t("strategy.lines")} value={totalCodeLines} />
           </div>
         </div>
       </div>
 
-      <div className="mx-auto grid max-w-7xl gap-4 px-4 py-4 sm:px-6 lg:px-8 xl:grid-cols-[21rem_minmax(0,1fr)_24rem]">
+      <div className="mx-auto grid max-w-7xl gap-4 px-4 py-4 sm:px-6 lg:px-8 xl:grid-cols-[20rem_minmax(0,1fr)]">
         <aside className="min-h-0 space-y-4">
           <div className="rounded-lg border bg-card">
             <div className="border-b p-3">
@@ -1049,7 +1034,7 @@ export function StrategyLibrary() {
               </div>
             </div>
 
-            <div className="max-h-[calc(100vh-28rem)] min-h-[20rem] overflow-auto p-2">
+            <div className="max-h-[calc(100vh-24rem)] min-h-[18rem] overflow-auto p-2">
               {filteredStrategies.length === 0 ? (
                 <div className="flex min-h-48 flex-col items-center justify-center rounded-lg border border-dashed p-6 text-center">
                   <FileCode2 className="h-8 w-8 text-muted-foreground" />
@@ -1128,7 +1113,7 @@ export function StrategyLibrary() {
           {activeStrategy && (
             <div className="rounded-lg border bg-card">
               <div className="border-b p-4">
-                <div className="flex flex-col gap-3 2xl:flex-row 2xl:items-start 2xl:justify-between">
+                <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
                   <div className="min-w-0 flex-1">
                     <div className="mb-2 flex flex-wrap items-center gap-2">
                       <span className={cn("rounded-full border px-2.5 py-1 text-xs font-semibold", statusTone(activeStrategy.status))}>
@@ -1150,30 +1135,30 @@ export function StrategyLibrary() {
                       className="mt-1 h-11 w-full rounded-lg border bg-background px-3 text-lg font-semibold outline-none transition focus:ring-2 focus:ring-primary/25"
                     />
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:justify-end xl:max-w-md">
                     <button
                       type="button"
                       onClick={() => handleExport([activeStrategy], `${activeStrategy.name || "strategy"}.json`)}
-                      className="inline-flex items-center gap-2 rounded-lg border bg-background px-3 py-2 text-sm font-semibold transition hover:bg-muted"
+                      className="inline-flex min-w-0 items-center justify-center gap-2 rounded-md border bg-background px-3 py-2 text-sm font-semibold transition hover:bg-muted"
                     >
-                      <Download className="h-4 w-4" />
-                      {t("strategy.exportCurrent")}
+                      <Download className="h-4 w-4 shrink-0" />
+                      <span className="truncate">{t("strategy.exportCurrent")}</span>
                     </button>
                     <button
                       type="button"
                       onClick={handleCopyCode}
-                      className="inline-flex items-center gap-2 rounded-lg border bg-background px-3 py-2 text-sm font-semibold transition hover:bg-muted"
+                      className="inline-flex min-w-0 items-center justify-center gap-2 rounded-md border bg-background px-3 py-2 text-sm font-semibold transition hover:bg-muted"
                     >
-                      <Copy className="h-4 w-4" />
-                      {t("strategy.copyCode")}
+                      <Copy className="h-4 w-4 shrink-0" />
+                      <span className="truncate">{t("strategy.copyCode")}</span>
                     </button>
                     <button
                       type="button"
                       onClick={handleDuplicate}
-                      className="inline-flex items-center gap-2 rounded-lg border bg-background px-3 py-2 text-sm font-semibold transition hover:bg-muted"
+                      className="inline-flex min-w-0 items-center justify-center gap-2 rounded-md border bg-background px-3 py-2 text-sm font-semibold transition hover:bg-muted"
                     >
-                      <Copy className="h-4 w-4" />
-                      {t("strategy.duplicate")}
+                      <Copy className="h-4 w-4 shrink-0" />
+                      <span className="truncate">{t("strategy.duplicate")}</span>
                     </button>
                     {deleteTarget === activeStrategy.id ? (
                       <div className="inline-flex items-center overflow-hidden rounded-lg border border-destructive/30 bg-destructive/5">
@@ -1197,10 +1182,10 @@ export function StrategyLibrary() {
                       <button
                         type="button"
                         onClick={() => setDeleteTarget(activeStrategy.id)}
-                        className="inline-flex items-center gap-2 rounded-lg border bg-background px-3 py-2 text-sm font-semibold text-muted-foreground transition hover:border-destructive/40 hover:text-destructive"
+                        className="inline-flex min-w-0 items-center justify-center gap-2 rounded-md border bg-background px-3 py-2 text-sm font-semibold text-muted-foreground transition hover:border-destructive/40 hover:text-destructive"
                       >
-                        <Trash2 className="h-4 w-4" />
-                        {t("layout.delete")}
+                        <Trash2 className="h-4 w-4 shrink-0" />
+                        <span className="truncate">{t("layout.delete")}</span>
                       </button>
                     )}
                   </div>
@@ -1296,7 +1281,7 @@ export function StrategyLibrary() {
                   <button
                     type="button"
                     onClick={() => openAssistant(t("strategy.reviewPrompt"))}
-                    className="ml-auto inline-flex items-center gap-1.5 rounded-md border bg-background px-2 py-1 font-semibold text-foreground transition hover:bg-muted"
+                    className="inline-flex items-center gap-1.5 rounded-md border bg-background px-2 py-1 font-semibold text-foreground transition hover:bg-muted sm:ml-auto"
                   >
                     <ShieldCheck className="h-3.5 w-3.5 text-primary" />
                     {t("strategy.runReview")}
@@ -1314,7 +1299,7 @@ export function StrategyLibrary() {
           )}
         </main>
 
-        <aside className="space-y-4">
+        <aside className="grid gap-4 lg:grid-cols-2 xl:col-start-2">
           <div className="rounded-lg border bg-card p-4">
             <div className="mb-4 flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
@@ -1363,7 +1348,7 @@ export function StrategyLibrary() {
               <FileCode2 className="h-4 w-4 text-primary" />
               {t("strategy.templates")}
             </div>
-            <div className="space-y-2">
+            <div className="max-h-[18rem] space-y-2 overflow-auto pr-1">
               {strategyTemplates.map((template) => (
                 <div key={template.id} className="rounded-lg border bg-background p-3">
                   <div className="flex items-start justify-between gap-2">
@@ -1392,7 +1377,7 @@ export function StrategyLibrary() {
             </div>
           </div>
 
-          <div className="rounded-lg border bg-card">
+          <div className="rounded-lg border bg-card lg:col-span-2">
             <div className="border-b p-4">
               <div className="flex items-center gap-2">
                 <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -1434,7 +1419,7 @@ export function StrategyLibrary() {
                 </button>
               </div>
             </div>
-            <div className="max-h-[24rem] overflow-auto p-2">
+            <div className="max-h-[16rem] overflow-auto p-2">
               <div className="space-y-1.5">
                 {filteredPrompts.map((item) => (
                   <button
@@ -1458,7 +1443,7 @@ export function StrategyLibrary() {
 
           <Link
             to="/agent"
-            className="inline-flex w-full items-center justify-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm font-semibold transition hover:bg-muted"
+            className="inline-flex w-full items-center justify-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm font-semibold transition hover:bg-muted lg:col-span-2"
           >
             <Bot className="h-4 w-4" />
             {t("strategy.openAgent")}

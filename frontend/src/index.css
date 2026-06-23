@@ -80,6 +80,16 @@
   ::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground)); }
 }
 
+@layer components {
+  .input-like {
+    @apply w-full rounded-md border bg-background px-3 py-2 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20;
+  }
+
+  .seg-button {
+    @apply inline-flex h-10 items-center justify-center rounded-md border bg-background px-3 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground;
+  }
+}
+
 /* Streaming pulse-slide animation for the "running" bar */
 @keyframes pulse-slide {
   0%   { transform: translateX(-100%); }
