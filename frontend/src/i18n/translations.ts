@@ -623,6 +623,9 @@ export const translations = {
     "chat.fullReport": "Full Report",
     "chat.pineScript": "Pine Script",
     "chat.shadowReport": "Shadow Report",
+    "chat.importToShadow": "Import to Shadow",
+    "chat.shadowImportTitle": "Prefill a virtual shadow test order from this agent result",
+    "chat.shadowImportFailed": "Failed to prepare the shadow import.",
     "chat.errorFallback": "Something went wrong",
   },
   "zh-CN": {
@@ -1220,6 +1223,9 @@ export const translations = {
     "chat.fullReport": "完整报告",
     "chat.pineScript": "Pine 脚本",
     "chat.shadowReport": "影子报告",
+    "chat.importToShadow": "导入影子盘",
+    "chat.shadowImportTitle": "用这个 agent 结果预填影子虚拟测试单",
+    "chat.shadowImportFailed": "准备影子导入失败。",
     "chat.errorFallback": "出现错误",
   },
 } as const satisfies Record<LanguageCode, Record<string, TranslationValue>>;

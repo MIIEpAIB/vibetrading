@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import {
   AlertTriangle,
@@ -20,10 +20,11 @@ import {
   X,
 } from "lucide-react";
 import { api, type ShadowAccountResponse, type ShadowOrder, type ShadowWallet } from "@/lib/api";
+import { loadShadowImportDraft, SHADOW_SYMBOLS, type ShadowImportDraft } from "@/lib/shadowImport";
 import { cn } from "@/lib/utils";
 import { useTranslation } from "@/i18n/I18nProvider";
 
-const SYMBOLS = ["BTC_USDT", "ETH_USDT", "SOL_USDT", "BNB_USDT", "XRP_USDT"] as const;
+const SYMBOLS = SHADOW_SYMBOLS;
 const TAKER_FEE_RATE = 0.001;
 const SLIPPAGE_RATE = 0.0005;
 
@@ -72,6 +73,12 @@ const COPY = {
     triggerTitle: "Market Trigger",
     triggerSubtitle: "Push a latest price to fill eligible virtual limit orders.",
     update: "Update",
+    importedDraftTitle: "Imported agent result",
+    importedDraftDesc: "The order ticket is prefilled from the agent result. Run it as a virtual order to collect shadow evidence.",
+    importedSourceRun: "Run",
+    importedSourceShadow: "Shadow profile",
+    runImportedTest: "Run imported test",
+    dismissImport: "Dismiss",
     wallets: "Wallets",
     asset: "Asset",
     available: "Available",
@@ -102,6 +109,8 @@ const COPY = {
     orderCanceled: "Order canceled",
     accountReset: "Virtual account reset",
     marketUpdated: "Market price updated",
+    importLoaded: "Agent result imported into the shadow ticket.",
+    importFailed: "Could not import that agent result.",
     limitFilled: (count: number) => `${count} limit order${count > 1 ? "s" : ""} filled`,
     orderDone: (status: ShadowOrder["status"]) => `Order ${status.toLowerCase()}`,
     statusLabels: { PENDING: "Pending", FILLED: "Filled", CANCELED: "Canceled", REJECTED: "Rejected" },
@@ -150,6 +159,12 @@ const COPY = {
     triggerTitle: "行情触发",
     triggerSubtitle: "推送最新价格，用于触发符合条件的虚拟限价单。",
     update: "更新",
+    importedDraftTitle: "已导入 agent 结果",
+    importedDraftDesc: "下单面板已按 agent 结果预填。点击运行会提交虚拟订单，用于积累影子盘测试证据。",
+    importedSourceRun: "运行",
+    importedSourceShadow: "影子档案",
+    runImportedTest: "运行导入测试",
+    dismissImport: "关闭",
     wallets: "钱包",
     asset: "资产",
     available: "可用",
@@ -180,6 +195,8 @@ const COPY = {
     orderCanceled: "订单已取消",
     accountReset: "虚拟账户已重置",
     marketUpdated: "行情价格已更新",
+    importLoaded: "已将 agent 结果导入影子下单面板。",
+    importFailed: "无法导入该 agent 结果。",
     limitFilled: (count: number) => `${count} 笔限价单已成交`,
     orderDone: (status: ShadowOrder["status"]) => `订单${COPY.zh.statusLabels[status]}`,
     statusLabels: { PENDING: "挂单", FILLED: "已成交", CANCELED: "已取消", REJECTED: "已拒绝" },
@@ -211,11 +228,13 @@ function formatTime(seconds: number): string {
 
 export function ShadowTrading() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { language } = useTranslation();
   const c = language === "zh-CN" ? COPY.zh : COPY.en;
   const [account, setAccount] = useState<ShadowAccountResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [importDraft, setImportDraft] = useState<ShadowImportDraft | null>(null);
   const [symbol, setSymbol] = useState<(typeof SYMBOLS)[number]>("BTC_USDT");
   const [side, setSide] = useState<"BUY" | "SELL">("BUY");
   const [orderType, setOrderType] = useState<"MARKET" | "LIMIT">("MARKET");
@@ -263,6 +282,32 @@ export function ShadowTrading() {
   }, []);
 
   useEffect(() => {
+    const key = searchParams.get("import");
+    if (!key) return;
+
+    const draft = loadShadowImportDraft(key);
+    const next = new URLSearchParams(searchParams);
+    next.delete("import");
+    setSearchParams(next, { replace: true });
+
+    if (!draft) {
+      toast.error(c.importFailed);
+      return;
+    }
+
+    setImportDraft(draft);
+    setSymbol(draft.symbol);
+    setSide(draft.side);
+    setOrderType(draft.orderType);
+    setQuantity(String(draft.quantity));
+    if (draft.price) {
+      setLimitPrice(String(Math.round(draft.price)));
+      setPriceUpdate(String(Math.round(draft.price)));
+    }
+    toast.success(c.importLoaded);
+  }, [c.importFailed, c.importLoaded, searchParams, setSearchParams]);
+
+  useEffect(() => {
     if (!account) return;
     const marketPrice = account.market_prices[symbol];
     if (marketPrice) {
@@ -271,16 +316,16 @@ export function ShadowTrading() {
     }
   }, [account, symbol]);
 
-  const placeOrder = async () => {
+  const placeOrder = async (): Promise<boolean> => {
     const parsedQuantity = Number(quantity);
     const parsedPrice = Number(limitPrice);
     if (!Number.isFinite(parsedQuantity) || parsedQuantity <= 0) {
       toast.error(c.validationQuantity);
-      return;
+      return false;
     }
     if (orderType === "LIMIT" && (!Number.isFinite(parsedPrice) || parsedPrice <= 0)) {
       toast.error(c.validationLimitPrice);
-      return;
+      return false;
     }
     setSubmitting(true);
     try {
@@ -296,11 +341,18 @@ export function ShadowTrading() {
       toast[order.status === "REJECTED" ? "error" : "success"](
         order.status === "REJECTED" ? order.rejection_reason || c.orderRejected : c.orderDone(order.status),
       );
+      return order.status !== "REJECTED";
     } catch (error) {
       toast.error(error instanceof Error ? error.message : c.placeFailed);
+      return false;
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const runImportedTest = async () => {
+    const accepted = await placeOrder();
+    if (accepted) setImportDraft(null);
   };
 
   const pushPrice = async () => {
@@ -498,6 +550,54 @@ export function ShadowTrading() {
             </span>
           </div>
         </div>
+
+        {importDraft && (
+          <section className="rounded-lg border border-primary/30 bg-primary/5 p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="inline-flex items-center gap-1.5 rounded-md bg-primary/10 px-2 py-1 text-xs font-medium text-primary">
+                    <Sparkles className="h-3.5 w-3.5" />
+                    {c.importedDraftTitle}
+                  </span>
+                  {importDraft.runId && (
+                    <span className="font-mono text-[11px] text-muted-foreground">
+                      {c.importedSourceRun}: {importDraft.runId}
+                    </span>
+                  )}
+                  {importDraft.shadowId && (
+                    <span className="font-mono text-[11px] text-muted-foreground">
+                      {c.importedSourceShadow}: {importDraft.shadowId}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-2 text-sm text-muted-foreground">{c.importedDraftDesc}</p>
+                <p className="mt-1 font-mono text-xs text-foreground">
+                  {importDraft.side} {formatQty(importDraft.quantity)} {importDraft.symbol} @ {importDraft.orderType}
+                </p>
+              </div>
+              <div className="flex shrink-0 flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={runImportedTest}
+                  disabled={loading || submitting}
+                  className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition hover:bg-primary/90 disabled:opacity-50"
+                >
+                  <Play className="h-4 w-4" />
+                  {c.runImportedTest}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setImportDraft(null)}
+                  className="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                >
+                  <X className="h-4 w-4" />
+                  {c.dismissImport}
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
 
         <div className="grid gap-5 xl:grid-cols-[420px_minmax(0,1fr)]">
           <section className="rounded-lg border bg-card p-4 shadow-sm">

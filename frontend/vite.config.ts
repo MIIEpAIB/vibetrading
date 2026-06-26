@@ -23,6 +23,7 @@ function cleanBuildArtifacts() {
   const removable = ["assets", "coin-icons", "favicon.svg", "index.html", "logo.svg"];
   return {
     name: "clean-build-artifacts",
+    apply: "build",
     buildStart() {
       for (const entry of removable) {
         fs.rmSync(path.join(outDir, entry), { force: true, recursive: true });

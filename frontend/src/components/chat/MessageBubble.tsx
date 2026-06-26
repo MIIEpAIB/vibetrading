@@ -83,7 +83,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onRetry }: Props
     );
   }
 
-  if (msg.type === "run_complete" && msg.runId) {
+  if (msg.type === "run_complete" && (msg.runId || msg.shadowId)) {
     return <RunCompleteCard msg={msg} />;
   }
 
