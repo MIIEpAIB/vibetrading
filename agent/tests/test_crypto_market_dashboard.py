@@ -101,6 +101,17 @@ def test_crypto_api_returns_rows_and_hides_credentials(
     assert "CRYPTO_REDIS_PASSWORD" not in body
 
 
+def test_crypto_api_accepts_oversized_limit_and_clamps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(crypto_market, "_exchange", lambda: _WorkingExchange())
+
+    payload = asyncio.run(api_server.get_crypto_markets(limit=20))
+
+    assert len(payload["rows"]) == 13
+    assert payload["rows"][-1]["symbol"] == "DOT/USDT"
+
+
 def test_crypto_klines_api_normalizes_bars(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

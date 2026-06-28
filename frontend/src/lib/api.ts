@@ -101,6 +101,26 @@ export const api = {
     }),
   logout: () => request<{ status: string }>("/auth/logout", { method: "POST" }),
   me: () => request<AuthUser>("/auth/me"),
+  changePassword: (current_password: string, new_password: string) =>
+    request<{ status: string }>("/auth/password", {
+      method: "POST",
+      body: JSON.stringify({ current_password, new_password }),
+    }),
+  listExchangeApiKeys: () => request<ExchangeApiKeyBindingListResponse>("/auth/exchange-api-keys"),
+  createExchangeApiKey: (body: CreateExchangeApiKeyBindingRequest) =>
+    request<ExchangeApiKeyBinding>("/auth/exchange-api-keys", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  deleteExchangeApiKey: (bindingId: number) =>
+    request<{ status: string; binding_id: number }>(`/auth/exchange-api-keys/${encodeURIComponent(String(bindingId))}`, {
+      method: "DELETE",
+    }),
+  activateExchangeApiKeyLive: (bindingId: number, checkConnection = false) =>
+    request<CryptoLiveConfigureResponse>(
+      `/auth/exchange-api-keys/${encodeURIComponent(String(bindingId))}/activate-live?check_connection=${encodeURIComponent(String(checkConnection))}`,
+      { method: "POST" },
+    ),
   uploadFile,
   listRuns: () => request<RunListItem[]>("/runs"),
   getRun: (id: string) => request<RunData>(`/runs/${id}`),
@@ -149,6 +169,44 @@ export const api = {
     request<{ status: string; id: string }>(`/strategies/${encodeURIComponent(strategyId)}`, {
       method: "DELETE",
     }),
+  runStrategyMarketBacktest: (body: StrategyMarketBacktestRequest) =>
+    request<StrategyMarketBacktestResponse>("/strategy-market/backtest", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  runStrategyBacktest: (strategyId: string, body: StrategyBacktestRequest = {}) =>
+    request<StrategyMarketBacktestResponse>(`/strategies/${encodeURIComponent(strategyId)}/backtest`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  createPaperDeployment: (body: CreatePaperDeploymentRequest) =>
+    request<PaperDeploymentActionResponse>("/paper/deployments", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  listPaperDeployments: () => request<PaperDeploymentListResponse>("/paper/deployments"),
+  getPaperDeploymentStatus: (deploymentId: string) =>
+    request<PaperDeploymentStatusResponse>(`/paper/deployments/${encodeURIComponent(deploymentId)}`),
+  startPaperDeployment: (deploymentId: string) =>
+    request<PaperDeploymentActionResponse>(`/paper/deployments/${encodeURIComponent(deploymentId)}/start`, {
+      method: "POST",
+    }),
+  pausePaperDeployment: (deploymentId: string) =>
+    request<PaperDeploymentActionResponse>(`/paper/deployments/${encodeURIComponent(deploymentId)}/pause`, {
+      method: "POST",
+    }),
+  resumePaperDeployment: (deploymentId: string) =>
+    request<PaperDeploymentActionResponse>(`/paper/deployments/${encodeURIComponent(deploymentId)}/resume`, {
+      method: "POST",
+    }),
+  archivePaperDeployment: (deploymentId: string) =>
+    request<PaperDeploymentActionResponse>(`/paper/deployments/${encodeURIComponent(deploymentId)}/archive`, {
+      method: "POST",
+    }),
+  runPaperDeploymentTick: (deploymentId: string) =>
+    request<PaperTickResponse>(`/paper/deployments/${encodeURIComponent(deploymentId)}/tick`, {
+      method: "POST",
+    }),
   sseUrl: (sid: string, options?: { replay?: "active" }) => {
     let url = withAuthQuery(`${BASE}/sessions/${sid}/events`);
     if (options?.replay) url = appendQueryParam(url, "replay", options.replay);
@@ -180,6 +238,23 @@ export const api = {
     request<DataSourceSettings>("/settings/data-sources", {
       method: "PUT",
       body: JSON.stringify(settings),
+    }, operatorAuthHeaders),
+  getAdminDashboard: () => request<AdminDashboardResponse>("/admin/dashboard", undefined, operatorAuthHeaders),
+  updateAdminUser: (userId: number, body: AdminUserUpdateRequest) =>
+    request<AuthUser>(`/admin/users/${encodeURIComponent(String(userId))}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }, operatorAuthHeaders),
+  deleteAdminUser: (userId: number) =>
+    request<{ status: string; user_id: number }>(`/admin/users/${encodeURIComponent(String(userId))}`, {
+      method: "DELETE",
+    }, operatorAuthHeaders),
+  getStrategyMarketCatalogConfig: () => request<StrategyMarketAdminResponse>("/strategy-market/catalog"),
+  getAdminStrategyMarket: () => request<StrategyMarketAdminResponse>("/admin/strategy-market", undefined, operatorAuthHeaders),
+  updateAdminStrategyMarket: (items: StrategyMarketAdminItem[]) =>
+    request<StrategyMarketAdminResponse>("/admin/strategy-market", {
+      method: "PUT",
+      body: JSON.stringify({ items }),
     }, operatorAuthHeaders),
 
   // Alpha Zoo API
@@ -224,6 +299,11 @@ export const api = {
   // Read the persistent runtime status across all authorized brokers (SPEC §7.5).
   // Polled by the RunnerStatus panel; a plain authenticated GET, never a chat message.
   getLiveStatus: () => request<LiveStatus>("/live/status", undefined, operatorAuthHeaders),
+  configureCryptoLive: (body: CryptoLiveConfigureRequest) =>
+    request<CryptoLiveConfigureResponse>("/live/crypto/configure", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   authorizeLive: (broker: string) =>
     request<LiveAuthorizeResponse>("/live/authorize", {
       method: "POST",
@@ -282,6 +362,59 @@ export interface SwarmRunSummary {
   created_at: string;
   task_count: number;
   completed_count: number;
+}
+
+export interface AdminUsageSummary {
+  total_users: number;
+  total_sessions: number;
+  total_messages: number;
+  total_attempts: number;
+  running_attempts: number;
+  failed_attempts: number;
+  completed_attempts: number;
+  total_strategies: number;
+}
+
+export interface AdminUserUsageRow {
+  user_id: number | null;
+  username: string;
+  display_name: string;
+  session_count: number;
+  message_count: number;
+  attempt_count: number;
+  running_attempt_count: number;
+  failed_attempt_count: number;
+  completed_attempt_count: number;
+  strategy_count: number;
+  last_session_at?: string | null;
+  last_message_at?: string | null;
+}
+
+export interface AdminDashboardResponse {
+  summary: AdminUsageSummary;
+  users: AuthUser[];
+  usage: AdminUserUsageRow[];
+}
+
+export interface AdminUserUpdateRequest {
+  display_name?: string;
+  password?: string;
+  revoke_tokens?: boolean;
+}
+
+export interface StrategyMarketAdminItem {
+  id: string;
+  kind: "built-in" | "paid";
+  enabled: boolean;
+  featured: boolean;
+  price: string;
+  status: "draft" | "published" | "hidden" | "archived";
+  note: string;
+  updated_at: string;
+}
+
+export interface StrategyMarketAdminResponse {
+  items: StrategyMarketAdminItem[];
 }
 
 export interface LLMProviderOption {
@@ -376,13 +509,25 @@ export interface ShadowOrder {
   account_type: "VIRTUAL" | "REAL" | string;
   symbol: string;
   side: "BUY" | "SELL";
-  type: "MARKET" | "LIMIT";
+  type: "MARKET" | "LIMIT" | "TRIGGER";
   price: number;
   quantity: number;
-  status: "PENDING" | "FILLED" | "CANCELED" | "REJECTED";
+  time_in_force?: "GTC" | "IOC" | "FOK" | "POST_ONLY" | string;
+  status: "PENDING" | "PARTIALLY_FILLED" | "FILLED" | "CANCELED" | "EXPIRED" | "REJECTED";
   executed_price: number;
+  average_price?: number;
+  filled_quantity?: number;
+  remaining_quantity?: number;
+  executed_value?: number;
   reserved_asset: string;
   reserved_amount: number;
+  fee_asset?: string;
+  fee_paid?: number;
+  trigger_price?: number;
+  trigger_condition?: "GTE" | "LTE" | string;
+  trigger_order_type?: "MARKET" | "LIMIT" | string;
+  trigger_order_price?: number;
+  triggered_at?: number;
   rejection_reason?: string;
   timestamp: number;
   updated_at: number;
@@ -399,9 +544,14 @@ export interface ShadowAccountResponse {
 export interface ShadowPlaceOrderRequest {
   symbol: string;
   side: "BUY" | "SELL";
-  order_type: "MARKET" | "LIMIT";
+  order_type: "MARKET" | "LIMIT" | "TRIGGER";
   quantity: number;
   price?: number;
+  time_in_force?: "GTC" | "IOC" | "FOK" | "POST_ONLY";
+  trigger_price?: number;
+  trigger_condition?: "GTE" | "LTE";
+  trigger_order_type?: "MARKET" | "LIMIT";
+  trigger_order_price?: number;
 }
 
 export interface ShadowMarketPriceRequest {
@@ -414,6 +564,136 @@ export interface ShadowMarketPriceResponse {
   price: number;
   filled_orders: ShadowOrder[];
   account: ShadowAccountResponse;
+}
+
+export interface PaperLimits {
+  symbols: string[];
+  allowed_sides: Array<"BUY" | "SELL" | string>;
+  max_order_notional: number;
+  max_total_exposure: number;
+  max_trades_per_day: number;
+  min_cash_buffer: number;
+  default_order_notional: number;
+  order_type: "MARKET" | "LIMIT" | string;
+}
+
+export interface StrategySnapshot {
+  strategy_id: string;
+  name: string;
+  description: string;
+  language: string;
+  category: string;
+  tags: string[];
+  code: string;
+  source_updated_at: string;
+  version: string;
+}
+
+export interface PaperDeployment {
+  deployment_id: string;
+  user_id: number;
+  status: "draft" | "running" | "paused" | "archived" | string;
+  strategy_id: string;
+  strategy_snapshot: StrategySnapshot;
+  limits: PaperLimits;
+  created_at: string;
+  updated_at: string;
+  started_at?: string | null;
+  paused_at?: string | null;
+  archived_at?: string | null;
+  last_tick_at?: string | null;
+}
+
+export interface PaperSignal {
+  signal_id: string;
+  deployment_id: string;
+  user_id: number;
+  strategy_version: string;
+  symbol: string;
+  action: "BUY" | "SELL" | "HOLD" | string;
+  reason: string;
+  data_timestamp: string;
+  created_at: string;
+  confidence?: number | null;
+  target_weight?: number | null;
+  quantity?: number | null;
+  notional?: number | null;
+  limit_price?: number | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface PaperRiskDecision {
+  decision_id: string;
+  deployment_id: string;
+  signal_id: string;
+  user_id: number;
+  decision: "allowed" | "rejected" | string;
+  reason: string;
+  created_at: string;
+  breached_limit: string;
+  order_notional: number;
+  price: number;
+  quantity: number;
+}
+
+export interface PaperOrderLink {
+  link_id: string;
+  deployment_id: string;
+  signal_id: string;
+  decision_id: string;
+  user_id: number;
+  shadow_order_id: string;
+  shadow_status: ShadowOrder["status"] | string;
+  created_at: string;
+  rejection_reason: string;
+}
+
+export interface PaperTick {
+  tick_id: string;
+  deployment_id: string;
+  user_id: number;
+  outcome: "no_action" | "failed" | "rejected" | "order_placed" | string;
+  created_at: string;
+  reason: string;
+  signal_id?: string | null;
+  decision_id?: string | null;
+  shadow_order_id?: string | null;
+}
+
+export interface CreatePaperDeploymentRequest {
+  strategy_id: string;
+  limits: Partial<PaperLimits>;
+}
+
+export interface PaperDeploymentActionResponse {
+  deployment: PaperDeployment;
+}
+
+export interface PaperDeploymentListResponse {
+  deployments: PaperDeployment[];
+}
+
+export interface PaperDeploymentStatusResponse {
+  deployment: PaperDeployment;
+  latest_tick?: PaperTick | null;
+  recent_ticks: PaperTick[];
+  recent_signals: PaperSignal[];
+  recent_decisions: PaperRiskDecision[];
+  recent_orders: PaperOrderLink[];
+  summary: {
+    tick_count?: number;
+    order_count?: number;
+    rejected_decision_count?: number;
+    filled_order_count?: number;
+    [key: string]: number | undefined;
+  };
+}
+
+export interface PaperTickResponse {
+  tick: PaperTick;
+  signal?: PaperSignal | null;
+  decision?: PaperRiskDecision | null;
+  order_link?: PaperOrderLink | null;
 }
 
 export interface LLMSettings {
@@ -466,6 +746,33 @@ export interface AuthTokenResponse {
   token_type: "bearer";
   expires_at: string;
   user: AuthUser;
+}
+
+export interface ExchangeApiKeyBinding {
+  binding_id: number;
+  exchange: "okx" | "binance";
+  label: string;
+  api_key_hint: string;
+  api_secret_configured: boolean;
+  passphrase_configured: boolean;
+  product_type: "spot" | "usdm_futures";
+  margin_mode: "cross" | "isolated";
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ExchangeApiKeyBindingListResponse {
+  bindings: ExchangeApiKeyBinding[];
+}
+
+export interface CreateExchangeApiKeyBindingRequest {
+  exchange: "okx" | "binance";
+  label?: string;
+  api_key: string;
+  api_secret: string;
+  passphrase?: string;
+  product_type?: "spot" | "usdm_futures";
+  margin_mode?: "cross" | "isolated";
 }
 
 export interface RunListItem {
@@ -605,6 +912,41 @@ export interface BacktestMetrics {
   win_rate: number;
   trade_count: number;
   [key: string]: number;
+}
+
+export interface StrategyMarketBacktestRequest {
+  strategy_id: string;
+  start_date?: string;
+  end_date?: string;
+  symbol?: string;
+  interval?: string;
+}
+
+export interface StrategyBacktestRequest {
+  start_date?: string;
+  end_date?: string;
+  symbol?: string;
+  interval?: string;
+  source?: string;
+}
+
+export interface StrategyMarketBacktestResponse {
+  strategy_id: string;
+  status: "passed" | "failed";
+  run_id: string;
+  run_directory: string;
+  symbol: string;
+  timeframe: string;
+  period: string;
+  totalReturnPct: number;
+  annualizedReturnPct: number;
+  maxDrawdownPct: number;
+  sharpe: number;
+  winRatePct: number;
+  tradeCount: number;
+  engine: string;
+  assumptions: string[];
+  warnings: string[];
 }
 
 
@@ -1045,6 +1387,25 @@ export interface LiveAuthorizeResponse {
   oauth_token_present: boolean;
   instruction: string;
   note?: string;
+}
+
+export interface CryptoLiveConfigureRequest {
+  exchange: "okx" | "binance";
+  product_type: "spot" | "usdm_futures";
+  api_key: string;
+  api_secret: string;
+  passphrase?: string;
+  margin_mode?: "cross" | "isolated";
+  check_connection?: boolean;
+}
+
+export interface CryptoLiveConfigureResponse {
+  status: string;
+  exchange: string;
+  product_type: string;
+  profile_id: string;
+  config_path: string;
+  connection?: Record<string, unknown> | null;
 }
 
 /** Mandate limits surfaced inside a `GET /live/status` broker entry (SPEC §7.5). */

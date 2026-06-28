@@ -1,6 +1,6 @@
 ﻿import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { BarChart3, Bot, Moon, Sun, Plus, Trash2, Pencil, MessageSquare, ChevronsLeft, ChevronsRight, Settings, Layers, Loader2, Library, LogOut, Route, User, WalletCards, ShoppingBag, Star, BookOpen, Users, Code2 } from "lucide-react";
+import { BarChart3, Bot, Moon, Sun, Plus, Trash2, Pencil, MessageSquare, ChevronsLeft, ChevronsRight, Layers, Loader2, Library, LogOut, Route, User, WalletCards, ShoppingBag, Star, BookOpen, Users, Code2, UserCog, RadioTower } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
 import { api, type SessionItem } from "@/lib/api";
@@ -17,15 +17,16 @@ const NAV = [
   { to: "/dashboard", icon: BarChart3, labelKey: "nav.home" },
   { to: "/cockpit", icon: Route, labelKey: "nav.cockpit" },
   { to: "/agent", icon: Bot, labelKey: "nav.agent" },
-  { to: "/strategies", icon: Library, labelKey: "nav.strategies" },
+  { to: "/strategies", icon: Library, labelKey: "nav.ownedStrategies" },
   { to: "/market", icon: ShoppingBag, labelKey: "nav.market" },
   { to: "/masters", icon: Star, labelKey: "nav.masters" },
   { to: "/library", icon: BookOpen, labelKey: "nav.library" },
   { to: "/community", icon: Users, labelKey: "nav.community" },
   { to: "/api-docs", icon: Code2, labelKey: "nav.apiDocs" },
   { to: "/shadow-trading", icon: WalletCards, labelKey: "nav.shadowTrading" },
+  { to: "/live-trading", icon: RadioTower, labelKey: "nav.liveTrading" },
+  { to: "/personal-settings", icon: UserCog, labelKey: "nav.personalSettings" },
   { to: "/alpha-zoo", icon: Layers, labelKey: "nav.alphaZoo" },
-  { to: "/settings", icon: Settings, labelKey: "nav.settings" },
   { to: "/correlation", icon: BarChart3, labelKey: "nav.correlation" },
 ] as const;
 

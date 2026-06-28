@@ -1,41 +1,37 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { createPortal } from "react-dom";
+import { useNavigate } from "react-router-dom";
 import {
-  AlertTriangle,
   Bot,
   Check,
-  CheckCircle2,
-  Code2,
   Copy,
   Download,
   FileCode2,
-  Filter,
-  Gauge,
-  Library,
-  ListChecks,
+  FolderTree,
+  MoreHorizontal,
   Pencil,
   Play,
   Plus,
-  Save,
+  RadioTower,
   Search,
+  Share2,
   ShieldCheck,
-  SlidersHorizontal,
-  Sparkles,
+  Store,
   Trash2,
   Upload,
   WandSparkles,
+  WalletCards,
   X,
-  type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { api, ApiError, type StrategyLibraryItem } from "@/lib/api";
 import { useTranslation } from "@/i18n/I18nProvider";
+import { mergeOwnedStrategies, readOwnedStrategies, saveOwnedStrategies } from "@/lib/strategyStorage";
 
 type StrategyLanguage = "python" | "pine" | "javascript";
 type StrategyStatus = "draft" | "testing" | "live" | "archived";
 type StrategyCategory = "trend" | "mean_reversion" | "grid" | "risk" | "portfolio" | "arbitrage" | "utility";
-type SortMode = "updated" | "name" | "status";
 
 interface StrategyItem {
   id: string;
@@ -52,25 +48,17 @@ interface StrategyItem {
 
 type StrategyPersistenceMode = "checking" | "remote" | "local";
 
-interface AssistantPrompt {
-  title: string;
-  prompt: string;
-  category: StrategyCategory;
-}
+type MoreMenuState = {
+  strategy: StrategyItem;
+  top: number;
+  left: number;
+};
 
-interface StrategyTemplate {
-  id: string;
-  titleZh: string;
-  titleEn: string;
-  descriptionZh: string;
-  descriptionEn: string;
-  language: StrategyLanguage;
-  category: StrategyCategory;
-  tags: string[];
-  code: string;
-}
-
-const STORAGE_KEY = "vibe-personal-strategy-library";
+const supportedMarketBacktestIds = new Set([
+  "crypto-trend-momentum",
+  "crypto-stat-arb-pairs",
+  "professional-grid-trading",
+]);
 
 const languageOptions: Array<{ value: StrategyLanguage; label: string }> = [
   { value: "python", label: "Python" },
@@ -95,12 +83,6 @@ const categoryOptions: Array<{ value: StrategyCategory }> = [
   { value: "utility" },
 ];
 
-const sortOptions: Array<{ value: SortMode; labelKey: "strategy.sortUpdated" | "strategy.sortName" | "strategy.sortStatus" }> = [
-  { value: "updated", labelKey: "strategy.sortUpdated" },
-  { value: "name", labelKey: "strategy.sortName" },
-  { value: "status", labelKey: "strategy.sortStatus" },
-];
-
 const starterCode = `# Strategy idea
 # Replace this draft with your entry, exit, sizing, and risk rules.
 
@@ -111,256 +93,6 @@ def generate_signals(data):
     signal = (fast > slow).astype(int)
     return signal.diff().fillna(0)
 `;
-
-const seedStrategies: StrategyItem[] = [
-  {
-    id: "dual-ma-cross",
-    name: "双均线交叉策略",
-    description: "快慢均线交叉生成多空信号，适合作为趋势策略模板。",
-    language: "python",
-    category: "trend",
-    status: "testing",
-    tags: ["MA", "trend", "backtest"],
-    createdAt: "2026-06-14T00:00:00.000Z",
-    updatedAt: "2026-06-14T00:00:00.000Z",
-    code: `def generate_signals(data, fast_window=20, slow_window=60):
-    close = data["close"]
-    fast_ma = close.rolling(fast_window).mean()
-    slow_ma = close.rolling(slow_window).mean()
-    position = (fast_ma > slow_ma).astype(int)
-    signal = position.diff().fillna(0)
-    signal.name = "dual_ma_signal"
-    return signal
-`,
-  },
-  {
-    id: "bollinger-breakout",
-    name: "布林带突破策略",
-    description: "价格突破布林带上轨入场，回到中轨或触发风控时离场。",
-    language: "python",
-    category: "trend",
-    status: "draft",
-    tags: ["BOLL", "breakout", "volatility"],
-    createdAt: "2026-06-14T00:00:00.000Z",
-    updatedAt: "2026-06-14T00:00:00.000Z",
-    code: `def bollinger_breakout(data, window=20, num_std=2, stop_loss=0.06):
-    close = data["close"]
-    mid = close.rolling(window).mean()
-    band = close.rolling(window).std() * num_std
-    upper = mid + band
-    long_entry = close > upper
-    long_exit = close < mid
-    signal = long_entry.astype(int) - long_exit.astype(int)
-    return signal.clip(-1, 1)
-`,
-  },
-  {
-    id: "rsi-reversal",
-    name: "RSI 超买超卖策略",
-    description: "RSI 低位反弹做多，高位回落离场，适合震荡行情验证。",
-    language: "python",
-    category: "mean_reversion",
-    status: "draft",
-    tags: ["RSI", "reversal", "oscillator"],
-    createdAt: "2026-06-14T00:00:00.000Z",
-    updatedAt: "2026-06-14T00:00:00.000Z",
-    code: `def rsi_reversal(data, rsi, lower=30, upper=70, max_position=1.0):
-    long_entry = rsi.shift(1) < lower
-    long_exit = rsi.shift(1) > upper
-    signal = long_entry.astype(int) - long_exit.astype(int)
-    return signal.clip(-1, 1) * max_position
-`,
-  },
-];
-
-const strategyTemplates: StrategyTemplate[] = [
-  {
-    id: "template-dual-ma",
-    titleZh: "双均线趋势模板",
-    titleEn: "Dual MA Trend",
-    descriptionZh: "入场、离场、仓位和交易成本占位完整，适合作为 Python 回测起点。",
-    descriptionEn: "A complete Python starting point with entry, exit, sizing, and cost placeholders.",
-    language: "python",
-    category: "trend",
-    tags: ["MA", "trend", "risk"],
-    code: `def generate_signals(data, fast_window=20, slow_window=60, max_position=1.0):
-    close = data["close"]
-    fast_ma = close.rolling(fast_window).mean()
-    slow_ma = close.rolling(slow_window).mean()
-
-    trend_up = fast_ma > slow_ma
-    position = trend_up.astype(float) * max_position
-    signal = position.diff().fillna(0)
-    return signal.clip(-max_position, max_position)
-
-
-def risk_config():
-    return {
-        "stop_loss": 0.06,
-        "take_profit": 0.18,
-        "max_drawdown": 0.12,
-        "commission": 0.0003,
-        "slippage": 0.0005,
-    }
-`,
-  },
-  {
-    id: "template-rsi-reversal",
-    titleZh: "RSI 均值回归模板",
-    titleEn: "RSI Mean Reversion",
-    descriptionZh: "适合震荡行情验证，带冷却周期、仓位上限和风险参数。",
-    descriptionEn: "Mean-reversion skeleton with cooldown, position cap, and risk parameters.",
-    language: "python",
-    category: "mean_reversion",
-    tags: ["RSI", "reversal", "cooldown"],
-    code: `def generate_signals(data, rsi, lower=30, upper=70, cooldown_bars=3):
-    close = data["close"]
-    entry = (rsi.shift(1) < lower) & (rsi >= lower)
-    exit_signal = (rsi.shift(1) > upper) & (rsi <= upper)
-
-    raw_signal = entry.astype(int) - exit_signal.astype(int)
-    cooled = raw_signal.where(raw_signal.abs().rolling(cooldown_bars).sum() <= 1, 0)
-    return cooled.reindex(close.index).fillna(0)
-
-
-RISK = {
-    "max_position": 0.35,
-    "stop_loss": 0.04,
-    "take_profit": 0.10,
-    "commission": 0.0003,
-}
-`,
-  },
-  {
-    id: "template-grid",
-    titleZh: "网格策略骨架",
-    titleEn: "Grid Strategy Skeleton",
-    descriptionZh: "定义网格间距、最大层数、极端行情保护和止损止盈。",
-    descriptionEn: "Defines grid spacing, max levels, extreme-market guardrails, and exits.",
-    language: "python",
-    category: "grid",
-    tags: ["grid", "risk", "position"],
-    code: `def grid_orders(mid_price, grid_pct=0.008, levels=5, base_qty=1):
-    orders = []
-    for level in range(1, levels + 1):
-        buy_price = mid_price * (1 - grid_pct * level)
-        sell_price = mid_price * (1 + grid_pct * level)
-        orders.append({"side": "buy", "price": buy_price, "qty": base_qty})
-        orders.append({"side": "sell", "price": sell_price, "qty": base_qty})
-    return orders
-
-
-def risk_guard(equity_curve, max_drawdown=0.10):
-    peak = equity_curve.cummax()
-    drawdown = equity_curve / peak - 1
-    return drawdown.iloc[-1] > -max_drawdown
-`,
-  },
-  {
-    id: "template-pine-ma",
-    titleZh: "TradingView 均线脚本",
-    titleEn: "TradingView MA Script",
-    descriptionZh: "Pine Script v5 策略模板，适合快速验证均线交叉逻辑。",
-    descriptionEn: "Pine Script v5 strategy template for quick MA crossover validation.",
-    language: "pine",
-    category: "trend",
-    tags: ["Pine", "TradingView", "MA"],
-    code: `//@version=5
-strategy("Dual MA Strategy", overlay=true, initial_capital=100000, commission_value=0.03)
-
-fastLen = input.int(20, "Fast MA", minval=1)
-slowLen = input.int(60, "Slow MA", minval=2)
-riskPct = input.float(1.0, "Risk %", minval=0.1, maxval=5)
-
-fast = ta.sma(close, fastLen)
-slow = ta.sma(close, slowLen)
-
-longEntry = ta.crossover(fast, slow)
-longExit = ta.crossunder(fast, slow)
-
-if longEntry
-    strategy.entry("Long", strategy.long, qty_percent=riskPct)
-
-if longExit
-    strategy.close("Long")
-
-plot(fast, color=color.orange)
-plot(slow, color=color.blue)
-`,
-  },
-  {
-    id: "template-trailing-stop",
-    titleZh: "追踪止损工具函数",
-    titleEn: "Trailing Stop Utility",
-    descriptionZh: "独立风控函数，可迁移到趋势、网格和组合策略。",
-    descriptionEn: "Portable risk helper for trend, grid, and portfolio strategies.",
-    language: "python",
-    category: "risk",
-    tags: ["stop", "risk", "utility"],
-    code: `def trailing_stop(position_side, entry_price, high_watermark, low_watermark, trail_pct=0.05):
-    if position_side == "long":
-        stop_price = high_watermark * (1 - trail_pct)
-        return max(stop_price, entry_price * (1 - trail_pct * 1.5))
-
-    if position_side == "short":
-        stop_price = low_watermark * (1 + trail_pct)
-        return min(stop_price, entry_price * (1 + trail_pct * 1.5))
-
-    raise ValueError("position_side must be long or short")
-`,
-  },
-];
-
-const assistantPrompts: AssistantPrompt[] = [
-  { title: "写一个均线交易策略", category: "trend", prompt: "写一个均线交易策略，包含参数说明、入场/出场规则、仓位控制、回测示例和风险提示。" },
-  { title: "写一个线性回归的函数", category: "utility", prompt: "写一个可复用的线性回归函数，用于量化策略中的趋势斜率判断，并给出示例调用。" },
-  { title: "写一个带止损止盈的网格策略", category: "grid", prompt: "写一个带止损止盈的网格交易策略，包含网格间距、最大仓位、止损止盈、极端行情保护和回测思路。" },
-  { title: "写一个布林带突破策略", category: "trend", prompt: "写一个布林带突破策略，包含信号生成、过滤条件、止损止盈、参数默认值和 Python 代码。" },
-  { title: "写一个RSI超买超卖策略", category: "mean_reversion", prompt: "写一个 RSI 超买超卖策略，解释适用市场、参数、交易规则，并生成可回测的 Python 代码。" },
-  { title: "写一个MACD金叉死叉策略", category: "trend", prompt: "写一个 MACD 金叉死叉策略，包含趋势过滤、仓位控制、回测指标和完整代码。" },
-  { title: "写一个追踪止损函数", category: "risk", prompt: "写一个追踪止损函数，支持多头/空头、最高价/最低价更新、触发价计算和单元测试样例。" },
-  { title: "写一个双均线交叉策略", category: "trend", prompt: "写一个双均线交叉策略，要求代码清晰、参数可配置，并说明如何避免震荡行情频繁交易。" },
-  { title: "写一个定时定额定投策略", category: "portfolio", prompt: "写一个定时定额定投策略，支持固定周期、现金管理、再平衡和回测绩效分析。" },
-  { title: "分析策略逻辑与风险", category: "risk", prompt: "分析下面策略的交易逻辑、潜在风险、过拟合点、参数敏感性和改进建议。策略代码如下：\n\n" },
-  { title: "分析我的代码有什么问题", category: "utility", prompt: "分析我的策略代码有什么问题，重点检查 look-ahead bias、数据泄漏、交易成本、异常处理和代码可维护性。代码如下：\n\n" },
-  { title: "给代码添加中文注释", category: "utility", prompt: "给下面策略代码添加清晰的中文注释，不改变逻辑，并指出关键参数含义。代码如下：\n\n" },
-  { title: "写一个动量突破策略", category: "trend", prompt: "写一个动量突破策略，包含突破定义、成交量/波动率过滤、止损止盈和回测代码。" },
-  { title: "写一个多品种轮动策略", category: "portfolio", prompt: "写一个多品种轮动策略，使用动量或风险调整收益排序，包含调仓频率、资产池、风控和回测实现。" },
-  { title: "写一个资金费率套利策略", category: "arbitrage", prompt: "写一个资金费率套利策略，覆盖现货/永续对冲、资金费率筛选、基差风险、手续费、滑点和风控。" },
-];
-
-const qualityRules = [
-  {
-    id: "signals",
-    labelKey: "strategy.checkSignals",
-    hintKey: "strategy.checkSignalsHint",
-    test: (strategy: StrategyItem) => /generate_signals|signal|entry|exit|long|short|buy|sell|入场|出场|买入|卖出/i.test(strategy.code),
-  },
-  {
-    id: "risk",
-    labelKey: "strategy.checkRisk",
-    hintKey: "strategy.checkRiskHint",
-    test: (strategy: StrategyItem) => /risk|stop|drawdown|position|sizing|take_profit|max_position|止损|止盈|风控|仓位|回撤/i.test(`${strategy.description}\n${strategy.code}`),
-  },
-  {
-    id: "parameters",
-    labelKey: "strategy.checkParams",
-    hintKey: "strategy.checkParamsHint",
-    test: (strategy: StrategyItem) => /def\s+\w+\([^)]*=|input\.|const\s+\w+\s*=|let\s+\w+\s*=|参数|window|period|threshold/i.test(strategy.code),
-  },
-  {
-    id: "costs",
-    labelKey: "strategy.checkCosts",
-    hintKey: "strategy.checkCostsHint",
-    test: (strategy: StrategyItem) => /backtest|commission|slippage|fee|cost|spread|回测|手续费|滑点|交易成本/i.test(`${strategy.description}\n${strategy.code}`),
-  },
-  {
-    id: "lookahead",
-    labelKey: "strategy.checkLookahead",
-    hintKey: "strategy.checkLookaheadHint",
-    test: (strategy: StrategyItem) => !/shift\s*\(\s*-\d+|future|tomorrow|未来函数|未来数据/i.test(strategy.code),
-  },
-] as const;
 
 function createId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -385,22 +117,14 @@ function isStrategyCategory(value: unknown): value is StrategyCategory {
   return categoryOptions.some((option) => option.value === value);
 }
 
-function toTags(value: string): string[] {
-  return value
-    .split(/[,，\s]+/)
-    .map((tag) => tag.trim())
-    .filter(Boolean)
-    .slice(0, 8);
-}
-
-function formatDate(value: string) {
+function formatDate(value: string, withTime = true) {
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "—";
+  if (Number.isNaN(date.getTime())) return "-";
   return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    ...(withTime ? { hour: "2-digit", minute: "2-digit" } : {}),
   }).format(date);
 }
 
@@ -425,22 +149,26 @@ function normalizeStrategy(value: unknown, fallback: StrategyItem): StrategyItem
   };
 }
 
-function loadStrategies(): StrategyItem[] {
-  if (typeof window === "undefined") return seedStrategies;
-  const raw = window.localStorage.getItem(STORAGE_KEY);
-  if (!raw) return seedStrategies;
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return seedStrategies;
-    return parsed.map((item, index) => normalizeStrategy(item, seedStrategies[index] ?? seedStrategies[0]));
-  } catch {
-    return seedStrategies;
-  }
+function newStrategy(overrides: Partial<StrategyItem> = {}): StrategyItem {
+  const now = new Date().toISOString();
+  return {
+    id: createId(),
+    name: "Untitled Strategy",
+    description: "Describe the signal, universe, timeframe, and risk rule.",
+    language: "python",
+    category: "trend",
+    status: "draft",
+    tags: ["draft"],
+    code: starterCode,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
 }
 
-function saveStrategies(strategies: StrategyItem[]) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(strategies));
+function loadStrategies(): StrategyItem[] {
+  if (typeof window === "undefined") return [];
+  return readOwnedStrategies().map((item) => normalizeStrategy(item, newStrategy()));
 }
 
 function toApiStrategy(strategy: StrategyItem): StrategyLibraryItem {
@@ -460,48 +188,6 @@ function toApiStrategy(strategy: StrategyItem): StrategyLibraryItem {
 
 function isRemotePersistenceUnavailable(error: unknown): boolean {
   return error instanceof ApiError && (error.status === 404 || error.status === 501);
-}
-
-function buildAssistantPrompt(prompt: string, strategy?: StrategyItem | null) {
-  const parts = [
-    "你是量化策略助手，职责是协助策略编写、代码优化、Bug 修复、回测分析和风险审查。",
-    "请输出可执行或易于迁移的策略代码，并包含：策略逻辑、参数说明、风险点、回测建议和下一步验证清单。",
-    "",
-    prompt,
-  ];
-  if (strategy) {
-    parts.push("", `当前策略名称：${strategy.name}`, `当前策略描述：${strategy.description}`, "当前策略代码：", strategy.code);
-  }
-  return parts.join("\n");
-}
-
-function newStrategy(overrides: Partial<StrategyItem> = {}): StrategyItem {
-  const now = new Date().toISOString();
-  return {
-    id: createId(),
-    name: "Untitled Strategy",
-    description: "Describe the signal, universe, timeframe, and risk rule.",
-    language: "python",
-    category: "trend",
-    status: "draft",
-    tags: ["draft"],
-    code: starterCode,
-    createdAt: now,
-    updatedAt: now,
-    ...overrides,
-  };
-}
-
-function templateToStrategy(template: StrategyTemplate, language: string): StrategyItem {
-  return newStrategy({
-    name: language === "zh-CN" ? template.titleZh : template.titleEn,
-    description: language === "zh-CN" ? template.descriptionZh : template.descriptionEn,
-    language: template.language,
-    category: template.category,
-    status: "draft",
-    tags: template.tags,
-    code: template.code,
-  });
 }
 
 function extractStrategies(payload: unknown): StrategyItem[] {
@@ -531,53 +217,96 @@ function downloadJson(fileName: string, data: unknown) {
   URL.revokeObjectURL(url);
 }
 
+function marketBacktestId(strategy: StrategyItem): string | null {
+  if (supportedMarketBacktestIds.has(strategy.id)) return strategy.id;
+  try {
+    const parsed = JSON.parse(strategy.code) as unknown;
+    if (isRecord(parsed)) {
+      const strategyId = typeof parsed.strategy_id === "string" ? parsed.strategy_id : "";
+      if (supportedMarketBacktestIds.has(strategyId)) return strategyId;
+    }
+  } catch {
+    // Non-JSON strategies use the personal strategy backtest endpoint.
+  }
+  return null;
+}
+
+function paperLimitsForStrategy(strategy: StrategyItem) {
+  const fallbackRisk = {
+    max_order_notional: 500,
+    max_total_exposure: 5000,
+    max_trades_per_day: 5,
+    min_cash_buffer: 100,
+  };
+  let symbol = "BTC_USDT";
+  let risk = fallbackRisk;
+  try {
+    const parsed = JSON.parse(strategy.code) as unknown;
+    if (isRecord(parsed)) {
+      const signal = isRecord(parsed.paper_signal) ? parsed.paper_signal : null;
+      const rawSymbol = typeof signal?.symbol === "string" ? signal.symbol : "";
+      if (rawSymbol.trim()) symbol = rawSymbol.replace("-", "_").replace("/", "_").toUpperCase();
+      if (isRecord(parsed.risk)) {
+        risk = {
+          max_order_notional: Number(parsed.risk.max_order_notional) || fallbackRisk.max_order_notional,
+          max_total_exposure: Number(parsed.risk.max_total_exposure) || fallbackRisk.max_total_exposure,
+          max_trades_per_day: Number(parsed.risk.max_trades_per_day) || fallbackRisk.max_trades_per_day,
+          min_cash_buffer: Number(parsed.risk.min_cash_buffer) || fallbackRisk.min_cash_buffer,
+        };
+      }
+    }
+  } catch {
+    // Plain Python strategies use the conservative default paper limits.
+  }
+  return {
+    symbols: [symbol],
+    allowed_sides: ["BUY", "SELL"],
+    max_order_notional: risk.max_order_notional,
+    max_total_exposure: risk.max_total_exposure,
+    max_trades_per_day: risk.max_trades_per_day,
+    min_cash_buffer: risk.min_cash_buffer,
+    default_order_notional: Math.min(100, risk.max_order_notional),
+    order_type: "MARKET",
+  };
+}
+
+function buildAssistantPrompt(prompt: string, strategy?: StrategyItem | null) {
+  const parts = [
+    "你是量化策略助手，职责是协助策略编写、代码优化、Bug 修复、回测分析和风险审查。",
+    "请输出可执行或易于迁移的策略代码，并包含：策略逻辑、参数说明、风险点、回测建议和下一步验证清单。",
+    "",
+    prompt,
+  ];
+  if (strategy) {
+    parts.push("", `当前策略名称：${strategy.name}`, `当前策略描述：${strategy.description}`, "当前策略代码：", strategy.code);
+  }
+  return parts.join("\n");
+}
+
 function statusTone(status: StrategyStatus) {
-  if (status === "live") return "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300";
-  if (status === "testing") return "border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-300";
+  if (status === "live") return "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
+  if (status === "testing") return "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300";
   if (status === "archived") return "border-zinc-500/30 bg-zinc-500/10 text-muted-foreground";
   return "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300";
-}
-
-function MetricPill({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value: number }) {
-  return (
-    <div className="inline-flex min-w-0 items-center gap-2 rounded-md border bg-background px-2.5 py-1.5">
-      <Icon className="h-3.5 w-3.5 shrink-0 text-primary" />
-      <span className="truncate">{label}</span>
-      <span className="font-mono font-semibold text-foreground">{value.toLocaleString()}</span>
-    </div>
-  );
-}
-
-function sortStrategies(items: StrategyItem[], mode: SortMode): StrategyItem[] {
-  const statusRank: Record<StrategyStatus, number> = {
-    live: 0,
-    testing: 1,
-    draft: 2,
-    archived: 3,
-  };
-  return [...items].sort((a, b) => {
-    if (mode === "name") return a.name.localeCompare(b.name);
-    if (mode === "status") return statusRank[a.status] - statusRank[b.status] || b.updatedAt.localeCompare(a.updatedAt);
-    return b.updatedAt.localeCompare(a.updatedAt);
-  });
 }
 
 export function StrategyLibrary() {
   const { t, language } = useTranslation();
   const navigate = useNavigate();
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  const moreMenuRef = useRef<HTMLDivElement | null>(null);
   const remoteReadyRef = useRef(false);
   const pendingDeleteIdsRef = useRef<Set<string>>(new Set());
   const [strategies, setStrategies] = useState<StrategyItem[]>(() => loadStrategies());
   const [activeId, setActiveId] = useState(() => strategies[0]?.id ?? "");
   const [persistenceMode, setPersistenceMode] = useState<StrategyPersistenceMode>("checking");
   const [query, setQuery] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState<StrategyCategory | "all">("all");
-  const [statusFilter, setStatusFilter] = useState<StrategyStatus | "all">("all");
-  const [languageFilter, setLanguageFilter] = useState<StrategyLanguage | "all">("all");
-  const [sortMode, setSortMode] = useState<SortMode>("updated");
-  const [assistantQuery, setAssistantQuery] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [runningId, setRunningId] = useState<string | null>(null);
+  const [paperRunningId, setPaperRunningId] = useState<string | null>(null);
+  const [moreMenu, setMoreMenu] = useState<MoreMenuState | null>(null);
+  const [editorId, setEditorId] = useState<string | null>(null);
+  const [savingEditor, setSavingEditor] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -587,15 +316,15 @@ export function StrategyLibrary() {
         remoteReadyRef.current = true;
         setPersistenceMode("remote");
         const remoteStrategies = payload.strategies
-          .map((item, index) => normalizeStrategy(item, seedStrategies[index] ?? seedStrategies[0]))
+          .map((item) => normalizeStrategy(item, newStrategy()))
           .filter((strategy) => strategy.name.trim() && strategy.code.trim());
-        if (remoteStrategies.length > 0) {
-          setStrategies(remoteStrategies);
-          setActiveId(remoteStrategies[0].id);
-          saveStrategies(remoteStrategies);
-        } else {
-          api.replaceStrategies(strategies.map(toApiStrategy)).catch(() => undefined);
-        }
+        const localStrategies = readOwnedStrategies();
+        const hydratedStrategies = mergeOwnedStrategies(remoteStrategies, localStrategies)
+          .map((item) => normalizeStrategy(item, newStrategy()))
+          .filter((strategy) => strategy.name.trim() && strategy.code.trim());
+        setStrategies(hydratedStrategies);
+        setActiveId(hydratedStrategies[0]?.id ?? "");
+        saveOwnedStrategies(hydratedStrategies);
       })
       .catch((error) => {
         if (cancelled) return;
@@ -608,12 +337,10 @@ export function StrategyLibrary() {
     return () => {
       cancelled = true;
     };
-    // Initial remote hydration only. Later edits sync through the debounced effect below.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    saveStrategies(strategies);
+    saveOwnedStrategies(strategies);
     if (!remoteReadyRef.current) return;
     const timer = window.setTimeout(() => {
       const deleteIds = Array.from(pendingDeleteIdsRef.current);
@@ -634,106 +361,169 @@ export function StrategyLibrary() {
 
   useEffect(() => {
     if (strategies.length === 0) {
-      const draft = newStrategy({
-        name: t("strategy.untitled"),
-        description: t("strategy.defaultDescription"),
-      });
-      setStrategies([draft]);
-      setActiveId(draft.id);
+      if (activeId) setActiveId("");
       return;
     }
     if (!strategies.some((strategy) => strategy.id === activeId)) {
       setActiveId(strategies[0].id);
     }
-  }, [activeId, strategies, t]);
+  }, [activeId, strategies]);
 
-  const categoryLabels: Record<StrategyCategory, string> = language === "zh-CN"
+  useEffect(() => {
+    if (!moreMenu) return;
+    const close = () => setMoreMenu(null);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && moreMenuRef.current?.contains(target)) return;
+      close();
+    };
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", close, true);
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", close, true);
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [moreMenu]);
+
+  const copy = language === "zh-CN"
     ? {
-      trend: "趋势",
-      mean_reversion: "均值回归",
-      grid: "网格",
-      risk: "风控",
-      portfolio: "组合",
-      arbitrage: "套利",
-      utility: "工具",
+      newStrategy: "新建策略",
+      debugTool: "调试工具",
+      authorization: "授权管理",
+      groups: "分组管理",
+      exportCurrent: "导出当前",
+      import: "导入",
+      name: "策略名称",
+      description: "策略说明",
+      languageLabel: "语言",
+      categoryLabel: "分类",
+      statusLabel: "状态",
+      tagsLabel: "标签",
+      codeLabel: "策略代码",
+      details: "策略详情",
+      close: "关闭",
+      save: "保存",
+      saving: "保存中",
+      saved: "已保存",
+      updatedAt: "最后修改时间",
+      createdAt: "创建日期",
+      actions: "操作项",
+      edit: "编辑",
+      duplicate: "复制",
+      delete: "删除",
+      more: "更多",
+      share: "分享",
+      rent: "出租",
+      run: "运行",
+      paperRun: "模拟盘运行",
+      paperRunning: "启动中",
+      paperExists: "该策略已在模拟盘运行",
+      liveRun: "实盘",
+      liveTitle: "实盘配置",
+      liveDescription: "填写你自己的交易所 API 配置。保存后会使用对应的 live profile；真实下单仍受 mandate 和 kill switch 保护。",
+      exchange: "交易所",
+      productType: "产品类型",
+      spot: "现货",
+      usdmFutures: "U本位合约",
+      marginMode: "保证金模式",
+      apiKey: "API Key",
+      apiSecret: "API Secret",
+      passphrase: "Passphrase",
+      checkConnection: "保存后检查连接",
+      liveConsent: "我确认这是我自己的真实 API 配置，并理解实盘会影响真实资金。",
+      liveConfigured: "实盘配置已保存",
+      liveMissing: "请填写必填配置并确认风险",
+      backtest: "回测",
+      backtesting: "回测中",
+      confirm: "确认",
+      cancel: "取消",
+      search: "搜索策略名称",
+      empty: "还没有策略",
+      emptyHint: "先新建一个策略，或从策略商城保存策略到这里。",
+      savedRemote: "已保存到 MySQL",
+      savedLocal: "本地保存",
+      checking: "正在检查存储",
     }
     : {
-      trend: "Trend",
-      mean_reversion: "Mean Reversion",
-      grid: "Grid",
-      risk: "Risk",
-      portfolio: "Portfolio",
-      arbitrage: "Arbitrage",
-      utility: "Utility",
-    };
-  const statusLabels: Record<StrategyStatus, string> = language === "zh-CN"
-    ? {
-      draft: "草稿",
-      testing: "测试中",
-      live: "运行中",
-      archived: "已归档",
-    }
-    : {
-      draft: "Draft",
-      testing: "Testing",
-      live: "Live",
-      archived: "Archived",
+      newStrategy: "New Strategy",
+      debugTool: "Debug Tools",
+      authorization: "Authorization",
+      groups: "Groups",
+      exportCurrent: "Export Current",
+      import: "Import",
+      name: "Strategy Name",
+      description: "Description",
+      languageLabel: "Language",
+      categoryLabel: "Category",
+      statusLabel: "Status",
+      tagsLabel: "Tags",
+      codeLabel: "Strategy Code",
+      details: "Strategy Details",
+      close: "Close",
+      save: "Save",
+      saving: "Saving",
+      saved: "Saved",
+      updatedAt: "Last Modified",
+      createdAt: "Created",
+      actions: "Actions",
+      edit: "Edit",
+      duplicate: "Copy",
+      delete: "Delete",
+      more: "More",
+      share: "Share",
+      rent: "Rent",
+      run: "Run",
+      paperRun: "Run Paper",
+      paperRunning: "Starting",
+      paperExists: "This strategy is already running in paper trading",
+      liveRun: "Live",
+      liveTitle: "Live Trading Config",
+      liveDescription: "Enter your own exchange API credentials. Saving uses the matching live profile; real orders remain guarded by mandate and kill switch.",
+      exchange: "Exchange",
+      productType: "Product",
+      spot: "Spot",
+      usdmFutures: "USD-M Futures",
+      marginMode: "Margin Mode",
+      apiKey: "API Key",
+      apiSecret: "API Secret",
+      passphrase: "Passphrase",
+      checkConnection: "Check connection after save",
+      liveConsent: "I confirm these are my own real API credentials and understand live trading affects real funds.",
+      liveConfigured: "Live config saved",
+      liveMissing: "Fill required fields and confirm the risk",
+      backtest: "Backtest",
+      backtesting: "Backtesting",
+      confirm: "Confirm",
+      cancel: "Cancel",
+      search: "Search strategy names",
+      empty: "No owned strategies yet",
+      emptyHint: "Create a strategy or save one from the strategy market.",
+      savedRemote: "Saved to MySQL",
+      savedLocal: "Saved locally",
+      checking: "Checking storage",
     };
 
+  const activeStrategy = strategies.find((strategy) => strategy.id === activeId) ?? strategies[0] ?? null;
+  const editorStrategy = editorId ? strategies.find((strategy) => strategy.id === editorId) ?? null : null;
   const filteredStrategies = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const filtered = strategies.filter((strategy) => {
-      if (categoryFilter !== "all" && strategy.category !== categoryFilter) return false;
-      if (statusFilter !== "all" && strategy.status !== statusFilter) return false;
-      if (languageFilter !== "all" && strategy.language !== languageFilter) return false;
-      if (!q) return true;
-      return [
-        strategy.name,
-        strategy.description,
-        strategy.language,
-        strategy.category,
-        strategy.status,
-        strategy.tags.join(" "),
-        strategy.code,
-      ].some((value) => value.toLowerCase().includes(q));
-    });
-    return sortStrategies(filtered, sortMode);
-  }, [categoryFilter, languageFilter, query, sortMode, statusFilter, strategies]);
+    const items = q ? strategies.filter((strategy) => strategy.name.toLowerCase().includes(q)) : strategies;
+    return [...items].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }, [query, strategies]);
+  const saveLabel = persistenceMode === "remote" ? copy.savedRemote : persistenceMode === "checking" ? copy.checking : copy.savedLocal;
 
-  const activeStrategy = strategies.find((strategy) => strategy.id === activeId) ?? strategies[0];
-
-  const filteredPrompts = useMemo(() => {
-    const q = assistantQuery.trim().toLowerCase();
-    if (!q) return assistantPrompts;
-    return assistantPrompts.filter((item) => `${item.title} ${item.prompt}`.toLowerCase().includes(q));
-  }, [assistantQuery]);
-
-  const activeChecks = useMemo(
-    () => (activeStrategy ? qualityRules.map((rule) => ({ ...rule, passed: rule.test(activeStrategy) })) : []),
-    [activeStrategy],
-  );
-  const qualityScore = activeChecks.length
-    ? Math.round((activeChecks.filter((check) => check.passed).length / activeChecks.length) * 100)
-    : 0;
-  const totalCodeLines = strategies.reduce((sum, strategy) => sum + strategy.code.split("\n").length, 0);
-  const statusCounts = statusOptions.map((option) => ({
-    ...option,
-    count: strategies.filter((strategy) => strategy.status === option.value).length,
-  }));
-  const activeLineCount = activeStrategy?.code.split("\n").length ?? 0;
-  const activeCharCount = activeStrategy?.code.length ?? 0;
-  const activeIssueCount = activeChecks.filter((check) => !check.passed).length;
-  const saveLabel = persistenceMode === "remote" ? "Saved to MySQL" : t("strategy.autosaved");
-
-  const updateActive = (patch: Partial<StrategyItem>) => {
-    if (!activeStrategy) return;
-    setStrategies((current) =>
-      current.map((strategy) =>
-        strategy.id === activeStrategy.id
-          ? { ...strategy, ...patch, updatedAt: new Date().toISOString() }
-          : strategy,
-      ),
-    );
+  const updateStrategy = (id: string, patch: Partial<StrategyItem>) => {
+    const updatedAt = new Date().toISOString();
+    setStrategies((current) => current.map((strategy) => (
+      strategy.id === id ? { ...strategy, ...patch, updatedAt } : strategy
+    )));
   };
 
   const handleNew = () => {
@@ -746,20 +536,12 @@ export function StrategyLibrary() {
     toast.success(t("strategy.created"));
   };
 
-  const handleCreateFromTemplate = (template: StrategyTemplate) => {
-    const draft = templateToStrategy(template, language);
-    setStrategies((current) => [draft, ...current]);
-    setActiveId(draft.id);
-    toast.success(t("strategy.templateCreated"));
-  };
-
-  const handleDuplicate = () => {
-    if (!activeStrategy) return;
+  const handleDuplicate = (strategy: StrategyItem) => {
     const now = new Date().toISOString();
     const copyItem: StrategyItem = {
-      ...activeStrategy,
+      ...strategy,
       id: createId(),
-      name: `${activeStrategy.name} Copy`,
+      name: `${strategy.name} Copy`,
       status: "draft",
       createdAt: now,
       updatedAt: now,
@@ -778,20 +560,6 @@ export function StrategyLibrary() {
     });
     setDeleteTarget(null);
     toast.success(t("strategy.deleted"));
-  };
-
-  const handleTagsChange = (event: ChangeEvent<HTMLInputElement>) => {
-    updateActive({ tags: toTags(event.target.value) });
-  };
-
-  const handleCopyCode = async () => {
-    if (!activeStrategy) return;
-    try {
-      await navigator.clipboard.writeText(activeStrategy.code);
-      toast.success(t("chat.copied"));
-    } catch {
-      toast.error(t("strategy.copyFailed"));
-    }
   };
 
   const handleExport = (items: StrategyItem[], fileName: string) => {
@@ -834,34 +602,119 @@ export function StrategyLibrary() {
     }
   };
 
-  const resetFilters = () => {
-    setQuery("");
-    setCategoryFilter("all");
-    setStatusFilter("all");
-    setLanguageFilter("all");
-    setSortMode("updated");
-  };
-
-  const openAssistant = (prompt: string, withCurrent = true) => {
-    const finalPrompt = buildAssistantPrompt(prompt, withCurrent ? activeStrategy : null);
+  const openAssistant = (prompt: string, strategy?: StrategyItem | null) => {
     const promptKey = `strategy_prompt_${createId()}`;
-    window.sessionStorage.setItem(promptKey, finalPrompt);
+    window.sessionStorage.setItem(promptKey, buildAssistantPrompt(prompt, strategy));
     navigate(`/agent?promptKey=${encodeURIComponent(promptKey)}&auto=1`);
   };
 
-  const handleCustomAssistant = () => {
-    const prompt = assistantQuery.trim();
-    if (!prompt) return;
-    openAssistant(prompt);
+  const handleDebugTool = () => {
+    openAssistant(language === "zh-CN" ? "打开策略调试工具，帮我检查当前策略库中的策略代码、运行风险和回测准备度。" : "Open strategy debugging tools and inspect my current strategy library.");
   };
 
-  const quickActions = [
-    { label: t("strategy.actionReview"), prompt: t("strategy.reviewPrompt"), icon: ShieldCheck },
-    { label: t("strategy.actionOptimize"), prompt: t("strategy.optimizePrompt"), icon: WandSparkles },
-    { label: t("strategy.actionBacktest"), prompt: t("strategy.backtestPrompt"), icon: Gauge },
-    { label: t("strategy.actionRisk"), prompt: t("strategy.riskPrompt"), icon: AlertTriangle },
-    { label: t("strategy.actionExplain"), prompt: t("strategy.explainPrompt"), icon: Sparkles },
-  ] as const;
+  const handleEdit = (strategy: StrategyItem) => {
+    setActiveId(strategy.id);
+    setEditorId(strategy.id);
+  };
+
+  const handleSaveEditor = async () => {
+    if (!editorStrategy) return;
+    setSavingEditor(true);
+    try {
+      saveOwnedStrategies(strategies);
+      if (remoteReadyRef.current) {
+        await api.upsertStrategy(toApiStrategy(editorStrategy));
+      }
+      toast.success(copy.saved);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : language === "zh-CN" ? "保存策略失败" : "Failed to save strategy");
+    } finally {
+      setSavingEditor(false);
+    }
+  };
+
+  const handleRun = async (strategy: StrategyItem) => {
+    setMoreMenu(null);
+    setRunningId(strategy.id);
+    try {
+      await api.upsertStrategy(toApiStrategy(strategy));
+      const marketId = marketBacktestId(strategy);
+      const result = marketId
+        ? await api.runStrategyMarketBacktest({ strategy_id: marketId })
+        : await api.runStrategyBacktest(strategy.id, {
+          symbol: "BTC-USDT",
+          interval: "4H",
+          source: "okx",
+        });
+      toast.success(language === "zh-CN" ? "真实回测完成" : "Real backtest completed");
+      navigate(`/runs/${encodeURIComponent(result.run_id)}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : language === "zh-CN" ? "运行策略失败" : "Failed to run strategy");
+    } finally {
+      setRunningId(null);
+    }
+  };
+
+  const handleRunPaper = async (strategy: StrategyItem) => {
+    setPaperRunningId(strategy.id);
+    try {
+      await api.upsertStrategy(toApiStrategy(strategy));
+      const existing = await api.listPaperDeployments();
+      const existingDeployment = existing.deployments.find((deployment) => (
+        deployment.strategy_id === strategy.id && deployment.status !== "archived"
+      ));
+      if (existingDeployment) {
+        toast.message(copy.paperExists);
+        navigate(`/shadow-trading?paper=${encodeURIComponent(existingDeployment.deployment_id)}`);
+        return;
+      }
+      const result = await api.createPaperDeployment({
+        strategy_id: strategy.id,
+        limits: paperLimitsForStrategy(strategy),
+      });
+      await api.startPaperDeployment(result.deployment.deployment_id);
+      await api.runPaperDeploymentTick(result.deployment.deployment_id).catch(() => undefined);
+      toast.success(language === "zh-CN" ? "已启动模拟盘运行" : "Paper trading started");
+      navigate(`/shadow-trading?paper=${encodeURIComponent(result.deployment.deployment_id)}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : language === "zh-CN" ? "启动模拟盘失败" : "Failed to start paper trading");
+    } finally {
+      setPaperRunningId(null);
+    }
+  };
+
+  const handleOpenLive = async (strategy: StrategyItem) => {
+    setMoreMenu(null);
+    try {
+      if (remoteReadyRef.current) {
+        await api.upsertStrategy(toApiStrategy(strategy));
+      }
+      const result = await api.listExchangeApiKeys();
+      if (result.bindings.length === 0) {
+        toast.message(language === "zh-CN" ? "请先绑定 OKX 或 Binance API key" : "Bind an OKX or Binance API key first");
+        navigate("/personal-settings#exchange-api-bindings");
+        return;
+      }
+      navigate(`/live-trading?strategy=${encodeURIComponent(strategy.id)}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : language === "zh-CN" ? "打开实盘交易失败" : "Failed to open live trading");
+    }
+  };
+
+  const handlePendingAction = (label: string) => {
+    setMoreMenu(null);
+    toast.message(language === "zh-CN" ? `${label}功能待接入` : `${label} will be connected later`);
+  };
+
+  const openMoreMenu = (strategy: StrategyItem, anchor: HTMLElement) => {
+    const rect = anchor.getBoundingClientRect();
+    const width = 176;
+    const height = 176;
+    const left = Math.min(Math.max(8, rect.right - width), window.innerWidth - width - 8);
+    const below = rect.bottom + 6;
+    const top = below + height > window.innerHeight ? Math.max(8, rect.top - height - 6) : below;
+    setMoreMenu({ strategy, top, left });
+  };
 
   return (
     <div className="min-h-full bg-background">
@@ -874,582 +727,399 @@ export function StrategyLibrary() {
       />
 
       <div className="border-b bg-card">
-        <div className="mx-auto flex max-w-7xl flex-col gap-5 px-4 py-5 sm:px-6 lg:px-8">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-5 sm:px-6 lg:px-8">
+          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
             <div className="min-w-0">
-              <div className="mb-2 flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                <Library className="h-4 w-4 text-primary" />
+              <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                <FileCode2 className="h-4 w-4 text-primary" />
                 {t("strategy.kicker")}
               </div>
               <h1 className="text-2xl font-semibold tracking-normal text-foreground sm:text-3xl">
                 {t("strategy.title")}
               </h1>
-              <p className="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">
-                {t("strategy.subtitle")}
-              </p>
+              <p className="mt-1 text-sm text-muted-foreground">{saveLabel} · {strategies.length} {language === "zh-CN" ? "个策略" : "strategies"}</p>
             </div>
-            <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:justify-end">
-              <button
-                type="button"
-                onClick={() => importInputRef.current?.click()}
-                className="inline-flex min-w-0 items-center justify-center gap-2 rounded-md border bg-background px-3 py-2 text-sm font-semibold transition hover:bg-muted"
-              >
-                <Upload className="h-4 w-4 shrink-0" />
-                <span className="truncate">{t("strategy.import")}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleExport(strategies, "venus-strategy-library.json")}
-                className="inline-flex min-w-0 items-center justify-center gap-2 rounded-md border bg-background px-3 py-2 text-sm font-semibold transition hover:bg-muted"
-              >
-                <Download className="h-4 w-4 shrink-0" />
-                <span className="truncate">{t("strategy.exportAll")}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => openAssistant(t("strategy.defaultPrompt"), false)}
-                className="inline-flex min-w-0 items-center justify-center gap-2 rounded-md border bg-background px-3 py-2 text-sm font-semibold transition hover:bg-muted"
-              >
-                <WandSparkles className="h-4 w-4 shrink-0 text-primary" />
-                <span className="truncate">{t("strategy.aiCreate")}</span>
-              </button>
+
+            <div className="flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={handleNew}
-                className="inline-flex min-w-0 items-center justify-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90"
+                className="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90"
               >
-                <Plus className="h-4 w-4 shrink-0" />
-                <span className="truncate">{t("strategy.new")}</span>
+                <Plus className="h-4 w-4" />
+                {copy.newStrategy}
+              </button>
+              <button
+                type="button"
+                onClick={handleDebugTool}
+                className="inline-flex items-center justify-center gap-2 rounded-md border bg-background px-3 py-2 text-sm font-semibold transition hover:bg-muted"
+              >
+                <WandSparkles className="h-4 w-4 text-primary" />
+                {copy.debugTool}
+              </button>
+              <button
+                type="button"
+                onClick={() => activeStrategy && handleRun(activeStrategy)}
+                disabled={!activeStrategy || runningId === activeStrategy.id}
+                className="inline-flex items-center justify-center gap-2 rounded-md border bg-background px-3 py-2 text-sm font-semibold transition hover:bg-muted disabled:opacity-50"
+              >
+                <Play className="h-4 w-4 text-primary" />
+                {activeStrategy && runningId === activeStrategy.id ? copy.backtesting : copy.backtest}
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate("/operator#settings")}
+                className="inline-flex items-center justify-center gap-2 rounded-md border bg-background px-3 py-2 text-sm font-semibold transition hover:bg-muted"
+              >
+                <ShieldCheck className="h-4 w-4 text-primary" />
+                {copy.authorization}
+              </button>
+              <button
+                type="button"
+                onClick={() => handlePendingAction(copy.groups)}
+                className="inline-flex items-center justify-center gap-2 rounded-md border bg-background px-3 py-2 text-sm font-semibold transition hover:bg-muted"
+              >
+                <FolderTree className="h-4 w-4 text-primary" />
+                {copy.groups}
+              </button>
+              <button
+                type="button"
+                onClick={() => activeStrategy && handleExport([activeStrategy], `${activeStrategy.name || "strategy"}.json`)}
+                disabled={!activeStrategy}
+                className="inline-flex items-center justify-center gap-2 rounded-md border bg-background px-3 py-2 text-sm font-semibold transition hover:bg-muted disabled:opacity-50"
+              >
+                <Download className="h-4 w-4" />
+                {copy.exportCurrent}
+              </button>
+              <button
+                type="button"
+                onClick={() => importInputRef.current?.click()}
+                className="inline-flex h-10 w-10 items-center justify-center rounded-md border bg-background transition hover:bg-muted"
+                title={copy.import}
+              >
+                <Upload className="h-4 w-4" />
               </button>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <MetricPill icon={Library} label={t("strategy.count")} value={strategies.length} />
-            <MetricPill icon={ListChecks} label={t("strategy.testing")} value={strategies.filter((strategy) => strategy.status === "testing").length} />
-            <MetricPill icon={Filter} label={t("strategy.filtered")} value={filteredStrategies.length} />
-            <MetricPill icon={Code2} label={t("strategy.lines")} value={totalCodeLines} />
+          <div className="relative max-w-md">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder={copy.search}
+              className="h-10 w-full rounded-md border bg-background pl-9 pr-3 text-sm outline-none transition focus:ring-2 focus:ring-primary/25"
+            />
           </div>
         </div>
       </div>
 
-      <div className="mx-auto grid max-w-7xl gap-4 px-4 py-4 sm:px-6 lg:px-8 xl:grid-cols-[20rem_minmax(0,1fr)]">
-        <aside className="min-h-0 space-y-4">
-          <div className="rounded-lg border bg-card">
-            <div className="border-b p-3">
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <input
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder={t("strategy.searchPlaceholder")}
-                  className="h-10 w-full rounded-lg border bg-background pl-9 pr-3 text-sm outline-none transition focus:ring-2 focus:ring-primary/25"
-                />
-              </div>
-              <div className="mt-3 grid gap-2">
-                <div className="flex flex-wrap gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setCategoryFilter("all")}
-                    className={cn(
-                      "rounded-full border px-2.5 py-1 text-xs font-medium transition",
-                      categoryFilter === "all" ? "border-primary bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted",
-                    )}
+      <main className="mx-auto max-w-7xl px-4 py-5 sm:px-6 lg:px-8">
+        <div className="overflow-hidden rounded-lg border bg-card">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[900px] text-left text-sm">
+              <thead className="border-b bg-muted/40 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                <tr>
+                  <th className="px-4 py-3">{copy.name}</th>
+                  <th className="w-44 px-4 py-3">{copy.updatedAt}</th>
+                  <th className="w-36 px-4 py-3">{copy.createdAt}</th>
+                  <th className="w-[30rem] px-4 py-3 text-right">{copy.actions}</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {filteredStrategies.map((strategy) => (
+                  <tr
+                    key={strategy.id}
+                    onClick={() => setActiveId(strategy.id)}
+                    className={cn("transition hover:bg-muted/40", activeId === strategy.id && "bg-primary/5")}
                   >
-                    {t("strategy.all")}
-                  </button>
-                  {categoryOptions.map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => setCategoryFilter(option.value)}
-                      className={cn(
-                        "rounded-full border px-2.5 py-1 text-xs font-medium transition",
-                        categoryFilter === option.value ? "border-primary bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted",
-                      )}
-                    >
-                      {categoryLabels[option.value]}
-                    </button>
-                  ))}
-                </div>
+                    <td className="px-4 py-3">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full border", statusTone(strategy.status))} />
+                        <div className="min-w-0">
+                          <div className="truncate font-semibold text-foreground">{strategy.name}</div>
+                          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                            <span className="rounded border bg-background px-1.5 py-0.5 font-mono">{strategy.language}</span>
+                            {strategy.tags.slice(0, 3).map((tag) => (
+                              <span key={tag} className="rounded border bg-background px-1.5 py-0.5">{tag}</span>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{formatDate(strategy.updatedAt)}</td>
+                    <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{formatDate(strategy.createdAt, false)}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center justify-end gap-1.5" onClick={(event) => event.stopPropagation()}>
+                        <button
+                          type="button"
+                          onClick={() => handleEdit(strategy)}
+                          className="inline-flex items-center gap-1.5 rounded-md border bg-background px-2.5 py-1.5 text-xs font-semibold transition hover:bg-muted"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                          {copy.edit}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDuplicate(strategy)}
+                          className="inline-flex items-center gap-1.5 rounded-md border bg-background px-2.5 py-1.5 text-xs font-semibold transition hover:bg-muted"
+                        >
+                          <Copy className="h-3.5 w-3.5" />
+                          {copy.duplicate}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleRunPaper(strategy)}
+                          disabled={paperRunningId === strategy.id}
+                          className="inline-flex items-center gap-1.5 rounded-md border bg-background px-2.5 py-1.5 text-xs font-semibold transition hover:bg-muted disabled:opacity-50"
+                        >
+                          <WalletCards className="h-3.5 w-3.5" />
+                          {paperRunningId === strategy.id ? copy.paperRunning : copy.paperRun}
+                        </button>
+                        {deleteTarget === strategy.id ? (
+                          <div className="inline-flex items-center overflow-hidden rounded-md border border-destructive/30 bg-destructive/5">
+                            <button
+                              type="button"
+                              onClick={() => handleDelete(strategy.id)}
+                              className="inline-flex items-center gap-1 px-2 py-1.5 text-xs font-semibold text-destructive"
+                            >
+                              <Check className="h-3.5 w-3.5" />
+                              {copy.confirm}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setDeleteTarget(null)}
+                              className="border-l px-2 py-1.5 text-xs font-semibold text-muted-foreground"
+                              title={copy.cancel}
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setDeleteTarget(strategy.id)}
+                            className="inline-flex items-center gap-1.5 rounded-md border bg-background px-2.5 py-1.5 text-xs font-semibold text-muted-foreground transition hover:border-destructive/40 hover:text-destructive"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            {copy.delete}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={(event) => openMoreMenu(strategy, event.currentTarget)}
+                          className="inline-flex items-center gap-1.5 rounded-md border bg-background px-2.5 py-1.5 text-xs font-semibold transition hover:bg-muted"
+                        >
+                            <MoreHorizontal className="h-3.5 w-3.5" />
+                            {copy.more}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
-                <div className="grid grid-cols-2 gap-2">
+          {filteredStrategies.length === 0 && (
+            <div className="flex min-h-[18rem] flex-col items-center justify-center border-t px-6 py-12 text-center">
+              <FileCode2 className="h-10 w-10 text-muted-foreground" />
+              <h2 className="mt-4 text-lg font-semibold">{copy.empty}</h2>
+              <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">{copy.emptyHint}</p>
+              <div className="mt-5 flex flex-wrap justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleNew}
+                  className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition hover:bg-primary/90"
+                >
+                  <Plus className="h-4 w-4" />
+                  {copy.newStrategy}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate("/market")}
+                  className="inline-flex items-center gap-2 rounded-md border px-4 py-2 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                >
+                  <Bot className="h-4 w-4" />
+                  {language === "zh-CN" ? "打开策略商城" : "Open market"}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </main>
+
+      {editorStrategy && createPortal(
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/45 p-4">
+          <div className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border bg-card shadow-2xl">
+            <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
+              <div className="min-w-0">
+                <h2 className="truncate text-base font-semibold">{copy.details}</h2>
+                <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                  {editorStrategy.id} · {formatDate(editorStrategy.updatedAt)}
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSaveEditor}
+                  disabled={savingEditor}
+                  className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-primary px-3 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90 disabled:opacity-50"
+                >
+                  <Check className="h-4 w-4" />
+                  {savingEditor ? copy.saving : copy.save}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditorId(null)}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-md border bg-background transition hover:bg-muted"
+                  title={copy.close}
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="grid min-h-0 flex-1 gap-0 overflow-hidden lg:grid-cols-[22rem_minmax(0,1fr)]">
+              <div className="space-y-3 overflow-auto border-b p-4 lg:border-b-0 lg:border-r">
+                <label className="block">
+                  <span className="text-xs font-semibold uppercase text-muted-foreground">{copy.name}</span>
+                  <input
+                    value={editorStrategy.name}
+                    onChange={(event) => updateStrategy(editorStrategy.id, { name: event.target.value })}
+                    className="mt-1 h-10 w-full rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-primary/25"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-semibold uppercase text-muted-foreground">{copy.description}</span>
+                  <textarea
+                    value={editorStrategy.description}
+                    onChange={(event) => updateStrategy(editorStrategy.id, { description: event.target.value })}
+                    className="mt-1 min-h-24 w-full resize-y rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/25"
+                  />
+                </label>
+                <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
                   <label className="block">
-                    <span className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                      <SlidersHorizontal className="h-3 w-3" />
-                      {t("strategy.statusFilter")}
-                    </span>
+                    <span className="text-xs font-semibold uppercase text-muted-foreground">{copy.languageLabel}</span>
                     <select
-                      value={statusFilter}
-                      onChange={(event) => setStatusFilter(event.target.value as StrategyStatus | "all")}
-                      className="h-9 w-full rounded-lg border bg-background px-2 text-xs outline-none focus:ring-2 focus:ring-primary/25"
+                      value={editorStrategy.language}
+                      onChange={(event) => updateStrategy(editorStrategy.id, { language: event.target.value as StrategyLanguage })}
+                      className="mt-1 h-10 w-full rounded-md border bg-background px-2 text-sm outline-none focus:ring-2 focus:ring-primary/25"
                     >
-                      <option value="all">{t("strategy.all")}</option>
-                      {statusOptions.map((option) => (
-                        <option key={option.value} value={option.value}>{statusLabels[option.value]}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="block">
-                    <span className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                      <Code2 className="h-3 w-3" />
-                      {t("strategy.language")}
-                    </span>
-                    <select
-                      value={languageFilter}
-                      onChange={(event) => setLanguageFilter(event.target.value as StrategyLanguage | "all")}
-                      className="h-9 w-full rounded-lg border bg-background px-2 text-xs outline-none focus:ring-2 focus:ring-primary/25"
-                    >
-                      <option value="all">{t("strategy.all")}</option>
                       {languageOptions.map((option) => (
                         <option key={option.value} value={option.value}>{option.label}</option>
                       ))}
                     </select>
                   </label>
-                </div>
-                <div className="grid grid-cols-[1fr_auto] gap-2">
                   <label className="block">
-                    <span className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                      <Filter className="h-3 w-3" />
-                      {t("strategy.sort")}
-                    </span>
+                    <span className="text-xs font-semibold uppercase text-muted-foreground">{copy.categoryLabel}</span>
                     <select
-                      value={sortMode}
-                      onChange={(event) => setSortMode(event.target.value as SortMode)}
-                      className="h-9 w-full rounded-lg border bg-background px-2 text-xs outline-none focus:ring-2 focus:ring-primary/25"
-                    >
-                      {sortOptions.map((option) => (
-                        <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <button
-                    type="button"
-                    onClick={resetFilters}
-                    className="mt-5 h-9 rounded-lg border bg-background px-3 text-xs font-semibold text-muted-foreground transition hover:bg-muted hover:text-foreground"
-                  >
-                    {t("strategy.reset")}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="max-h-[calc(100vh-24rem)] min-h-[18rem] overflow-auto p-2">
-              {filteredStrategies.length === 0 ? (
-                <div className="flex min-h-48 flex-col items-center justify-center rounded-lg border border-dashed p-6 text-center">
-                  <FileCode2 className="h-8 w-8 text-muted-foreground" />
-                  <p className="mt-3 text-sm font-medium">{t("strategy.noMatches")}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">{t("strategy.noMatchesHint")}</p>
-                </div>
-              ) : (
-                <div className="space-y-1.5">
-                  {filteredStrategies.map((strategy) => {
-                    const active = activeStrategy?.id === strategy.id;
-                    return (
-                      <button
-                        key={strategy.id}
-                        type="button"
-                        onClick={() => setActiveId(strategy.id)}
-                        className={cn(
-                          "block w-full rounded-lg border p-3 text-left transition",
-                          active ? "border-primary bg-primary/10" : "bg-background hover:bg-muted/60",
-                        )}
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-semibold">{strategy.name}</div>
-                            <div className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
-                              {strategy.description || t("strategy.emptyDescription")}
-                            </div>
-                          </div>
-                          <span className={cn("shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide", statusTone(strategy.status))}>
-                            {statusLabels[strategy.status]}
-                          </span>
-                        </div>
-                        <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                          <span className="rounded border bg-card px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-                            {strategy.language}
-                          </span>
-                          <span className="rounded border bg-card px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                            {categoryLabels[strategy.category]}
-                          </span>
-                          <span className="ml-auto text-[10px] text-muted-foreground">
-                            {formatDate(strategy.updatedAt)}
-                          </span>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="rounded-lg border bg-card p-3">
-            <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
-              <Pencil className="h-4 w-4 text-primary" />
-              {t("strategy.workflow")}
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              {statusCounts.map((status) => (
-                <button
-                  key={status.value}
-                  type="button"
-                  onClick={() => setStatusFilter(status.value)}
-                  className={cn(
-                    "rounded-lg border px-3 py-2 text-left transition hover:bg-muted",
-                    statusFilter === status.value ? "border-primary bg-primary/10" : "bg-background",
-                  )}
-                >
-                  <div className="text-xs text-muted-foreground">{statusLabels[status.value]}</div>
-                  <div className="mt-1 font-mono text-lg font-semibold">{status.count}</div>
-                </button>
-              ))}
-            </div>
-          </div>
-        </aside>
-
-        <main className="min-w-0">
-          {activeStrategy && (
-            <div className="rounded-lg border bg-card">
-              <div className="border-b p-4">
-                <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-                  <div className="min-w-0 flex-1">
-                    <div className="mb-2 flex flex-wrap items-center gap-2">
-                      <span className={cn("rounded-full border px-2.5 py-1 text-xs font-semibold", statusTone(activeStrategy.status))}>
-                        {statusLabels[activeStrategy.status]}
-                      </span>
-                      <span className="rounded-full border bg-background px-2.5 py-1 text-xs font-medium text-muted-foreground">
-                        {categoryLabels[activeStrategy.category]}
-                      </span>
-                      <span className="rounded-full border bg-background px-2.5 py-1 font-mono text-xs font-medium text-muted-foreground">
-                        {activeStrategy.language}
-                      </span>
-                    </div>
-                    <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                      {t("strategy.name")}
-                    </label>
-                    <input
-                      value={activeStrategy.name}
-                      onChange={(event) => updateActive({ name: event.target.value })}
-                      className="mt-1 h-11 w-full rounded-lg border bg-background px-3 text-lg font-semibold outline-none transition focus:ring-2 focus:ring-primary/25"
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:justify-end xl:max-w-md">
-                    <button
-                      type="button"
-                      onClick={() => handleExport([activeStrategy], `${activeStrategy.name || "strategy"}.json`)}
-                      className="inline-flex min-w-0 items-center justify-center gap-2 rounded-md border bg-background px-3 py-2 text-sm font-semibold transition hover:bg-muted"
-                    >
-                      <Download className="h-4 w-4 shrink-0" />
-                      <span className="truncate">{t("strategy.exportCurrent")}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleCopyCode}
-                      className="inline-flex min-w-0 items-center justify-center gap-2 rounded-md border bg-background px-3 py-2 text-sm font-semibold transition hover:bg-muted"
-                    >
-                      <Copy className="h-4 w-4 shrink-0" />
-                      <span className="truncate">{t("strategy.copyCode")}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleDuplicate}
-                      className="inline-flex min-w-0 items-center justify-center gap-2 rounded-md border bg-background px-3 py-2 text-sm font-semibold transition hover:bg-muted"
-                    >
-                      <Copy className="h-4 w-4 shrink-0" />
-                      <span className="truncate">{t("strategy.duplicate")}</span>
-                    </button>
-                    {deleteTarget === activeStrategy.id ? (
-                      <div className="inline-flex items-center overflow-hidden rounded-lg border border-destructive/30 bg-destructive/5">
-                        <button
-                          type="button"
-                          onClick={() => handleDelete(activeStrategy.id)}
-                          className="inline-flex items-center gap-1 px-2.5 py-2 text-xs font-semibold text-destructive"
-                        >
-                          <Check className="h-3.5 w-3.5" />
-                          {t("layout.confirm")}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setDeleteTarget(null)}
-                          className="border-l px-2.5 py-2 text-xs font-semibold text-muted-foreground"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setDeleteTarget(activeStrategy.id)}
-                        className="inline-flex min-w-0 items-center justify-center gap-2 rounded-md border bg-background px-3 py-2 text-sm font-semibold text-muted-foreground transition hover:border-destructive/40 hover:text-destructive"
-                      >
-                        <Trash2 className="h-4 w-4 shrink-0" />
-                        <span className="truncate">{t("layout.delete")}</span>
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                <div className="mt-4 grid gap-3 xl:grid-cols-[1fr_9rem_9rem_9rem]">
-                  <div>
-                    <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                      {t("strategy.description")}
-                    </label>
-                    <input
-                      value={activeStrategy.description}
-                      onChange={(event) => updateActive({ description: event.target.value })}
-                      className="mt-1 h-10 w-full rounded-lg border bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-primary/25"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                      {t("strategy.language")}
-                    </label>
-                    <select
-                      value={activeStrategy.language}
-                      onChange={(event) => updateActive({ language: event.target.value as StrategyLanguage })}
-                      className="mt-1 h-10 w-full rounded-lg border bg-background px-2 text-sm outline-none focus:ring-2 focus:ring-primary/25"
-                    >
-                      {languageOptions.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                      {t("strategy.category")}
-                    </label>
-                    <select
-                      value={activeStrategy.category}
-                      onChange={(event) => updateActive({ category: event.target.value as StrategyCategory })}
-                      className="mt-1 h-10 w-full rounded-lg border bg-background px-2 text-sm outline-none focus:ring-2 focus:ring-primary/25"
+                      value={editorStrategy.category}
+                      onChange={(event) => updateStrategy(editorStrategy.id, { category: event.target.value as StrategyCategory })}
+                      className="mt-1 h-10 w-full rounded-md border bg-background px-2 text-sm outline-none focus:ring-2 focus:ring-primary/25"
                     >
                       {categoryOptions.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {categoryLabels[option.value]}
-                        </option>
+                        <option key={option.value} value={option.value}>{option.value}</option>
                       ))}
                     </select>
-                  </div>
-                  <div>
-                    <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                      {t("strategy.status")}
-                    </label>
+                  </label>
+                  <label className="block">
+                    <span className="text-xs font-semibold uppercase text-muted-foreground">{copy.statusLabel}</span>
                     <select
-                      value={activeStrategy.status}
-                      onChange={(event) => updateActive({ status: event.target.value as StrategyStatus })}
-                      className="mt-1 h-10 w-full rounded-lg border bg-background px-2 text-sm outline-none focus:ring-2 focus:ring-primary/25"
+                      value={editorStrategy.status}
+                      onChange={(event) => updateStrategy(editorStrategy.id, { status: event.target.value as StrategyStatus })}
+                      className="mt-1 h-10 w-full rounded-md border bg-background px-2 text-sm outline-none focus:ring-2 focus:ring-primary/25"
                     >
                       {statusOptions.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {statusLabels[option.value]}
-                        </option>
+                        <option key={option.value} value={option.value}>{option.value}</option>
                       ))}
                     </select>
-                  </div>
-                </div>
-
-                <div className="mt-3">
-                  <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    {t("strategy.tags")}
                   </label>
+                </div>
+                <label className="block">
+                  <span className="text-xs font-semibold uppercase text-muted-foreground">{copy.tagsLabel}</span>
                   <input
-                    value={activeStrategy.tags.join(", ")}
-                    onChange={handleTagsChange}
-                    className="mt-1 h-10 w-full rounded-lg border bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-primary/25"
-                    placeholder="MA, BTC, risk"
+                    value={editorStrategy.tags.join(", ")}
+                    onChange={(event) => updateStrategy(editorStrategy.id, {
+                      tags: event.target.value.split(",").map((tag) => tag.trim()).filter(Boolean).slice(0, 8),
+                    })}
+                    className="mt-1 h-10 w-full rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-primary/25"
                   />
-                </div>
-              </div>
-
-              <div className="border-b bg-muted/30 px-4 py-2">
-                <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                  <span className="inline-flex items-center gap-1.5">
-                    <Save className="h-3.5 w-3.5 text-primary" />
-                    {saveLabel}
-                    <span className="font-mono">{formatDate(activeStrategy.updatedAt)}</span>
-                  </span>
-                  <span className="inline-flex items-center gap-1.5 font-mono">
-                    {activeLineCount} {t("strategy.linesLower")}
-                  </span>
-                  <span className="inline-flex items-center gap-1.5 font-mono">
-                    {activeCharCount} {t("strategy.characters")}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => openAssistant(t("strategy.reviewPrompt"))}
-                    className="inline-flex items-center gap-1.5 rounded-md border bg-background px-2 py-1 font-semibold text-foreground transition hover:bg-muted sm:ml-auto"
-                  >
-                    <ShieldCheck className="h-3.5 w-3.5 text-primary" />
-                    {t("strategy.runReview")}
-                  </button>
-                </div>
-              </div>
-
-              <textarea
-                value={activeStrategy.code}
-                onChange={(event) => updateActive({ code: event.target.value })}
-                spellCheck={false}
-                className="min-h-[36rem] w-full resize-y border-0 bg-[#080a0c] p-4 font-mono text-sm leading-6 text-zinc-100 outline-none lg:min-h-[calc(100vh-28rem)]"
-              />
-            </div>
-          )}
-        </main>
-
-        <aside className="grid gap-4 lg:grid-cols-2 xl:col-start-2">
-          <div className="rounded-lg border bg-card p-4">
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                  <ShieldCheck className="h-4 w-4" />
-                </div>
-                <div>
-                  <h2 className="text-sm font-semibold">{t("strategy.quality")}</h2>
-                  <p className="text-xs text-muted-foreground">{t("strategy.qualitySubtitle")}</p>
-                </div>
-              </div>
-              <div className={cn(
-                "flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border font-mono text-lg font-semibold",
-                qualityScore >= 80 ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300" : "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
-              )}>
-                {qualityScore}
-              </div>
-            </div>
-            <div className="space-y-2">
-              {activeChecks.map((check) => (
-                <div key={check.id} className="flex gap-2 rounded-lg border bg-background p-2.5">
-                  {check.passed ? (
-                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
-                  ) : (
-                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
-                  )}
-                  <div className="min-w-0">
-                    <div className="text-xs font-semibold">{t(check.labelKey)}</div>
-                    <div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">{t(check.hintKey)}</div>
+                </label>
+                <div className="grid grid-cols-2 gap-3 text-xs text-muted-foreground">
+                  <div>
+                    <div className="font-semibold uppercase">{copy.createdAt}</div>
+                    <div className="mt-1 font-mono">{formatDate(editorStrategy.createdAt)}</div>
+                  </div>
+                  <div>
+                    <div className="font-semibold uppercase">{copy.updatedAt}</div>
+                    <div className="mt-1 font-mono">{formatDate(editorStrategy.updatedAt)}</div>
                   </div>
                 </div>
-              ))}
-            </div>
-            <button
-              type="button"
-              onClick={() => openAssistant(t("strategy.reviewPrompt"))}
-              className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90"
-            >
-              <ShieldCheck className="h-4 w-4" />
-              {activeIssueCount > 0 ? t("strategy.fixIssues", { count: activeIssueCount }) : t("strategy.qualityReady")}
-            </button>
-          </div>
-
-          <div className="rounded-lg border bg-card p-4">
-            <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
-              <FileCode2 className="h-4 w-4 text-primary" />
-              {t("strategy.templates")}
-            </div>
-            <div className="max-h-[18rem] space-y-2 overflow-auto pr-1">
-              {strategyTemplates.map((template) => (
-                <div key={template.id} className="rounded-lg border bg-background p-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold">
-                        {language === "zh-CN" ? template.titleZh : template.titleEn}
-                      </div>
-                      <div className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
-                        {language === "zh-CN" ? template.descriptionZh : template.descriptionEn}
-                      </div>
-                    </div>
-                    <span className="rounded border bg-card px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-                      {template.language}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => handleCreateFromTemplate(template)}
-                    className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg border bg-card px-3 py-2 text-xs font-semibold transition hover:bg-muted"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                    {t("strategy.createFromTemplate")}
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="rounded-lg border bg-card lg:col-span-2">
-            <div className="border-b p-4">
-              <div className="flex items-center gap-2">
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                  <Bot className="h-4 w-4" />
-                </div>
-                <div>
-                  <h2 className="text-sm font-semibold">{t("strategy.assistantTitle")}</h2>
-                  <p className="text-xs text-muted-foreground">{t("strategy.assistantSubtitle")}</p>
-                </div>
               </div>
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                {quickActions.map(({ label, prompt, icon: Icon }) => (
-                  <button
-                    key={label}
-                    type="button"
-                    onClick={() => openAssistant(prompt)}
-                    className="inline-flex items-center justify-center gap-2 rounded-lg border bg-background px-2 py-2 text-xs font-semibold transition hover:bg-muted"
-                  >
-                    <Icon className="h-3.5 w-3.5 text-primary" />
-                    <span className="truncate">{label}</span>
-                  </button>
-                ))}
-              </div>
-              <div className="mt-3 flex gap-2">
-                <input
-                  value={assistantQuery}
-                  onChange={(event) => setAssistantQuery(event.target.value)}
-                  placeholder={t("strategy.assistantPlaceholder")}
-                  className="h-10 min-w-0 flex-1 rounded-lg border bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-primary/25"
+
+              <div className="flex min-h-[28rem] min-w-0 flex-col">
+                <div className="border-b px-4 py-2 text-xs font-semibold uppercase text-muted-foreground">
+                  {copy.codeLabel}
+                </div>
+                <textarea
+                  value={editorStrategy.code}
+                  onChange={(event) => updateStrategy(editorStrategy.id, { code: event.target.value })}
+                  spellCheck={false}
+                  className="min-h-0 flex-1 resize-none border-0 bg-[#080a0c] p-4 font-mono text-sm leading-6 text-zinc-100 outline-none"
                 />
-                <button
-                  type="button"
-                  onClick={handleCustomAssistant}
-                  disabled={!assistantQuery.trim()}
-                  className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-primary-foreground transition hover:bg-primary/90 disabled:opacity-40"
-                  title={t("strategy.askAssistant")}
-                >
-                  <Play className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-            <div className="max-h-[16rem] overflow-auto p-2">
-              <div className="space-y-1.5">
-                {filteredPrompts.map((item) => (
-                  <button
-                    key={item.title}
-                    type="button"
-                    onClick={() => openAssistant(item.prompt)}
-                    className="block w-full rounded-lg border bg-background p-3 text-left transition hover:border-primary/40 hover:bg-primary/5"
-                  >
-                    <span className="flex items-center gap-2 text-sm font-semibold">
-                      <WandSparkles className="h-3.5 w-3.5 text-primary" />
-                      {item.title}
-                    </span>
-                    <span className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
-                      {item.prompt}
-                    </span>
-                  </button>
-                ))}
               </div>
             </div>
           </div>
+        </div>,
+        document.body,
+      )}
 
-          <Link
-            to="/agent"
-            className="inline-flex w-full items-center justify-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm font-semibold transition hover:bg-muted lg:col-span-2"
+      {moreMenu && createPortal(
+        <div
+          ref={moreMenuRef}
+          className="fixed z-50 w-44 overflow-hidden rounded-md border bg-card p-1 text-foreground shadow-2xl ring-1 ring-black/5 dark:ring-white/10"
+          style={{ top: moreMenu.top, left: moreMenu.left }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            onClick={() => handlePendingAction(copy.share)}
+            className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-xs font-semibold text-foreground hover:bg-muted"
           >
-            <Bot className="h-4 w-4" />
-            {t("strategy.openAgent")}
-          </Link>
-        </aside>
-      </div>
+            <Share2 className="h-3.5 w-3.5" />
+            {copy.share}
+          </button>
+          <button
+            type="button"
+            onClick={() => handlePendingAction(copy.rent)}
+            className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-xs font-semibold text-foreground hover:bg-muted"
+          >
+            <Store className="h-3.5 w-3.5" />
+            {copy.rent}
+          </button>
+          <button
+            type="button"
+            onClick={() => handleOpenLive(moreMenu.strategy)}
+            className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-xs font-semibold text-foreground hover:bg-muted"
+          >
+            <RadioTower className="h-3.5 w-3.5" />
+            {copy.liveRun}
+          </button>
+          <button
+            type="button"
+            onClick={() => handleRun(moreMenu.strategy)}
+            disabled={runningId === moreMenu.strategy.id}
+            className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-xs font-semibold text-foreground hover:bg-muted disabled:opacity-50"
+          >
+            <Play className="h-3.5 w-3.5" />
+            {runningId === moreMenu.strategy.id
+              ? copy.backtesting
+              : copy.run}
+          </button>
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }

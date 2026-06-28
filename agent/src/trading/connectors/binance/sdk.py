@@ -40,6 +40,7 @@ PROFILE_ENVIRONMENTS = {
     "live-readonly": "live",
     "live": "live",
 }
+PRODUCT_TYPES = {"spot", "usdm_futures"}
 
 DEFAULT_TESTNET_HOST = "https://testnet.binance.vision"
 LIVE_HOST = "https://api.binance.com"
@@ -87,6 +88,8 @@ class BinanceConfig:
         api_key: Binance API key (testnet and live use different keys).
         api_secret: Binance API secret.
         profile: ``paper``, ``live-readonly`` or ``live``.
+        product_type: ``spot`` or ``usdm_futures``. Futures use ccxt's
+            ``defaultType='future'`` Binance market.
         testnet_host: Testnet REST host (overridable; may migrate upstream).
         timeout: Network timeout in seconds.
         readonly: Always true for this layer; order methods are not exposed.
@@ -95,6 +98,7 @@ class BinanceConfig:
     api_key: str = ""
     api_secret: str = ""
     profile: str = "paper"
+    product_type: str = "spot"
     testnet_host: str = DEFAULT_TESTNET_HOST
     timeout: float = 15.0
     readonly: bool = True
@@ -106,10 +110,14 @@ class BinanceConfig:
         profile = str(payload.get("profile") or "paper").strip().lower()
         if profile not in PROFILE_ENVIRONMENTS:
             raise BinanceConfigError("profile must be 'paper', 'live-readonly' or 'live'")
+        product_type = str(payload.get("product_type") or "spot").strip().lower()
+        if product_type not in PRODUCT_TYPES:
+            raise BinanceConfigError("product_type must be 'spot' or 'usdm_futures'")
         return cls(
             api_key=str(payload.get("api_key") or "").strip(),
             api_secret=str(payload.get("api_secret") or "").strip(),
             profile=profile,
+            product_type=product_type,
             testnet_host=str(payload.get("testnet_host") or DEFAULT_TESTNET_HOST).strip(),
             timeout=float(payload.get("timeout") or 15.0),
             readonly=bool(payload.get("readonly", True)),
@@ -121,6 +129,7 @@ class BinanceConfig:
         api_key: str | None = None,
         api_secret: str | None = None,
         profile: str | None = None,
+        product_type: str | None = None,
         testnet_host: str | None = None,
     ) -> "BinanceConfig":
         """Return a copy with CLI/tool overrides applied."""
@@ -131,6 +140,8 @@ class BinanceConfig:
             payload["api_secret"] = api_secret
         if profile is not None:
             payload["profile"] = profile
+        if product_type is not None:
+            payload["product_type"] = product_type
         if testnet_host is not None:
             payload["testnet_host"] = testnet_host
         return BinanceConfig.from_mapping(payload)
@@ -150,8 +161,13 @@ class BinanceConfig:
         """Return the REST host this profile connects to."""
         return self.testnet_host if self.is_testnet else LIVE_HOST
 
+    @property
+    def ccxt_default_type(self) -> str:
+        """Return the ccxt market type option for this config."""
+        return "future" if self.product_type == "usdm_futures" else "spot"
 
-_OVERRIDE_KEYS = ("api_key", "api_secret", "profile", "testnet_host")
+
+_OVERRIDE_KEYS = ("api_key", "api_secret", "profile", "product_type", "testnet_host")
 
 
 def build_config(profile_config: Mapping[str, Any] | None = None, overrides: Mapping[str, Any] | None = None) -> "BinanceConfig":
@@ -625,6 +641,7 @@ def _exchange(cfg: BinanceConfig):
             "secret": cfg.api_secret,
             "enableRateLimit": True,
             "timeout": int(cfg.timeout * 1000),
+            "options": {"defaultType": cfg.ccxt_default_type},
         }
     )
     ex.set_sandbox_mode(cfg.is_testnet)

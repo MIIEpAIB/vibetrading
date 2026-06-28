@@ -7,12 +7,9 @@ method is exposed here.
 Paper-vs-live is selected by the SDK ``flag`` (``"1"`` demo/paper sets the
 ``x-simulated-trading`` header, ``"0"`` live) and reinforced by OKX's separate
 demo key namespace. OKX returns NO field echoing demo/live, so there is no hard
-self-verifying guard: the discriminator is the configured flag plus best-effort
-UID pinning. When ``expected_uid`` is set, :func:`check_status` calls the account
-config endpoint and asserts the returned ``uid`` matches, reporting any mismatch
-as an error. The guard marker recorded on every payload is
-``header_flag+uid_pin``. The selected profile is recorded as ``paper`` on every
-payload and never flipped implicitly.
+self-verifying guard: the discriminator is the configured flag. The guard marker
+recorded on every payload is ``header_flag``. The selected profile is recorded
+as ``paper`` on every payload and never flipped implicitly.
 """
 
 from __future__ import annotations
@@ -33,6 +30,8 @@ PROFILE_ENVIRONMENTS = {
     "live-readonly": "live",
     "live": "live",
 }
+PRODUCT_TYPES = {"spot", "usdm_futures"}
+MARGIN_MODES = {"cross", "isolated"}
 
 DEFAULT_HOST = "https://www.okx.com"
 
@@ -56,9 +55,11 @@ class OKXConfig:
         api_key: OKX API key (demo and live use different keys).
         api_secret: OKX API secret key.
         passphrase: OKX API passphrase set at key creation.
-        profile: ``paper``, ``live-readonly`` or ``live``.
+    profile: ``paper``, ``live-readonly`` or ``live``.
+        product_type: ``spot`` or ``usdm_futures``. Futures use OKX swap
+            instruments such as ``BTC-USDT-SWAP``.
+        margin_mode: ``cross`` or ``isolated`` for futures order placement.
         host: REST host (default ``https://www.okx.com``).
-        expected_uid: Optional account UID to pin in ``check_status``.
         timeout: Network timeout in seconds.
         readonly: Always true for this layer; order methods are not exposed.
     """
@@ -67,8 +68,9 @@ class OKXConfig:
     api_secret: str = ""
     passphrase: str = ""
     profile: str = "paper"
+    product_type: str = "spot"
+    margin_mode: str = "cross"
     host: str = DEFAULT_HOST
-    expected_uid: str = ""
     timeout: float = 15.0
     readonly: bool = True
 
@@ -79,13 +81,20 @@ class OKXConfig:
         profile = str(payload.get("profile") or "paper").strip().lower()
         if profile not in PROFILE_ENVIRONMENTS:
             raise OKXConfigError("profile must be 'paper', 'live-readonly' or 'live'")
+        product_type = str(payload.get("product_type") or "spot").strip().lower()
+        if product_type not in PRODUCT_TYPES:
+            raise OKXConfigError("product_type must be 'spot' or 'usdm_futures'")
+        margin_mode = str(payload.get("margin_mode") or "cross").strip().lower()
+        if margin_mode not in MARGIN_MODES:
+            raise OKXConfigError("margin_mode must be 'cross' or 'isolated'")
         return cls(
             api_key=str(payload.get("api_key") or "").strip(),
             api_secret=str(payload.get("api_secret") or "").strip(),
             passphrase=str(payload.get("passphrase") or "").strip(),
             profile=profile,
+            product_type=product_type,
+            margin_mode=margin_mode,
             host=str(payload.get("host") or DEFAULT_HOST).strip(),
-            expected_uid=str(payload.get("expected_uid") or "").strip(),
             timeout=float(payload.get("timeout") or 15.0),
             readonly=bool(payload.get("readonly", True)),
         )
@@ -97,8 +106,9 @@ class OKXConfig:
         api_secret: str | None = None,
         passphrase: str | None = None,
         profile: str | None = None,
+        product_type: str | None = None,
+        margin_mode: str | None = None,
         host: str | None = None,
-        expected_uid: str | None = None,
     ) -> "OKXConfig":
         """Return a copy with CLI/tool overrides applied."""
         payload = asdict(self)
@@ -110,10 +120,12 @@ class OKXConfig:
             payload["passphrase"] = passphrase
         if profile is not None:
             payload["profile"] = profile
+        if product_type is not None:
+            payload["product_type"] = product_type
+        if margin_mode is not None:
+            payload["margin_mode"] = margin_mode
         if host is not None:
             payload["host"] = host
-        if expected_uid is not None:
-            payload["expected_uid"] = expected_uid
         return OKXConfig.from_mapping(payload)
 
     @property
@@ -131,8 +143,16 @@ class OKXConfig:
         """Return whether this profile targets the OKX demo (paper) environment."""
         return self.flag == "1"
 
+    @property
+    def is_futures(self) -> bool:
+        """Return whether this profile places futures/swap orders."""
+        return self.product_type == "usdm_futures"
 
-_OVERRIDE_KEYS = ("api_key", "api_secret", "passphrase", "profile", "host", "expected_uid")
+
+_OVERRIDE_KEYS = (
+    "api_key", "api_secret", "passphrase", "profile", "product_type",
+    "margin_mode", "host",
+)
 
 
 def build_config(profile_config: Mapping[str, Any] | None = None, overrides: Mapping[str, Any] | None = None) -> "OKXConfig":
@@ -184,18 +204,17 @@ def okx_available() -> bool:
 
 
 def check_status(config: OKXConfig | None = None) -> dict[str, Any]:
-    """Check SDK readiness, config completeness, and account identity.
+    """Check SDK readiness, config completeness, and account access.
 
     Returns a JSON-serializable health report. Does not place or mutate any
-    broker state. When ``expected_uid`` is set, the account config endpoint is
-    queried (best effort) and a UID mismatch is reported as an error.
+    broker state.
     """
     cfg = config or load_config()
     report: dict[str, Any] = {
         "status": "ok",
         "config": _public_config(cfg),
         "sdk": {"package": "python-okx", "installed": okx_available()},
-        "paper_guard": "header_flag+uid_pin",
+        "paper_guard": "header_flag",
         "flag": cfg.flag,
     }
 
@@ -222,24 +241,9 @@ def check_status(config: OKXConfig | None = None) -> dict[str, Any]:
         report["error"] = str(exc)
         return report
 
-    uid = None
-    if cfg.expected_uid:
-        try:
-            account = _account_client(cfg)
-            resp = _safe_call(account, "get_account_config")
-            rows = _extract_data(resp)
-            uid = _first(rows[0], ("uid",)) if rows else None
-            if uid is not None and str(uid) != cfg.expected_uid:
-                report["status"] = "error"
-                report["error"] = f"UID mismatch: expected {cfg.expected_uid}, broker returned {uid}."
-                return report
-        except Exception as exc:  # noqa: BLE001 - uid pinning is best effort
-            report["uid_check"] = {"ok": False, "error": str(exc)}
-
     report["account"] = {
         "profile": cfg.profile,
         "is_demo": cfg.is_demo,
-        "uid": str(uid) if uid is not None else None,
         "total_equity": snapshot.get("account", {}).get("total_equity"),
     }
     return report
@@ -256,7 +260,7 @@ def get_account_snapshot(config: OKXConfig | None = None) -> dict[str, Any]:
         "status": "ok",
         "profile": cfg.profile,
         "is_demo": cfg.is_demo,
-        "paper_guard": "header_flag+uid_pin",
+        "paper_guard": "header_flag",
         "account": {
             "total_equity": _first(summary, ("totalEq",)),
             "details": [_balance_detail_to_dict(item) for item in _as_iter(_obj_get(summary, "details"))],
@@ -274,7 +278,7 @@ def get_positions(config: OKXConfig | None = None) -> dict[str, Any]:
         "status": "ok",
         "profile": cfg.profile,
         "is_demo": cfg.is_demo,
-        "paper_guard": "header_flag+uid_pin",
+        "paper_guard": "header_flag",
         "positions": rows,
     }
 
@@ -288,7 +292,7 @@ def get_open_orders(config: OKXConfig | None = None, *, include_executions: bool
         "status": "ok",
         "profile": cfg.profile,
         "is_demo": cfg.is_demo,
-        "paper_guard": "header_flag+uid_pin",
+        "paper_guard": "header_flag",
         "open_orders": [_order_to_dict(item) for item in _extract_data(resp)],
     }
     if include_executions:
@@ -309,7 +313,7 @@ def get_quote(symbol: str, *, config: OKXConfig | None = None, **_: Any) -> dict
         "status": "ok",
         "profile": cfg.profile,
         "is_demo": cfg.is_demo,
-        "paper_guard": "header_flag+uid_pin",
+        "paper_guard": "header_flag",
         "symbol": clean,
         "quote": payload,
     }
@@ -340,7 +344,7 @@ def get_historical_bars(
         "status": "ok",
         "profile": cfg.profile,
         "is_demo": cfg.is_demo,
-        "paper_guard": "header_flag+uid_pin",
+        "paper_guard": "header_flag",
         "symbol": clean,
         "period": period,
         "bar": bar,
@@ -425,10 +429,11 @@ def place_order(
             cfg, f"OKX connector not configured: missing {', '.join(missing)}.", symbol=clean_symbol, side=clean_side
         )
 
-    # Build the OKX request. Spot trading uses tdMode="cash".
+    # Build the OKX request. Spot uses cash; swaps/futures use the configured
+    # margin mode against instruments such as BTC-USDT-SWAP.
     params: dict[str, Any] = {
         "instId": clean_symbol,
-        "tdMode": "cash",
+        "tdMode": cfg.margin_mode if cfg.is_futures else "cash",
         "side": clean_side,
         "ordType": clean_type,
     }
@@ -518,7 +523,7 @@ def _order_error(cfg: OKXConfig, message: str, **extra: Any) -> dict[str, Any]:
         "error": message,
         "profile": cfg.profile,
         "is_demo": cfg.is_demo,
-        "paper_guard": "header_flag+uid_pin",
+        "paper_guard": "header_flag",
     }
     for key, value in extra.items():
         if value is not None:
@@ -551,7 +556,7 @@ def _order_result(cfg: OKXConfig, resp: Any, *, symbol: str, **extra: Any) -> di
         "symbol": symbol,
         "profile": cfg.profile,
         "is_demo": cfg.is_demo,
-        "paper_guard": "header_flag+uid_pin",
+        "paper_guard": "header_flag",
         "client_order_id": _first(row, ("clOrdId",)),
     }
     for key, value in extra.items():

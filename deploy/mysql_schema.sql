@@ -44,6 +44,26 @@ CREATE TABLE IF NOT EXISTS auth_tokens (
     ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS user_exchange_api_keys (
+  binding_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id BIGINT UNSIGNED NOT NULL,
+  exchange VARCHAR(32) NOT NULL,
+  label VARCHAR(191) NOT NULL,
+  api_key VARCHAR(512) NOT NULL,
+  api_secret VARCHAR(2048) NOT NULL,
+  passphrase VARCHAR(512) NOT NULL DEFAULT '',
+  product_type VARCHAR(64) NOT NULL DEFAULT 'spot',
+  margin_mode VARCHAR(32) NOT NULL DEFAULT 'cross',
+  created_at DATETIME(6) NOT NULL,
+  updated_at DATETIME(6) NOT NULL,
+  PRIMARY KEY (binding_id),
+  KEY idx_user_exchange_api_keys_user (user_id),
+  KEY idx_user_exchange_api_keys_exchange (user_id, exchange),
+  CONSTRAINT fk_user_exchange_api_keys_user
+    FOREIGN KEY (user_id) REFERENCES users(user_id)
+    ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS strategy_library (
   id VARCHAR(128) NOT NULL,
   user_id BIGINT UNSIGNED NOT NULL DEFAULT 0,

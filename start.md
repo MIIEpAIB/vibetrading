@@ -24,6 +24,8 @@
 
   cd /opt/Vibe-Trading/frontend
   npm install
+  npm run build
+
   npm run dev
 
  # 后端

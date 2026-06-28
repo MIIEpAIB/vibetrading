@@ -12,6 +12,8 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@refinedev/core": "^5.0.12",
+    "@refinedev/react-router": "^2.0.4",
     "clsx": "^2.1.0",
     "echarts": "^6.0.0",
     "highlight.js": "^11.11.1",

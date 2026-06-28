@@ -45,6 +45,7 @@ UPLOADS_DIR = Path(__file__).resolve().parent / "uploads"
 AGENT_DIR = Path(__file__).resolve().parent
 ENV_PATH = AGENT_DIR / ".env"
 ENV_EXAMPLE_PATH = AGENT_DIR / ".env.example"
+STRATEGY_MARKET_ADMIN_PATH = AGENT_DIR / "strategy_market_admin.json"
 
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
 _UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1 MB
@@ -314,10 +315,22 @@ class ShadowOrderResponse(BaseModel):
     type: str
     price: float
     quantity: float
+    time_in_force: str = "GTC"
     status: str
     executed_price: float
+    average_price: float = 0.0
+    filled_quantity: float = 0.0
+    remaining_quantity: float = 0.0
+    executed_value: float = 0.0
     reserved_asset: str
     reserved_amount: float
+    fee_asset: str = ""
+    fee_paid: float = 0.0
+    trigger_price: float = 0.0
+    trigger_condition: str = ""
+    trigger_order_type: str = ""
+    trigger_order_price: float = 0.0
+    triggered_at: float = 0.0
     rejection_reason: str = ""
     timestamp: float
     updated_at: float
@@ -338,9 +351,14 @@ class ShadowPlaceOrderRequest(BaseModel):
 
     symbol: str = Field(..., min_length=3, max_length=32)
     side: str = Field(..., description="BUY or SELL")
-    order_type: str = Field("MARKET", description="MARKET or LIMIT")
+    order_type: str = Field("MARKET", description="MARKET, LIMIT, or TRIGGER")
     quantity: float = Field(..., gt=0)
     price: float = Field(0.0, ge=0)
+    time_in_force: str = Field("GTC", description="GTC, IOC, FOK, or POST_ONLY")
+    trigger_price: float = Field(0.0, ge=0)
+    trigger_condition: str = Field("", description="GTE or LTE")
+    trigger_order_type: str = Field("MARKET", description="MARKET or LIMIT")
+    trigger_order_price: float = Field(0.0, ge=0)
 
 
 class ShadowPriceUpdateRequest(BaseModel):
@@ -392,6 +410,117 @@ class AuthTokenResponse(BaseModel):
     token_type: str = "bearer"
     expires_at: str
     user: AuthUserResponse
+
+
+class ChangePasswordRequest(BaseModel):
+    """Change the current user's password."""
+
+    current_password: str = Field(..., min_length=1, max_length=256)
+    new_password: str = Field(..., min_length=8, max_length=256)
+
+
+class ExchangeApiKeyBindingResponse(BaseModel):
+    """Public exchange API credential metadata."""
+
+    binding_id: int
+    exchange: str
+    label: str
+    api_key_hint: str
+    api_secret_configured: bool
+    passphrase_configured: bool
+    product_type: str
+    margin_mode: str
+    created_at: str
+    updated_at: str
+
+
+class ExchangeApiKeyBindingListResponse(BaseModel):
+    """Current user's exchange API credential bindings."""
+
+    bindings: List[ExchangeApiKeyBindingResponse]
+
+
+class CreateExchangeApiKeyBindingRequest(BaseModel):
+    """Create a user-owned exchange API credential binding."""
+
+    exchange: str = Field(..., pattern="^(okx|binance)$")
+    label: str = Field("", max_length=191)
+    api_key: str = Field(..., min_length=1, max_length=512)
+    api_secret: str = Field(..., min_length=1, max_length=2048)
+    passphrase: str = Field("", max_length=512)
+    product_type: str = Field("spot", pattern="^(spot|usdm_futures)$")
+    margin_mode: str = Field("cross", pattern="^(cross|isolated)$")
+
+
+class AdminUserUpdateRequest(BaseModel):
+    """Operator-managed application user update."""
+
+    display_name: Optional[str] = Field(None, max_length=191)
+    password: Optional[str] = Field(None, min_length=8, max_length=256)
+    revoke_tokens: bool = False
+
+
+class AdminUsageSummary(BaseModel):
+    """Operator dashboard aggregate metrics."""
+
+    total_users: int = 0
+    total_sessions: int = 0
+    total_messages: int = 0
+    total_attempts: int = 0
+    running_attempts: int = 0
+    failed_attempts: int = 0
+    completed_attempts: int = 0
+    total_strategies: int = 0
+
+
+class AdminUserUsageRow(BaseModel):
+    """Per-user agent usage row."""
+
+    user_id: Optional[int] = None
+    username: str = ""
+    display_name: str = ""
+    session_count: int = 0
+    message_count: int = 0
+    attempt_count: int = 0
+    running_attempt_count: int = 0
+    failed_attempt_count: int = 0
+    completed_attempt_count: int = 0
+    strategy_count: int = 0
+    last_session_at: Optional[str] = None
+    last_message_at: Optional[str] = None
+
+
+class AdminDashboardResponse(BaseModel):
+    """Operator dashboard response."""
+
+    summary: AdminUsageSummary
+    users: List[AuthUserResponse]
+    usage: List[AdminUserUsageRow]
+
+
+class StrategyMarketAdminItem(BaseModel):
+    """Operator-managed strategy market item metadata."""
+
+    id: str = Field(..., min_length=1, max_length=128)
+    kind: str = Field("built-in", pattern="^(built-in|paid)$")
+    enabled: bool = True
+    featured: bool = False
+    price: str = Field("", max_length=64)
+    status: str = Field("published", pattern="^(draft|published|hidden|archived)$")
+    note: str = Field("", max_length=500)
+    updated_at: str = ""
+
+
+class StrategyMarketAdminResponse(BaseModel):
+    """Operator-managed strategy market config."""
+
+    items: List[StrategyMarketAdminItem]
+
+
+class StrategyMarketAdminUpdateRequest(BaseModel):
+    """Replace the operator-managed strategy market config."""
+
+    items: List[StrategyMarketAdminItem] = Field(default_factory=list)
 
 
 # ---- V4 Session Models ----
@@ -554,6 +683,87 @@ class ReplaceStrategyLibraryRequest(BaseModel):
     strategies: List[StrategyLibraryItem] = Field(default_factory=list)
 
 
+class StrategyMarketBacktestRequest(BaseModel):
+    """Run a real backtest for a whitelisted marketplace strategy."""
+
+    strategy_id: str = Field(..., min_length=1, max_length=128)
+    start_date: str = "2024-01-01"
+    end_date: str = "2026-06-27"
+    symbol: Optional[str] = None
+    interval: Optional[str] = None
+
+
+class StrategyMarketBacktestResponse(BaseModel):
+    """Marketplace real-backtest response."""
+
+    strategy_id: str
+    status: str
+    run_id: str
+    run_directory: str
+    symbol: str
+    timeframe: str
+    period: str
+    totalReturnPct: float
+    annualizedReturnPct: float
+    maxDrawdownPct: float
+    sharpe: float
+    winRatePct: float
+    tradeCount: int
+    engine: str
+    assumptions: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+
+
+class StrategyBacktestRequest(BaseModel):
+    """Run a real backtest for a user-owned strategy."""
+
+    start_date: str = "2024-01-01"
+    end_date: str = "2026-06-27"
+    symbol: str = "BTC-USDT"
+    interval: str = "4H"
+    source: str = "okx"
+
+
+class PaperDeploymentCreateRequest(BaseModel):
+    """Create a paper deployment from a saved strategy."""
+
+    strategy_id: str = Field(..., min_length=1, max_length=128)
+    limits: Dict[str, Any] = Field(default_factory=dict)
+
+
+class PaperDeploymentActionResponse(BaseModel):
+    """Paper deployment action response."""
+
+    deployment: Dict[str, Any]
+
+
+class PaperDeploymentListResponse(BaseModel):
+    """Paper deployment list response."""
+
+    deployments: List[Dict[str, Any]]
+
+
+class PaperDeploymentStatusResponse(BaseModel):
+    """Paper deployment status response."""
+
+    deployment: Dict[str, Any]
+    latest_tick: Optional[Dict[str, Any]] = None
+    recent_ticks: List[Dict[str, Any]] = Field(default_factory=list)
+    recent_signals: List[Dict[str, Any]] = Field(default_factory=list)
+    recent_decisions: List[Dict[str, Any]] = Field(default_factory=list)
+    recent_orders: List[Dict[str, Any]] = Field(default_factory=list)
+    summary: Dict[str, Any] = Field(default_factory=dict)
+
+
+class PaperTickResponse(BaseModel):
+    """Paper deployment manual tick response."""
+
+    tick: Dict[str, Any]
+    signal: Optional[Dict[str, Any]] = None
+    decision: Optional[Dict[str, Any]] = None
+    order_link: Optional[Dict[str, Any]] = None
+
+
 # ---- Live trading channel: consent commit + kill switch ----
 
 
@@ -609,6 +819,34 @@ class LiveRunnerControlRequest(BaseModel):
 
     broker: str = Field(..., min_length=1, max_length=64)
     session_id: Optional[str] = None
+
+
+class CryptoLiveConfigureRequest(BaseModel):
+    """Save user-owned crypto live connector credentials.
+
+    This is a user-facing setup endpoint for strategy live deployment. Secrets
+    are written to the existing connector config files under the runtime root
+    with owner-only permissions by the connector SDK modules.
+    """
+
+    exchange: str = Field(..., pattern="^(okx|binance)$")
+    product_type: str = Field("spot", pattern="^(spot|usdm_futures)$")
+    api_key: str = Field(..., min_length=1, max_length=512)
+    api_secret: str = Field(..., min_length=1, max_length=2048)
+    passphrase: str = Field("", max_length=512)
+    margin_mode: str = Field("cross", pattern="^(cross|isolated)$")
+    check_connection: bool = Field(False, description="Run a read-only broker check after saving")
+
+
+class CryptoLiveConfigureResponse(BaseModel):
+    """Result of saving a crypto live connector config."""
+
+    status: str
+    exchange: str
+    product_type: str
+    profile_id: str
+    config_path: str
+    connection: Optional[Dict[str, Any]] = None
 
 
 class BrokerAuthState(BaseModel):
@@ -1104,6 +1342,93 @@ async def current_user(ctx: AuthContext = Depends(require_auth)):
     return AuthUserResponse(**ctx.user.to_dict())
 
 
+@app.post("/auth/password")
+async def change_current_user_password(
+    payload: ChangePasswordRequest,
+    ctx: AuthContext = Depends(require_auth),
+):
+    """Change the logged-in user's password."""
+    if ctx.user is None or ctx.user_id is None:
+        raise HTTPException(status_code=401, detail="Login required")
+    changed = _get_auth_store().change_password(ctx.user_id, payload.current_password, payload.new_password)
+    if not changed:
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    return {"status": "ok"}
+
+
+@app.get("/auth/exchange-api-keys", response_model=ExchangeApiKeyBindingListResponse)
+async def list_current_user_exchange_api_keys(ctx: AuthContext = Depends(require_auth)):
+    """List the logged-in user's OKX/Binance API key bindings."""
+    if ctx.user is None or ctx.user_id is None:
+        raise HTTPException(status_code=401, detail="Login required")
+    bindings = _get_auth_store().list_exchange_api_keys(ctx.user_id)
+    return {"bindings": [binding.to_public_dict() for binding in bindings]}
+
+
+@app.post(
+    "/auth/exchange-api-keys",
+    response_model=ExchangeApiKeyBindingResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_current_user_exchange_api_key(
+    payload: CreateExchangeApiKeyBindingRequest,
+    ctx: AuthContext = Depends(require_auth),
+):
+    """Create an OKX/Binance API key binding for the logged-in user."""
+    if ctx.user is None or ctx.user_id is None:
+        raise HTTPException(status_code=401, detail="Login required")
+    if payload.exchange == "okx" and not payload.passphrase.strip():
+        raise HTTPException(status_code=400, detail="OKX passphrase is required")
+    binding = _get_auth_store().create_exchange_api_key(
+        ctx.user_id,
+        exchange=payload.exchange,
+        label=payload.label,
+        api_key=payload.api_key,
+        api_secret=payload.api_secret,
+        passphrase=payload.passphrase,
+        product_type=payload.product_type,
+        margin_mode=payload.margin_mode,
+    )
+    return binding.to_public_dict()
+
+
+@app.delete("/auth/exchange-api-keys/{binding_id}")
+async def delete_current_user_exchange_api_key(
+    binding_id: int,
+    ctx: AuthContext = Depends(require_auth),
+):
+    """Delete one API key binding owned by the logged-in user."""
+    if ctx.user is None or ctx.user_id is None:
+        raise HTTPException(status_code=401, detail="Login required")
+    deleted = _get_auth_store().delete_exchange_api_key(ctx.user_id, binding_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="API key binding not found")
+    return {"status": "deleted", "binding_id": binding_id}
+
+
+@app.post("/auth/exchange-api-keys/{binding_id}/activate-live", response_model=CryptoLiveConfigureResponse)
+async def activate_current_user_exchange_api_key(
+    binding_id: int,
+    check_connection: bool = False,
+    ctx: AuthContext = Depends(require_auth),
+):
+    """Activate a saved exchange API key as the current live connector profile."""
+    if ctx.user is None or ctx.user_id is None:
+        raise HTTPException(status_code=401, detail="Login required")
+    binding = _get_auth_store().get_exchange_api_key(ctx.user_id, binding_id)
+    if binding is None:
+        raise HTTPException(status_code=404, detail="API key binding not found")
+    return _save_crypto_live_connector_config(
+        exchange=binding.exchange,
+        product_type=binding.product_type,
+        api_key=binding.api_key,
+        api_secret=binding.api_secret,
+        passphrase=binding.passphrase,
+        margin_mode=binding.margin_mode,
+        check_connection=check_connection,
+    )
+
+
 @app.post("/auth/logout")
 async def logout_user(
     ctx: AuthContext = Depends(require_auth),
@@ -1116,6 +1441,254 @@ async def logout_user(
     if token:
         _get_auth_store().revoke_token(token)
     return {"status": "ok"}
+
+
+# ============================================================================
+# Admin API
+# ============================================================================
+
+
+def _load_strategy_market_admin_items() -> list[StrategyMarketAdminItem]:
+    if not STRATEGY_MARKET_ADMIN_PATH.exists():
+        return []
+    try:
+        raw = json.loads(STRATEGY_MARKET_ADMIN_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        logger.warning("Failed to read strategy market admin config", exc_info=True)
+        return []
+    items = raw.get("items") if isinstance(raw, dict) else raw
+    if not isinstance(items, list):
+        return []
+    parsed: list[StrategyMarketAdminItem] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        try:
+            parsed.append(StrategyMarketAdminItem(**item))
+        except Exception:
+            logger.warning("Skipping invalid strategy market admin item: %r", item)
+    return parsed
+
+
+def _save_strategy_market_admin_items(items: list[StrategyMarketAdminItem]) -> list[StrategyMarketAdminItem]:
+    now = datetime.utcnow().isoformat()
+    deduped: dict[str, StrategyMarketAdminItem] = {}
+    for item in items:
+        data = item.model_dump()
+        data["updated_at"] = item.updated_at or now
+        deduped[item.id] = StrategyMarketAdminItem(**data)
+    ordered = sorted(deduped.values(), key=lambda item: (item.kind, item.id))
+    payload = {"items": [item.model_dump() for item in ordered]}
+    STRATEGY_MARKET_ADMIN_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return ordered
+
+
+def _empty_admin_usage() -> dict[int | None, AdminUserUsageRow]:
+    return {}
+
+
+def _mysql_admin_usage_by_user() -> dict[int | None, AdminUserUsageRow]:
+    from src.persistence import mysql_configured
+
+    if not mysql_configured():
+        return _empty_admin_usage()
+    from src.persistence.mysql import mysql_connection
+
+    usage: dict[int | None, AdminUserUsageRow] = {}
+    try:
+        with mysql_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT user_id, COUNT(*) AS session_count, MAX(updated_at) AS last_session_at
+                    FROM sessions
+                    GROUP BY user_id
+                    """
+                )
+                for row in cur.fetchall():
+                    user_id = row.get("user_id")
+                    key = int(user_id) if user_id is not None else None
+                    usage[key] = AdminUserUsageRow(
+                        user_id=key,
+                        session_count=int(row.get("session_count") or 0),
+                        last_session_at=str(row.get("last_session_at") or "") or None,
+                    )
+
+                cur.execute(
+                    """
+                    SELECT s.user_id, COUNT(m.message_id) AS message_count, MAX(m.created_at) AS last_message_at
+                    FROM session_messages m
+                    JOIN sessions s ON s.session_id = m.session_id
+                    GROUP BY s.user_id
+                    """
+                )
+                for row in cur.fetchall():
+                    user_id = row.get("user_id")
+                    key = int(user_id) if user_id is not None else None
+                    entry = usage.setdefault(key, AdminUserUsageRow(user_id=key))
+                    entry.message_count = int(row.get("message_count") or 0)
+                    entry.last_message_at = str(row.get("last_message_at") or "") or None
+
+                cur.execute(
+                    """
+                    SELECT
+                        s.user_id,
+                        COUNT(a.attempt_id) AS attempt_count,
+                        SUM(CASE WHEN a.status = 'running' THEN 1 ELSE 0 END) AS running_count,
+                        SUM(CASE WHEN a.status = 'failed' THEN 1 ELSE 0 END) AS failed_count,
+                        SUM(CASE WHEN a.status = 'completed' THEN 1 ELSE 0 END) AS completed_count
+                    FROM session_attempts a
+                    JOIN sessions s ON s.session_id = a.session_id
+                    GROUP BY s.user_id
+                    """
+                )
+                for row in cur.fetchall():
+                    user_id = row.get("user_id")
+                    key = int(user_id) if user_id is not None else None
+                    entry = usage.setdefault(key, AdminUserUsageRow(user_id=key))
+                    entry.attempt_count = int(row.get("attempt_count") or 0)
+                    entry.running_attempt_count = int(row.get("running_count") or 0)
+                    entry.failed_attempt_count = int(row.get("failed_count") or 0)
+                    entry.completed_attempt_count = int(row.get("completed_count") or 0)
+
+                cur.execute(
+                    """
+                    SELECT user_id, COUNT(*) AS strategy_count
+                    FROM strategy_library
+                    GROUP BY user_id
+                    """
+                )
+                for row in cur.fetchall():
+                    user_id = row.get("user_id")
+                    key = int(user_id) if user_id is not None else None
+                    entry = usage.setdefault(key, AdminUserUsageRow(user_id=key))
+                    entry.strategy_count = int(row.get("strategy_count") or 0)
+    except Exception:
+        logger.info("Admin MySQL usage statistics are unavailable; falling back to session files", exc_info=True)
+        return _empty_admin_usage()
+    return usage
+
+
+def _filesystem_admin_usage_by_user() -> dict[int | None, AdminUserUsageRow]:
+    svc = _get_session_service()
+    if not svc:
+        return {}
+    usage: dict[int | None, AdminUserUsageRow] = {}
+    for session in svc.list_sessions(limit=1000):
+        key = session.owner_user_id
+        entry = usage.setdefault(key, AdminUserUsageRow(user_id=key))
+        entry.session_count += 1
+        entry.last_session_at = max(filter(None, [entry.last_session_at, session.updated_at]), default=None)
+        messages = svc.get_messages(session.session_id, limit=10000)
+        entry.message_count += len(messages)
+        if messages:
+            entry.last_message_at = max(filter(None, [entry.last_message_at, messages[-1].created_at]), default=None)
+        attempts_dir = SESSIONS_DIR / session.session_id / "attempts"
+        if attempts_dir.exists():
+            for attempt_file in attempts_dir.glob("*/attempt.json"):
+                try:
+                    data = json.loads(attempt_file.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                entry.attempt_count += 1
+                status_value = str(data.get("status") or "")
+                if status_value == "running":
+                    entry.running_attempt_count += 1
+                elif status_value == "failed":
+                    entry.failed_attempt_count += 1
+                elif status_value == "completed":
+                    entry.completed_attempt_count += 1
+    return usage
+
+
+def _admin_usage_by_user() -> dict[int | None, AdminUserUsageRow]:
+    usage = _mysql_admin_usage_by_user()
+    if usage:
+        return usage
+    return _filesystem_admin_usage_by_user()
+
+
+def _admin_summary(users: list[Any], usage_rows: list[AdminUserUsageRow]) -> AdminUsageSummary:
+    return AdminUsageSummary(
+        total_users=len(users),
+        total_sessions=sum(row.session_count for row in usage_rows),
+        total_messages=sum(row.message_count for row in usage_rows),
+        total_attempts=sum(row.attempt_count for row in usage_rows),
+        running_attempts=sum(row.running_attempt_count for row in usage_rows),
+        failed_attempts=sum(row.failed_attempt_count for row in usage_rows),
+        completed_attempts=sum(row.completed_attempt_count for row in usage_rows),
+        total_strategies=sum(row.strategy_count for row in usage_rows),
+    )
+
+
+@app.get("/admin/dashboard", response_model=AdminDashboardResponse, dependencies=[Depends(require_operator_auth)])
+async def get_admin_dashboard():
+    """Return operator dashboard data for users, marketplace, and agent usage."""
+    users = _get_auth_store().list_users(limit=500)
+    users_by_id = {int(user.user_id): user for user in users}
+    usage_map = _admin_usage_by_user()
+    for user_id, user in users_by_id.items():
+        row = usage_map.setdefault(user_id, AdminUserUsageRow(user_id=user_id))
+        row.username = user.username
+        row.display_name = user.display_name
+    for row in usage_map.values():
+        if row.user_id is None:
+            row.username = "operator"
+            row.display_name = "Operator / local"
+        elif row.user_id not in users_by_id:
+            row.username = f"user:{row.user_id}"
+            row.display_name = "Deleted user"
+    usage_rows = sorted(
+        usage_map.values(),
+        key=lambda row: (row.last_message_at or row.last_session_at or "", row.session_count),
+        reverse=True,
+    )
+    return {
+        "summary": _admin_summary(users, usage_rows),
+        "users": [AuthUserResponse(**user.to_dict()) for user in users],
+        "usage": usage_rows,
+    }
+
+
+@app.patch("/admin/users/{user_id}", response_model=AuthUserResponse, dependencies=[Depends(require_operator_auth)])
+async def admin_update_user(user_id: int, payload: AdminUserUpdateRequest):
+    """Update an application user as an operator."""
+    user = _get_auth_store().update_user(
+        user_id,
+        display_name=payload.display_name,
+        password=payload.password,
+        revoke_tokens=payload.revoke_tokens,
+    )
+    if user is None:
+        raise HTTPException(status_code=404, detail=f"User {user_id} not found")
+    return AuthUserResponse(**user.to_dict())
+
+
+@app.delete("/admin/users/{user_id}", dependencies=[Depends(require_operator_auth)])
+async def admin_delete_user(user_id: int):
+    """Delete an application user as an operator."""
+    deleted = _get_auth_store().delete_user(user_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"User {user_id} not found")
+    return {"status": "deleted", "user_id": user_id}
+
+
+@app.get("/strategy-market/catalog", response_model=StrategyMarketAdminResponse)
+async def get_strategy_market_catalog_config():
+    """Return public strategy market operator metadata."""
+    return {"items": _load_strategy_market_admin_items()}
+
+
+@app.get("/admin/strategy-market", response_model=StrategyMarketAdminResponse, dependencies=[Depends(require_operator_auth)])
+async def get_admin_strategy_market():
+    """Return operator-managed strategy market config."""
+    return {"items": _load_strategy_market_admin_items()}
+
+
+@app.put("/admin/strategy-market", response_model=StrategyMarketAdminResponse, dependencies=[Depends(require_operator_auth)])
+async def update_admin_strategy_market(payload: StrategyMarketAdminUpdateRequest):
+    """Replace operator-managed strategy market config."""
+    return {"items": _save_strategy_market_admin_items(payload.items)}
 
 
 # ============================================================================
@@ -1576,6 +2149,15 @@ def _run_belongs_to_context(run_dir: Path, ctx: AuthContext) -> bool:
         return True
     if ctx.user_id is None:
         return False
+    req = _load_json_file(run_dir / "req.json") or {}
+    context = req.get("context") if isinstance(req, dict) else None
+    if isinstance(context, dict):
+        owner_user_id = context.get("user_id")
+        try:
+            if owner_user_id is not None and int(owner_user_id) == ctx.user_id:
+                return True
+        except (TypeError, ValueError):
+            pass
     session_id = _session_id_from_run_dir(run_dir)
     if not session_id:
         return False
@@ -1896,7 +2478,7 @@ async def health_check():
     dependencies=[Depends(require_local_or_auth)],
 )
 async def get_crypto_markets(
-    limit: int = Query(13, description="Number of mainstream crypto rows to return", ge=1, le=13),
+    limit: int = Query(13, description="Number of mainstream crypto rows to return", ge=1, le=100),
 ):
     """Return dashboard crypto market rows and aggregate metrics."""
     from src.crypto_market import get_market_dashboard
@@ -1928,7 +2510,29 @@ def _parse_shadow_order_type(value: str):
     try:
         return OrderType(clean)
     except ValueError as exc:
-        raise ShadowTradingError("order_type must be MARKET or LIMIT") from exc
+        raise ShadowTradingError("order_type must be MARKET, LIMIT, or TRIGGER") from exc
+
+
+def _parse_shadow_time_in_force(value: str):
+    from src.shadow_trading import ShadowTradingError, TimeInForce
+
+    clean = (value or "GTC").strip().upper()
+    try:
+        return TimeInForce(clean)
+    except ValueError as exc:
+        raise ShadowTradingError("time_in_force must be GTC, IOC, FOK, or POST_ONLY") from exc
+
+
+def _parse_shadow_trigger_condition(value: str):
+    from src.shadow_trading import ShadowTradingError, TriggerCondition
+
+    clean = (value or "").strip().upper()
+    if not clean:
+        return None
+    try:
+        return TriggerCondition(clean)
+    except ValueError as exc:
+        raise ShadowTradingError("trigger_condition must be GTE or LTE") from exc
 
 
 def _shadow_http_error(exc: Exception) -> HTTPException:
@@ -1970,6 +2574,11 @@ async def place_shadow_order(payload: ShadowPlaceOrderRequest, ctx: AuthContext 
             order_type=_parse_shadow_order_type(payload.order_type),
             quantity=payload.quantity,
             price=payload.price,
+            time_in_force=_parse_shadow_time_in_force(payload.time_in_force),
+            trigger_price=payload.trigger_price,
+            trigger_condition=_parse_shadow_trigger_condition(payload.trigger_condition),
+            trigger_order_type=_parse_shadow_order_type(payload.trigger_order_type),
+            trigger_order_price=payload.trigger_order_price,
         )
         return order.to_dict()
     except ShadowTradingError as exc:
@@ -2176,6 +2785,8 @@ def _get_existing_session_or_404(session_id: str):
 # ============================================================================
 
 _strategy_store = None
+_paper_store = None
+_paper_service = None
 
 
 def _get_strategy_store():
@@ -2190,6 +2801,585 @@ def _get_strategy_store():
 
         _strategy_store = MySQLStrategyStore()
     return _strategy_store
+
+
+def _paper_user_id(ctx: AuthContext) -> int:
+    """Resolve a stable owner id for paper deployments."""
+    return int(ctx.user_id) if ctx.user_id is not None else 0
+
+
+def _get_paper_store():
+    """Return the shared paper deployment store."""
+    global _paper_store
+    if _paper_store is None:
+        from src.paper_trading import SQLitePaperTradingStore
+
+        _paper_store = SQLitePaperTradingStore()
+    return _paper_store
+
+
+def _get_paper_service():
+    """Return the shared paper deployment service."""
+    global _paper_service
+    if _paper_service is None:
+        from src.paper_trading import PaperTradingService
+        from src.shadow_trading import shadow_trading_service
+
+        _paper_service = PaperTradingService(
+            store=_get_paper_store(),
+            strategy_store=_get_strategy_store(),
+            shadow_service=shadow_trading_service,
+            shadow_user_resolver=lambda user_id: "operator" if int(user_id) == 0 else f"user:{int(user_id)}",
+        )
+    return _paper_service
+
+
+def _paper_http_error(exc: Exception) -> HTTPException:
+    message = str(exc) or "paper deployment request failed"
+    status_code = 404 if "not found" in message.lower() else 400
+    return HTTPException(status_code=status_code, detail=message)
+
+
+_MARKET_BACKTEST_INTERVALS = {"1m", "5m", "15m", "30m", "1H", "4H", "1D"}
+_MARKET_BACKTEST_IDS = {
+    "crypto-trend-momentum",
+    "crypto-perp-funding-carry",
+    "crypto-cross-exchange-spread",
+    "crypto-stat-arb-pairs",
+    "crypto-vol-target-rotation",
+    "crypto-event-driven-risk",
+    "professional-grid-trading",
+}
+
+
+def _market_backtest_strategy_config(strategy_id: str) -> Dict[str, Any]:
+    configs: Dict[str, Dict[str, Any]] = {
+        "crypto-trend-momentum": {
+            "codes": ["BTC-USDT"],
+            "interval": "4H",
+            "engine_name": "real_crypto_trend_momentum_v1",
+            "assumptions": [
+                "OKX public OHLCV candles",
+                "20/60 EMA trend filter",
+                "55-bar Donchian breakout",
+                "taker/maker fees and slippage applied by CryptoEngine",
+            ],
+        },
+        "crypto-perp-funding-carry": {
+            "codes": ["BTC-USDT"],
+            "interval": "4H",
+            "engine_name": "real_crypto_funding_proxy_v1",
+            "assumptions": [
+                "OKX public OHLCV candles",
+                "price-momentum proxy because funding-rate history is not wired yet",
+                "CryptoEngine applies a fixed funding_rate from config",
+            ],
+            "warnings": ["Funding-rate history is not connected yet; this is a real-price proxy backtest, not a full carry PnL attribution."],
+            "funding_rate": 0.00005,
+        },
+        "crypto-cross-exchange-spread": {
+            "codes": ["ETH-USDT"],
+            "interval": "15m",
+            "engine_name": "real_crypto_spread_proxy_v1",
+            "assumptions": [
+                "OKX public OHLCV candles",
+                "intrabar range proxy for executable spread",
+                "taker/maker fees and slippage applied by CryptoEngine",
+            ],
+            "warnings": ["Multi-exchange order book history is not connected yet; this is a real-price spread proxy backtest."],
+        },
+        "crypto-stat-arb-pairs": {
+            "codes": ["ETH-USDT", "SOL-USDT"],
+            "interval": "1H",
+            "engine_name": "real_crypto_stat_arb_pairs_v1",
+            "assumptions": [
+                "OKX public OHLCV candles",
+                "ETH/SOL rolling beta",
+                "z-score entry/exit",
+                "gross exposure normalized by BaseEngine",
+            ],
+        },
+        "crypto-vol-target-rotation": {
+            "codes": ["BTC-USDT", "ETH-USDT"],
+            "interval": "1D",
+            "engine_name": "real_crypto_vol_target_rotation_v1",
+            "assumptions": [
+                "OKX public OHLCV candles",
+                "30-day realized volatility target",
+                "BTC/ETH/cash rotation",
+                "weekly signal persistence through shifted target weights",
+            ],
+        },
+        "crypto-event-driven-risk": {
+            "codes": ["BTC-USDT"],
+            "interval": "4H",
+            "engine_name": "real_crypto_event_risk_proxy_v1",
+            "assumptions": [
+                "OKX public OHLCV candles",
+                "volume spike proxy for event confirmation",
+                "ATR breakout and volatility invalidation",
+            ],
+            "warnings": ["External event calendar is not connected yet; this uses real volume/price event proxies."],
+        },
+        "professional-grid-trading": {
+            "codes": ["BTC-USDT"],
+            "interval": "1H",
+            "engine_name": "real_professional_grid_v1",
+            "assumptions": [
+                "OKX public OHLCV candles",
+                "range grid proxy around 54k-76k",
+                "volatility pause and stop-loss guardrails",
+            ],
+        },
+    }
+    if strategy_id not in configs:
+        raise HTTPException(status_code=404, detail=f"market strategy {strategy_id!r} is not supported for real backtest")
+    return configs[strategy_id]
+
+
+def _market_signal_engine_code(strategy_id: str) -> str:
+    engines: Dict[str, str] = {
+        "crypto-trend-momentum": '''import pandas as pd
+
+
+class SignalEngine:
+    def generate(self, data_map):
+        out = {}
+        for code, df in data_map.items():
+            close = df["close"]
+            high = df["high"]
+            volume = df.get("volume", pd.Series(0.0, index=df.index))
+            fast = close.ewm(span=20, adjust=False).mean()
+            slow = close.ewm(span=60, adjust=False).mean()
+            breakout = close > high.rolling(55, min_periods=20).max().shift(1)
+            vol_ok = close.pct_change().rolling(20, min_periods=10).std() * 100 < 6.5
+            volume_ok = volume > volume.rolling(20, min_periods=10).mean()
+            trend = (fast > slow) & (breakout | volume_ok) & vol_ok
+            exit_signal = (fast < slow) | (~vol_ok)
+            signal = pd.Series(0.0, index=df.index)
+            signal.loc[trend] = 1.0
+            signal.loc[exit_signal] = 0.0
+            signal = signal.replace(0.0, pd.NA).ffill().fillna(0.0).clip(0.0, 1.0)
+            out[code] = signal
+        return out
+''',
+        "crypto-perp-funding-carry": '''import pandas as pd
+
+
+class SignalEngine:
+    def generate(self, data_map):
+        out = {}
+        for code, df in data_map.items():
+            close = df["close"]
+            ret = close.pct_change()
+            carry_proxy = ret.rolling(18, min_periods=8).mean() - ret.rolling(72, min_periods=24).mean()
+            vol = ret.rolling(48, min_periods=12).std()
+            signal = pd.Series(0.0, index=df.index)
+            signal.loc[(carry_proxy > 0) & (vol < vol.rolling(96, min_periods=24).median() * 1.6)] = 1.0
+            signal.loc[carry_proxy < 0] = -1.0
+            out[code] = signal.replace(0.0, pd.NA).ffill().fillna(0.0).clip(-1.0, 1.0)
+        return out
+''',
+        "crypto-cross-exchange-spread": '''import pandas as pd
+
+
+class SignalEngine:
+    def generate(self, data_map):
+        out = {}
+        for code, df in data_map.items():
+            close = df["close"]
+            intrabar_edge = (df["high"] - df["low"]) / close
+            mean_edge = intrabar_edge.rolling(96, min_periods=24).mean()
+            ret = close.pct_change()
+            signal = pd.Series(0.0, index=df.index)
+            signal.loc[(intrabar_edge > mean_edge * 1.4) & (ret > 0)] = 1.0
+            signal.loc[(intrabar_edge > mean_edge * 1.4) & (ret < 0)] = -1.0
+            signal.loc[intrabar_edge <= mean_edge] = 0.0
+            out[code] = signal.fillna(0.0).clip(-1.0, 1.0)
+        return out
+''',
+        "crypto-stat-arb-pairs": '''import pandas as pd
+
+
+class SignalEngine:
+    def generate(self, data_map):
+        codes = list(data_map)
+        out = {code: pd.Series(0.0, index=df.index) for code, df in data_map.items()}
+        if len(codes) < 2:
+            return out
+        a, b = codes[0], codes[1]
+        ca = data_map[a]["close"]
+        cb = data_map[b]["close"].reindex(ca.index).ffill()
+        spread = (ca.pct_change().rolling(120, min_periods=40).sum() - cb.pct_change().rolling(120, min_periods=40).sum())
+        z = (spread - spread.rolling(240, min_periods=80).mean()) / spread.rolling(240, min_periods=80).std()
+        sig_a = pd.Series(0.0, index=ca.index)
+        sig_b = pd.Series(0.0, index=ca.index)
+        sig_a.loc[z > 2.0] = -0.5
+        sig_b.loc[z > 2.0] = 0.5
+        sig_a.loc[z < -2.0] = 0.5
+        sig_b.loc[z < -2.0] = -0.5
+        flat = z.abs() < 0.4
+        sig_a.loc[flat] = 0.0
+        sig_b.loc[flat] = 0.0
+        out[a] = sig_a.replace(0.0, pd.NA).ffill().fillna(0.0).clip(-0.5, 0.5)
+        out[b] = sig_b.reindex(data_map[b].index).replace(0.0, pd.NA).ffill().fillna(0.0).clip(-0.5, 0.5)
+        return out
+''',
+        "crypto-vol-target-rotation": '''import pandas as pd
+
+
+class SignalEngine:
+    def generate(self, data_map):
+        out = {}
+        scores = {}
+        for code, df in data_map.items():
+            close = df["close"]
+            ret = close.pct_change()
+            vol = ret.rolling(30, min_periods=15).std() * (365 ** 0.5)
+            trend = close / close.rolling(90, min_periods=30).mean() - 1
+            raw = (trend.clip(lower=0) / vol.replace(0, pd.NA)).fillna(0.0)
+            scores[code] = raw.reindex(df.index)
+        if not scores:
+            return out
+        aligned = pd.DataFrame(scores).fillna(0.0)
+        total = aligned.sum(axis=1).replace(0, pd.NA)
+        weights = aligned.div(total, axis=0).fillna(0.0).clip(0.0, 0.8)
+        for code, df in data_map.items():
+            out[code] = weights[code].reindex(df.index).ffill().fillna(0.0)
+        return out
+''',
+        "crypto-event-driven-risk": '''import pandas as pd
+
+
+class SignalEngine:
+    def generate(self, data_map):
+        out = {}
+        for code, df in data_map.items():
+            close = df["close"]
+            high = df["high"]
+            low = df["low"]
+            volume = df.get("volume", pd.Series(0.0, index=df.index))
+            tr = pd.concat([(high - low), (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
+            atr = tr.rolling(14, min_periods=7).mean()
+            event = volume > volume.rolling(48, min_periods=12).mean() * 1.8
+            breakout = close > high.rolling(24, min_periods=12).max().shift(1)
+            invalid = close < close.shift(1) - 1.5 * atr
+            signal = pd.Series(0.0, index=df.index)
+            signal.loc[event & breakout] = 1.0
+            signal.loc[invalid] = 0.0
+            out[code] = signal.replace(0.0, pd.NA).ffill(limit=18).fillna(0.0).clip(0.0, 1.0)
+        return out
+''',
+        "professional-grid-trading": '''import pandas as pd
+
+
+class SignalEngine:
+    def generate(self, data_map):
+        out = {}
+        for code, df in data_map.items():
+            close = df["close"]
+            ret = close.pct_change()
+            lower = 54000.0
+            upper = 76000.0
+            center = (lower + upper) / 2.0
+            in_range = (close >= lower) & (close <= upper)
+            vol_ok = ret.rolling(24, min_periods=8).std() * 100 < 4.0
+            signal = pd.Series(0.0, index=df.index)
+            signal.loc[in_range & vol_ok & (close < center)] = 0.35
+            signal.loc[in_range & vol_ok & (close >= center)] = 0.15
+            signal.loc[(close < lower * 0.92) | (close > upper * 1.05)] = 0.0
+            out[code] = signal.ffill().fillna(0.0).clip(0.0, 0.35)
+        return out
+''',
+    }
+    return engines[strategy_id]
+
+
+def _coerce_backtest_float(metrics: Optional[BacktestMetrics], key: str, default: float = 0.0) -> float:
+    if metrics is None:
+        return default
+    value = getattr(metrics, key, default)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _strategy_or_404(strategy_id: str, *, user_id: int):
+    store = _get_strategy_store()
+    for record in store.list_strategies(user_id=int(user_id)):
+        if str(record.id) == strategy_id:
+            return record
+    raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} not found")
+
+
+def _normalize_backtest_symbol(symbol: str) -> str:
+    normalized = str(symbol or "").replace("/", "-").replace("_", "-").upper().strip()
+    if not re.fullmatch(r"[A-Z0-9]+-USDT", normalized):
+        raise HTTPException(status_code=400, detail="symbol must be a USDT crypto pair like BTC-USDT")
+    return normalized
+
+
+def _strategy_signal_engine_code(record: Any, symbol: str) -> str:
+    code = str(getattr(record, "code", "") or "").strip()
+    language = str(getattr(record, "language", "") or "").strip().lower()
+    if not code:
+        raise HTTPException(status_code=400, detail="strategy code is empty")
+
+    try:
+        package = json.loads(code)
+    except json.JSONDecodeError:
+        package = None
+
+    if isinstance(package, dict):
+        signal = package.get("paper_signal") or package.get("signal") or {}
+        action = str(signal.get("action") or signal.get("side") or "HOLD").upper() if isinstance(signal, dict) else "HOLD"
+        target = signal.get("target_weight") if isinstance(signal, dict) else None
+        try:
+            target_weight = float(target)
+        except (TypeError, ValueError):
+            target_weight = 0.25 if action in {"BUY", "BUY_TO_OPEN"} else 0.0
+        target_weight = max(0.0, min(target_weight, 1.0))
+        return f'''
+import pandas as pd
+
+
+class SignalEngine:
+    def generate(self, data_map):
+        target_weight = {target_weight!r}
+        out = {{}}
+        for code, df in data_map.items():
+            index = getattr(df, "index", None)
+            out[code] = pd.Series(target_weight, index=index).fillna(0.0)
+        return out
+'''
+
+    if language != "python":
+        raise HTTPException(status_code=400, detail="real backtest currently supports Python strategies or JSON StrategySpec only")
+
+    if "class SignalEngine" in code:
+        return code
+
+    if re.search(r"\bdef\s+generate_signals\s*\(", code):
+        return code + '''
+
+
+import pandas as pd
+
+
+class SignalEngine:
+    def generate(self, data_map):
+        out = {}
+        for code, df in data_map.items():
+            signal = generate_signals(df)
+            if not isinstance(signal, pd.Series):
+                signal = pd.Series(signal, index=df.index)
+            out[code] = signal.reindex(df.index).ffill().fillna(0.0).clip(-1.0, 1.0)
+        return out
+'''
+
+    raise HTTPException(
+        status_code=400,
+        detail="Python strategy must define class SignalEngine or def generate_signals(data)",
+    )
+
+
+async def _execute_backtest_run(
+    *,
+    run_id: str,
+    prompt: str,
+    context: Dict[str, Any],
+    signal_code: str,
+    config: Dict[str, Any],
+) -> StrategyMarketBacktestResponse:
+    run_dir = RUNS_DIR / run_id
+    code_dir = run_dir / "code"
+    code_dir.mkdir(parents=True, exist_ok=True)
+    (code_dir / "signal_engine.py").write_text(signal_code, encoding="utf-8")
+    (run_dir / "config.json").write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
+    (run_dir / "req.json").write_text(
+        json.dumps({"prompt": prompt, "context": context}, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    from src.tools.backtest_tool import run_backtest
+
+    raw_result = await asyncio.to_thread(run_backtest, str(run_dir))
+    try:
+        result = json.loads(raw_result)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail=f"backtest runner returned invalid JSON: {raw_result[-500:]}") from exc
+    if result.get("status") != "ok":
+        detail = result.get("error") or result.get("stdout") or result.get("stderr") or "backtest failed"
+        raise HTTPException(status_code=502, detail=str(detail)[-1000:])
+
+    run_response = _build_response_from_run_dir(run_dir, elapsed=0.0)
+    metrics = run_response.metrics
+    total_return = _coerce_backtest_float(metrics, "total_return")
+    annual_return = _coerce_backtest_float(metrics, "annual_return")
+    max_drawdown = _coerce_backtest_float(metrics, "max_drawdown")
+    win_rate = _coerce_backtest_float(metrics, "win_rate")
+    trade_count = int(_coerce_backtest_float(metrics, "trade_count"))
+
+    return StrategyMarketBacktestResponse(
+        strategy_id=str(context.get("strategy_id") or context.get("strategy_market_id") or ""),
+        status="passed" if _coerce_backtest_float(metrics, "sharpe") >= 1 and max_drawdown > -0.25 else "failed",
+        run_id=run_id,
+        run_directory=str(run_dir),
+        symbol=",".join(config.get("codes") or []),
+        timeframe=str(config.get("interval") or ""),
+        period=f"{config.get('start_date')} - {config.get('end_date')}",
+        totalReturnPct=round(total_return * 100, 2),
+        annualizedReturnPct=round(annual_return * 100, 2),
+        maxDrawdownPct=round(abs(max_drawdown) * 100, 2),
+        sharpe=round(_coerce_backtest_float(metrics, "sharpe"), 2),
+        winRatePct=round(win_rate * 100, 2),
+        tradeCount=trade_count,
+        engine=str(config.get("engine_name") or config.get("strategy_engine") or "user_strategy_backtest_v1"),
+        assumptions=list(config.get("assumptions") or []),
+        warnings=list(config.get("warnings") or []),
+    )
+
+
+async def _run_marketplace_backtest(
+    payload: StrategyMarketBacktestRequest,
+    ctx: AuthContext,
+) -> StrategyMarketBacktestResponse:
+    strategy_id = payload.strategy_id
+    if strategy_id not in _MARKET_BACKTEST_IDS:
+        raise HTTPException(status_code=404, detail=f"market strategy {strategy_id!r} is not supported for real backtest")
+
+    spec = _market_backtest_strategy_config(strategy_id)
+    codes = list(spec["codes"])
+    if payload.symbol:
+        symbol = payload.symbol.replace("/", "-").upper()
+        if not re.fullmatch(r"[A-Z0-9]+-USDT", symbol):
+            raise HTTPException(status_code=400, detail="symbol must be a USDT crypto pair like BTC-USDT")
+        if strategy_id == "crypto-stat-arb-pairs":
+            codes = [codes[0], symbol] if symbol != codes[0] else codes
+        else:
+            codes = [symbol]
+
+    interval = payload.interval or spec["interval"]
+    if interval not in _MARKET_BACKTEST_INTERVALS:
+        raise HTTPException(status_code=400, detail=f"unsupported interval {interval!r}")
+
+    try:
+        start_ts = datetime.fromisoformat(payload.start_date)
+        end_ts = datetime.fromisoformat(payload.end_date)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="start_date and end_date must be YYYY-MM-DD") from exc
+    if start_ts > end_ts:
+        raise HTTPException(status_code=400, detail="start_date must be <= end_date")
+
+    run_id = f"market_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    config = {
+        "source": "okx",
+        "codes": codes,
+        "start_date": payload.start_date,
+        "end_date": payload.end_date,
+        "interval": interval,
+        "engine": "daily",
+        "initial_cash": 100000.0,
+        "leverage": 1.0,
+        "maker_rate": 0.0002,
+        "taker_rate": 0.0005,
+        "slippage": 0.0005,
+        "funding_rate": float(spec.get("funding_rate", 0.0)),
+        "benchmark": "auto",
+        "strategy_market_id": strategy_id,
+        "strategy_engine": str(spec["engine_name"]),
+        "assumptions": list(spec.get("assumptions", [])),
+        "warnings": list(spec.get("warnings", [])),
+    }
+    return await _execute_backtest_run(
+        run_id=run_id,
+        prompt=f"strategy market real backtest: {strategy_id}",
+        context={"user_id": ctx.user_id, "strategy_market_id": strategy_id},
+        signal_code=_market_signal_engine_code(strategy_id),
+        config=config,
+    )
+
+
+@app.post("/strategy-market/backtest", response_model=StrategyMarketBacktestResponse)
+async def run_strategy_market_backtest(
+    payload: StrategyMarketBacktestRequest,
+    ctx: AuthContext = Depends(require_auth),
+):
+    """Run a real, server-side backtest for a whitelisted marketplace strategy."""
+    return await _run_marketplace_backtest(payload, ctx)
+
+
+@app.post("/strategies/{strategy_id}/backtest", response_model=StrategyMarketBacktestResponse)
+async def run_strategy_backtest(
+    strategy_id: str,
+    payload: StrategyBacktestRequest,
+    ctx: AuthContext = Depends(require_auth),
+):
+    """Run a real, server-side backtest for a saved personal strategy."""
+    record = _strategy_or_404(strategy_id, user_id=ctx.user_id)
+
+    try:
+        package = json.loads(str(record.code or ""))
+    except json.JSONDecodeError:
+        package = None
+    market_id = str(package.get("strategy_id") or record.id) if isinstance(package, dict) else ""
+    if market_id in _MARKET_BACKTEST_IDS:
+        return await _run_marketplace_backtest(
+            StrategyMarketBacktestRequest(
+                strategy_id=market_id,
+                start_date=payload.start_date,
+                end_date=payload.end_date,
+                symbol=payload.symbol,
+                interval=payload.interval,
+            ),
+            ctx,
+        )
+
+    from backtest.loaders.registry import VALID_SOURCES
+
+    symbol = _normalize_backtest_symbol(payload.symbol)
+    if payload.source not in VALID_SOURCES:
+        raise HTTPException(status_code=400, detail=f"source must be one of {VALID_SOURCES}")
+    if payload.interval not in _MARKET_BACKTEST_INTERVALS:
+        raise HTTPException(status_code=400, detail=f"unsupported interval {payload.interval!r}")
+    try:
+        start_ts = datetime.fromisoformat(payload.start_date)
+        end_ts = datetime.fromisoformat(payload.end_date)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="start_date and end_date must be YYYY-MM-DD") from exc
+    if start_ts > end_ts:
+        raise HTTPException(status_code=400, detail="start_date must be <= end_date")
+
+    config = {
+        "source": payload.source,
+        "codes": [symbol],
+        "start_date": payload.start_date,
+        "end_date": payload.end_date,
+        "interval": payload.interval,
+        "engine": "daily",
+        "initial_cash": 100000.0,
+        "leverage": 1.0,
+        "maker_rate": 0.0002,
+        "taker_rate": 0.0005,
+        "slippage": 0.0005,
+        "benchmark": "auto",
+        "strategy_id": record.id,
+        "strategy_engine": "user_strategy_backtest_v1",
+        "assumptions": [
+            "Server-side backtest using real historical OHLCV from the configured data loader.",
+            "Default strategy-library runs use one USDT crypto pair unless overridden by request.",
+        ],
+        "warnings": [],
+    }
+    run_id = f"strategy_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    return await _execute_backtest_run(
+        run_id=run_id,
+        prompt=f"strategy library real backtest: {record.id}",
+        context={"user_id": ctx.user_id, "strategy_id": record.id},
+        signal_code=_strategy_signal_engine_code(record, symbol),
+        config=config,
+    )
 
 
 @app.get("/strategies", response_model=StrategyLibraryResponse)
@@ -2207,7 +3397,7 @@ async def replace_strategy_library(req: ReplaceStrategyLibraryRequest, ctx: Auth
     store = _get_strategy_store()
     try:
         records = [StrategyRecord.from_payload(item.model_dump()) for item in req.strategies]
-    except ValueError as exc:
+    except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     saved = store.replace_all(records, user_id=ctx.user_id)
     return {"strategies": [item.to_dict() for item in saved]}
@@ -2240,6 +3430,89 @@ async def delete_strategy(strategy_id: str, ctx: AuthContext = Depends(require_a
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} not found")
     return {"status": "deleted", "id": strategy_id}
+
+
+@app.post("/paper/deployments", response_model=PaperDeploymentActionResponse)
+async def create_paper_deployment(payload: PaperDeploymentCreateRequest, ctx: AuthContext = Depends(require_auth)):
+    """Create a draft paper deployment from a saved strategy."""
+    from src.paper_trading import PaperTradingError
+
+    svc = _get_paper_service()
+    try:
+        deployment = svc.create_deployment(
+            user_id=_paper_user_id(ctx),
+            strategy_id=payload.strategy_id,
+            limits_payload=payload.limits,
+        )
+        return {"deployment": deployment.to_dict()}
+    except (PaperTradingError, ValueError) as exc:
+        raise _paper_http_error(exc) from exc
+
+
+@app.get("/paper/deployments", response_model=PaperDeploymentListResponse)
+async def list_paper_deployments(ctx: AuthContext = Depends(require_auth)):
+    """List the caller's paper deployments."""
+    svc = _get_paper_service()
+    return {"deployments": [item.to_dict() for item in svc.list_deployments(user_id=_paper_user_id(ctx))]}
+
+
+@app.get("/paper/deployments/{deployment_id}", response_model=PaperDeploymentStatusResponse)
+async def get_paper_deployment_status(deployment_id: str, ctx: AuthContext = Depends(require_auth)):
+    """Return deployment state and recent paper activity."""
+    from src.paper_trading import PaperTradingError
+
+    svc = _get_paper_service()
+    try:
+        return svc.status(deployment_id, user_id=_paper_user_id(ctx))
+    except PaperTradingError as exc:
+        raise _paper_http_error(exc) from exc
+
+
+async def _paper_action(deployment_id: str, action: str, ctx: AuthContext) -> dict[str, Any]:
+    from src.paper_trading import PaperTradingError
+
+    svc = _get_paper_service()
+    try:
+        deployment = svc.set_status(deployment_id, user_id=_paper_user_id(ctx), action=action)
+        return {"deployment": deployment.to_dict()}
+    except PaperTradingError as exc:
+        raise _paper_http_error(exc) from exc
+
+
+@app.post("/paper/deployments/{deployment_id}/start", response_model=PaperDeploymentActionResponse)
+async def start_paper_deployment(deployment_id: str, ctx: AuthContext = Depends(require_auth)):
+    """Start a draft or paused paper deployment."""
+    return await _paper_action(deployment_id, "start", ctx)
+
+
+@app.post("/paper/deployments/{deployment_id}/pause", response_model=PaperDeploymentActionResponse)
+async def pause_paper_deployment(deployment_id: str, ctx: AuthContext = Depends(require_auth)):
+    """Pause a running paper deployment."""
+    return await _paper_action(deployment_id, "pause", ctx)
+
+
+@app.post("/paper/deployments/{deployment_id}/resume", response_model=PaperDeploymentActionResponse)
+async def resume_paper_deployment(deployment_id: str, ctx: AuthContext = Depends(require_auth)):
+    """Resume a paused paper deployment."""
+    return await _paper_action(deployment_id, "resume", ctx)
+
+
+@app.post("/paper/deployments/{deployment_id}/archive", response_model=PaperDeploymentActionResponse)
+async def archive_paper_deployment(deployment_id: str, ctx: AuthContext = Depends(require_auth)):
+    """Archive a paper deployment."""
+    return await _paper_action(deployment_id, "archive", ctx)
+
+
+@app.post("/paper/deployments/{deployment_id}/tick", response_model=PaperTickResponse)
+async def run_paper_deployment_tick(deployment_id: str, ctx: AuthContext = Depends(require_auth)):
+    """Run one manual paper deployment tick."""
+    from src.paper_trading import PaperTradingError
+
+    svc = _get_paper_service()
+    try:
+        return await svc.run_tick(deployment_id, user_id=_paper_user_id(ctx))
+    except PaperTradingError as exc:
+        raise _paper_http_error(exc) from exc
 
 
 @app.post("/sessions", response_model=SessionResponse, status_code=status.HTTP_201_CREATED)
@@ -3353,7 +4626,93 @@ def _known_live_brokers() -> List[str]:
     """Return the recognized live-broker keys (SPEC §7.2)."""
     from src.config.schema import LIVE_BROKER_SERVER_KEYS
 
-    return sorted(LIVE_BROKER_SERVER_KEYS)
+    return sorted(set(LIVE_BROKER_SERVER_KEYS) | {"okx", "binance"})
+
+
+def _save_crypto_live_connector_config(
+    *,
+    exchange: str,
+    product_type: str,
+    api_key: str,
+    api_secret: str,
+    passphrase: str = "",
+    margin_mode: str = "cross",
+    check_connection: bool = False,
+) -> Dict[str, Any]:
+    exchange = exchange.strip().lower()
+    product_type = product_type.strip().lower()
+    profile_id = f"{exchange}-live-trade"
+
+    try:
+        if exchange == "okx":
+            from src.trading.connectors.okx import sdk as okx_sdk
+
+            cfg = okx_sdk.OKXConfig.from_mapping(
+                {
+                    "api_key": api_key,
+                    "api_secret": api_secret,
+                    "passphrase": passphrase,
+                    "profile": "live",
+                    "product_type": product_type,
+                    "margin_mode": margin_mode,
+                }
+            )
+            path = okx_sdk.save_config(cfg)
+        elif exchange == "binance":
+            from src.trading.connectors.binance import sdk as binance_sdk
+
+            cfg = binance_sdk.BinanceConfig.from_mapping(
+                {
+                    "api_key": api_key,
+                    "api_secret": api_secret,
+                    "profile": "live",
+                    "product_type": product_type,
+                }
+            )
+            path = binance_sdk.save_config(cfg)
+        else:
+            raise HTTPException(status_code=400, detail="exchange must be okx or binance")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    connection: Optional[Dict[str, Any]] = None
+    if check_connection:
+        from src.trading.service import check_connection
+
+        connection = check_connection(profile_id)
+
+    return {
+        "status": "configured",
+        "exchange": exchange,
+        "product_type": product_type,
+        "profile_id": profile_id,
+        "config_path": str(path),
+        "connection": connection,
+    }
+
+
+@app.post("/live/crypto/configure", response_model=CryptoLiveConfigureResponse)
+async def configure_crypto_live_endpoint(
+    payload: CryptoLiveConfigureRequest,
+    _ctx: AuthContext = Depends(require_auth),
+):
+    """Persist user-supplied OKX/Binance live credentials for strategy trading.
+
+    This endpoint intentionally does not place orders and does not create a
+    mandate. Live order placement still goes through the existing live profile
+    plus mandate gate. ``check_connection`` performs only read-only broker
+    calls after saving.
+    """
+
+    return _save_crypto_live_connector_config(
+        exchange=payload.exchange,
+        product_type=payload.product_type,
+        api_key=payload.api_key,
+        api_secret=payload.api_secret,
+        passphrase=payload.passphrase,
+        margin_mode=payload.margin_mode,
+        check_connection=payload.check_connection,
+    )
 
 
 def _oauth_token_present(broker: str) -> bool:
@@ -3364,6 +4723,17 @@ def _oauth_token_present(broker: str) -> bool:
     empty directory means the channel is dormant (read-only, no live path).
     """
     try:
+        if broker == "okx":
+            from src.trading.connectors.okx import sdk as okx_sdk
+
+            cfg = okx_sdk.load_config()
+            return not okx_sdk._missing_fields(cfg) and cfg.environment == "live"  # type: ignore[attr-defined]
+        if broker == "binance":
+            from src.trading.connectors.binance import sdk as binance_sdk
+
+            cfg = binance_sdk.load_config()
+            return not binance_sdk._missing_fields(cfg) and cfg.environment == "live"  # type: ignore[attr-defined]
+
         from src.live.paths import broker_dir
 
         oauth_dir = broker_dir(broker) / "oauth"

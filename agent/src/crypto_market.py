@@ -66,7 +66,7 @@ _SYMBOL_ICON_COLORS: Mapping[str, tuple[str, str]] = {
 }
 
 _FALLBACK_PRICES: Mapping[str, float] = {
-    "BTC/USDT": 104820.0,
+    "BTC/USDT": 59510.865,
     "ETH/USDT": 3450.0,
     "BNB/USDT": 655.0,
     "SOL/USDT": 164.0,
@@ -253,16 +253,20 @@ def _row_from_ticker(rank: int, symbol: str, ticker: Mapping[str, Any]) -> Crypt
 
 
 def _fallback_row(rank: int, symbol: str) -> CryptoMarketRow:
-    price = _FALLBACK_PRICES[symbol]
-    change = _fallback_change(rank)
+    price, change = _fallback_realtime_price(rank, symbol)
     volume = _fallback_volume(rank, symbol)
+    open_price = price / (1 + change / 100) if change > -99 else price
+    upper_anchor = max(price, open_price)
+    lower_anchor = min(price, open_price)
+    high = upper_anchor * (1 + abs(change) / 700 + 0.012)
+    low = lower_anchor * (1 - abs(change) / 800 - 0.010)
     return _market_row(
         rank=rank,
         symbol=symbol,
         price=price,
         change_24h=change,
-        high_24h=price * (1 + abs(change) / 100 + 0.018),
-        low_24h=price * (1 - abs(change) / 100 - 0.014),
+        high_24h=high,
+        low_24h=low,
         volume_24h=volume,
         quote_volume_24h=volume * price,
     )
@@ -559,6 +563,23 @@ def _fallback_funding(rank: int, symbol: str) -> float:
 def _fallback_change(rank: int) -> float:
     rng = _deterministic_rng("change", rank)
     return round(rng.uniform(-4.8, 5.6), 4)
+
+
+def _fallback_realtime_price(rank: int, symbol: str) -> tuple[float, float]:
+    base_price = _FALLBACK_PRICES[symbol]
+    window = int(time.time() // 15)
+    previous_rng = _deterministic_rng("ticker", symbol, window - 1)
+    current_rng = _deterministic_rng("ticker", symbol, window)
+    progress = (time.time() % 15) / 15
+    previous_tick = previous_rng.uniform(-0.009, 0.009)
+    current_tick = current_rng.uniform(-0.009, 0.009)
+    tick_move = previous_tick + (current_tick - previous_tick) * progress
+    intraday_move = math.sin((window + rank * 17) / 211) * 0.018
+    drift = math.sin((window + rank * 31) / 997) * 0.026
+    total_move = max(-0.08, min(0.08, tick_move + intraday_move + drift))
+    price = base_price * (1 + total_move)
+    change = _fallback_change(rank) + total_move * 100
+    return round(price, 10), round(change, 4)
 
 
 def _fallback_volume(rank: int, symbol: str) -> float:

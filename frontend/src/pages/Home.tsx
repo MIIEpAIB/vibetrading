@@ -36,7 +36,7 @@ type CoinSeed = {
 };
 
 const COIN_SEEDS: CoinSeed[] = [
-  { symbol: "BTC/USDT", name: "Bitcoin", price: 104820, change: 2.84, iconBg: "#f7931a", iconFg: "#111827" },
+  { symbol: "BTC/USDT", name: "Bitcoin", price: 59510.865, change: 2.84, iconBg: "#f7931a", iconFg: "#111827" },
   { symbol: "ETH/USDT", name: "Ethereum", price: 3450, change: 1.96, iconBg: "#627eea", iconFg: "#ffffff" },
   { symbol: "BNB/USDT", name: "BNB", price: 655, change: -0.52, iconBg: "#f3ba2f", iconFg: "#111827" },
   { symbol: "SOL/USDT", name: "Solana", price: 164, change: 4.2, iconBg: "#14f195", iconFg: "#111827" },

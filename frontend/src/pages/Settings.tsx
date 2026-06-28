@@ -32,7 +32,7 @@ function toForm(settings: LLMSettings): LLMFormState {
   };
 }
 
-export function Settings() {
+export function Settings({ embedded = false }: { embedded?: boolean } = {}) {
   const { t } = useTranslation();
   const [settings, setSettings] = useState<LLMSettings | null>(null);
   const [dataSettings, setDataSettings] = useState<DataSourceSettings | null>(null);
@@ -184,12 +184,12 @@ export function Settings() {
 
   if (loading || !form || !settings || !dataSettings) {
     return (
-      <div className="mx-auto max-w-5xl space-y-6 p-6">
+      <div className={embedded ? "space-y-6" : "mx-auto max-w-5xl space-y-6 p-6"}>
         <div className="space-y-2">
           <h1 className="text-2xl font-semibold tracking-tight">{t("settings.title")}</h1>
           <p className="max-w-3xl text-sm text-muted-foreground">{t("settings.subtitle")}</p>
         </div>
-        {localApiAccessSection}
+        {!embedded && localApiAccessSection}
         <div className="flex min-h-32 items-center justify-center rounded-lg border bg-card p-5 text-sm text-muted-foreground">
           {settingsLoadError ? (
             <div className="text-center">
@@ -220,13 +220,13 @@ export function Settings() {
     : t("settings.keepCurrentToken");
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 p-6">
+    <div className={embedded ? "space-y-6" : "mx-auto max-w-5xl space-y-6 p-6"}>
       <div className="space-y-2">
         <h1 className="text-2xl font-semibold tracking-tight">{t("settings.title")}</h1>
         <p className="max-w-3xl text-sm text-muted-foreground">{t("settings.subtitle")}</p>
       </div>
 
-      {localApiAccessSection}
+      {!embedded && localApiAccessSection}
 
       <div className="space-y-2">
         <h2 className="text-lg font-semibold tracking-tight">{t("settings.llm.title")}</h2>

@@ -5,6 +5,21 @@ export const SHADOW_SYMBOLS = ["BTC_USDT", "ETH_USDT", "SOL_USDT", "BNB_USDT", "
 export type ShadowSymbol = (typeof SHADOW_SYMBOLS)[number];
 export type ShadowImportSide = "BUY" | "SELL";
 export type ShadowImportOrderType = "MARKET" | "LIMIT";
+export type ShadowImportTradeSource = "run_log" | "shadow_order";
+
+export interface ShadowImportRunTrade {
+  source?: ShadowImportTradeSource;
+  symbol?: ShadowSymbol;
+  side?: ShadowImportSide;
+  quantity?: number;
+  price?: number;
+  notional?: number;
+  pnl?: number;
+  pnl_percent?: number;
+  opened_at?: string;
+  closed_at?: string;
+  note?: string;
+}
 
 export interface ShadowImportDraft {
   version: 1;
@@ -12,6 +27,15 @@ export interface ShadowImportDraft {
   createdAt: number;
   runId?: string;
   shadowId?: string;
+  run?: {
+    prompt?: string;
+    status?: string;
+    elapsed_seconds?: number;
+    run_stage?: string;
+    run_directory?: string;
+    trade_count?: number;
+    trades?: ShadowImportRunTrade[];
+  };
   symbol: ShadowSymbol;
   side: ShadowImportSide;
   orderType: ShadowImportOrderType;
@@ -30,7 +54,7 @@ const DEFAULT_TEST_NOTIONAL_USD = 2_000;
 const MAX_IMPORTED_NOTIONAL_USD = 5_000;
 
 const DEFAULT_MARKET_PRICES: Record<ShadowSymbol, number> = {
-  BTC_USDT: 65_000,
+  BTC_USDT: 59_510.865,
   ETH_USDT: 3_500,
   SOL_USDT: 164,
   BNB_USDT: 655,
@@ -40,6 +64,13 @@ const DEFAULT_MARKET_PRICES: Record<ShadowSymbol, number> = {
 const TRADE_SYMBOL_KEYS = ["symbol", "ticker", "instrument", "asset", "pair", "code"];
 const TRADE_QUANTITY_KEYS = ["quantity", "qty", "shares", "amount", "size", "base_qty", "base quantity"];
 const TRADE_PRICE_KEYS = ["price", "entry_price", "fill_price", "executed_price", "avg_price", "average_price", "close"];
+const TRADE_SIDE_KEYS = ["side", "action", "direction", "signal", "order_side", "position_side"];
+const TRADE_NOTIONAL_KEYS = ["notional", "amount_usd", "usd_amount", "quote_amount", "value", "trade_value", "cost", "proceeds"];
+const TRADE_PNL_KEYS = ["pnl", "p&l", "profit", "profit_loss", "realized_pnl", "net_pnl", "pl"];
+const TRADE_PNL_PERCENT_KEYS = ["pnl_pct", "pnl_percent", "pnl_%", "return", "return_pct", "profit_pct", "profit_percent"];
+const TRADE_OPEN_TIME_KEYS = ["entry_time", "open_time", "opened_at", "timestamp", "time", "date", "datetime"];
+const TRADE_CLOSE_TIME_KEYS = ["exit_time", "close_time", "closed_at"];
+const TRADE_NOTE_KEYS = ["reason", "comment", "note", "memo"];
 
 interface BuildDraftInput {
   runId?: string;
@@ -66,6 +97,7 @@ export function buildShadowImportDraft(input: BuildDraftInput): ShadowImportDraf
     createdAt: Date.now(),
     runId: input.runId,
     shadowId: input.shadowId,
+    run: summarizeRun(input.runData),
     symbol,
     side: "BUY",
     orderType: "MARKET",
@@ -98,6 +130,7 @@ export function loadShadowImportDraft(key: string): ShadowImportDraft | null {
       createdAt: Number(parsed.createdAt) || Date.now(),
       runId: typeof parsed.runId === "string" ? parsed.runId : undefined,
       shadowId: typeof parsed.shadowId === "string" ? parsed.shadowId : undefined,
+      run: sanitizeRunSummary(parsed.run),
       symbol: parsed.symbol,
       side,
       orderType,
@@ -121,6 +154,95 @@ export function normalizeShadowSymbol(value: unknown): ShadowSymbol | null {
       ? `${separated.slice(0, -4)}_USDT`
       : separated;
   return isShadowSymbol(normalized) ? normalized : null;
+}
+
+function summarizeRun(runData?: RunData | null): ShadowImportDraft["run"] {
+  if (!runData) return undefined;
+  return sanitizeRunSummary({
+    prompt: runData.prompt,
+    status: runData.status,
+    elapsed_seconds: runData.elapsed_seconds,
+    run_stage: runData.run_stage,
+    run_directory: runData.run_directory,
+    trade_count: Array.isArray(runData.trade_log) ? runData.trade_log.length : undefined,
+    trades: summarizeRunTrades(runData.trade_log),
+  });
+}
+
+function sanitizeRunSummary(run?: Partial<NonNullable<ShadowImportDraft["run"]>>): ShadowImportDraft["run"] {
+  if (!run || typeof run !== "object" || Array.isArray(run)) return undefined;
+  const cleaned: NonNullable<ShadowImportDraft["run"]> = {};
+  if (typeof run.prompt === "string" && run.prompt.trim()) cleaned.prompt = run.prompt.trim();
+  if (typeof run.status === "string" && run.status.trim()) cleaned.status = run.status.trim();
+  if (typeof run.run_stage === "string" && run.run_stage.trim()) cleaned.run_stage = run.run_stage.trim();
+  if (typeof run.run_directory === "string" && run.run_directory.trim()) cleaned.run_directory = run.run_directory.trim();
+  const elapsed = parseFiniteNumber(run.elapsed_seconds);
+  if (elapsed !== undefined && elapsed >= 0) cleaned.elapsed_seconds = elapsed;
+  const tradeCount = parseFiniteNumber(run.trade_count);
+  if (tradeCount !== undefined && tradeCount >= 0) cleaned.trade_count = tradeCount;
+  const trades = sanitizeRunTrades(run.trades);
+  if (trades.length) {
+    cleaned.trades = trades;
+    if (cleaned.trade_count === undefined) cleaned.trade_count = trades.length;
+  }
+  return Object.keys(cleaned).length ? cleaned : undefined;
+}
+
+function summarizeRunTrades(rows?: Array<Record<string, string>>): ShadowImportRunTrade[] | undefined {
+  if (!Array.isArray(rows)) return undefined;
+  const trades = rows
+    .map((row) => sanitizeRunTrade(row))
+    .filter((trade): trade is ShadowImportRunTrade => Boolean(trade));
+  return trades.length ? trades.slice(-30) : undefined;
+}
+
+function sanitizeRunTrades(value: unknown): ShadowImportRunTrade[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => sanitizeRunTrade(item))
+    .filter((trade): trade is ShadowImportRunTrade => Boolean(trade))
+    .slice(-30);
+}
+
+function sanitizeRunTrade(value: unknown): ShadowImportRunTrade | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  const symbol = normalizeShadowSymbol(firstRowValue(row, TRADE_SYMBOL_KEYS));
+  const quantity = positiveNumber(firstRowValue(row, TRADE_QUANTITY_KEYS));
+  const price = positiveNumber(firstRowValue(row, TRADE_PRICE_KEYS));
+  const explicitNotional = positiveNumber(firstRowValue(row, TRADE_NOTIONAL_KEYS));
+  const notional = explicitNotional ?? (quantity && price ? quantity * price : undefined);
+  const pnl = parseFiniteNumber(firstRowValue(row, TRADE_PNL_KEYS));
+  const pnlPercent = parseFiniteNumber(firstRowValue(row, TRADE_PNL_PERCENT_KEYS));
+  const side = normalizeTradeSide(firstRowValue(row, TRADE_SIDE_KEYS));
+  const openedAt = nonEmptyString(firstRowValue(row, TRADE_OPEN_TIME_KEYS));
+  const closedAt = nonEmptyString(firstRowValue(row, TRADE_CLOSE_TIME_KEYS));
+  const note = nonEmptyString(firstRowValue(row, TRADE_NOTE_KEYS));
+  const source = row.source === "shadow_order" ? "shadow_order" : "run_log";
+
+  if (!symbol && !quantity && !price && !notional && pnl === undefined) return null;
+  return {
+    source,
+    symbol: symbol ?? undefined,
+    side,
+    quantity,
+    price,
+    notional,
+    pnl,
+    pnl_percent: pnlPercent,
+    opened_at: openedAt,
+    closed_at: closedAt,
+    note,
+  };
+}
+
+function normalizeTradeSide(value: unknown): ShadowImportSide | undefined {
+  if (value == null) return undefined;
+  const raw = String(value).trim().toUpperCase();
+  if (!raw) return undefined;
+  if (/\b(SELL|SHORT|EXIT|CLOSE)\b/.test(raw)) return "SELL";
+  if (/\b(BUY|LONG|ENTRY|OPEN)\b/.test(raw)) return "BUY";
+  return undefined;
 }
 
 function findSupportedTrade(runData?: RunData | null): TradeHint | null {
@@ -207,6 +329,12 @@ function parseFiniteNumber(value: unknown): number | undefined {
   if (!cleaned) return undefined;
   const parsed = Number(cleaned);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  if (value == null) return undefined;
+  const text = String(value).trim();
+  return text || undefined;
 }
 
 function isShadowSymbol(value: unknown): value is ShadowSymbol {
