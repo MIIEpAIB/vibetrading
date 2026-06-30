@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ipaddress
+import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -219,6 +221,113 @@ def test_shell_tools_remote_api_request_accepts_explicit_opt_in(
     monkeypatch.setenv("VIBE_TRADING_ENABLE_SHELL_TOOLS", "1")
 
     assert api_server._shell_tools_enabled_for_request(request)
+
+
+def test_live_crypto_configure_rejects_dev_proxy_trust_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "dev-proxy-secret-with-enough-entropy"
+    monkeypatch.setenv("VIBE_DEV_PROXY_AUTH", secret)
+    request = SimpleNamespace(
+        client=SimpleNamespace(host="127.0.0.1"),
+        headers={"x-vibe-dev-proxy-auth": secret},
+    )
+
+    with pytest.raises(api_server.HTTPException) as excinfo:
+        asyncio.run(api_server.require_live_credential_config_auth(request=request, cred=None))
+    assert excinfo.value.status_code == 403
+    assert "API_AUTH_KEY" in excinfo.value.detail
+
+
+def test_operator_auth_rejects_dev_proxy_loopback_without_operator_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "dev-proxy-secret-with-enough-entropy"
+    monkeypatch.setenv("VIBE_DEV_PROXY_AUTH", secret)
+    request = SimpleNamespace(
+        client=SimpleNamespace(host="127.0.0.1"),
+        headers={"x-vibe-dev-proxy-auth": secret},
+    )
+
+    with pytest.raises(api_server.HTTPException) as excinfo:
+        asyncio.run(api_server.require_operator_auth(request=request, cred=None))
+    assert excinfo.value.status_code == 403
+    assert "API_AUTH_KEY" in excinfo.value.detail
+
+
+def test_operator_auth_accepts_dev_proxy_loopback_with_operator_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "dev-proxy-secret-with-enough-entropy"
+    monkeypatch.setenv("VIBE_DEV_PROXY_AUTH", secret)
+    monkeypatch.setenv("API_AUTH_KEY", "operator-secret")
+    monkeypatch.setattr(api_server, "_API_KEY", "operator-secret")
+    request = SimpleNamespace(
+        client=SimpleNamespace(host="127.0.0.1"),
+        headers={"x-vibe-dev-proxy-auth": secret},
+    )
+    cred = SimpleNamespace(credentials="operator-secret")
+
+    asyncio.run(api_server.require_operator_auth(request=request, cred=cred))
+
+
+def test_settings_auth_rejects_dev_proxy_loopback_without_operator_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "dev-proxy-secret-with-enough-entropy"
+    monkeypatch.setenv("VIBE_DEV_PROXY_AUTH", secret)
+    request = SimpleNamespace(
+        client=SimpleNamespace(host="127.0.0.1"),
+        headers={"x-vibe-dev-proxy-auth": secret},
+    )
+
+    with pytest.raises(api_server.HTTPException) as excinfo:
+        asyncio.run(api_server.require_local_or_auth(request=request, cred=None))
+    assert excinfo.value.status_code == 403
+    assert "API_AUTH_KEY" in excinfo.value.detail
+
+
+def test_live_crypto_configure_rejects_application_user_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("API_AUTH_KEY", "operator-secret")
+    monkeypatch.setattr(api_server, "_API_KEY", "operator-secret")
+    request = SimpleNamespace(client=SimpleNamespace(host="203.0.113.10"), headers={})
+    cred = SimpleNamespace(credentials="user-token")
+
+    with pytest.raises(api_server.HTTPException) as excinfo:
+        asyncio.run(api_server.require_live_credential_config_auth(request=request, cred=cred))
+    assert excinfo.value.status_code == 401
+
+
+def test_live_crypto_configure_accepts_operator_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("API_AUTH_KEY", "operator-secret")
+    monkeypatch.setattr(api_server, "_API_KEY", "operator-secret")
+    request = SimpleNamespace(client=SimpleNamespace(host="203.0.113.10"), headers={})
+    cred = SimpleNamespace(credentials="operator-secret")
+
+    asyncio.run(api_server.require_live_credential_config_auth(request=request, cred=cred))
+
+
+def test_save_crypto_live_connector_config_does_not_leak_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path), raising=False)
+
+    body = api_server._save_crypto_live_connector_config(
+        exchange="okx",
+        product_type="spot",
+        api_key="key",
+        api_secret="secret",
+        passphrase="phrase",
+    )
+
+    assert body["profile_id"] == "okx-live-trade"
+    assert body["config_path"] == "connector://okx-live-trade"
+    assert str(tmp_path) not in body["config_path"]
 
 
 def test_default_cors_origins_are_loopback_only() -> None:

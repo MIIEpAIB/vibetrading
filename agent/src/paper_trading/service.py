@@ -10,6 +10,7 @@ from typing import Any, Iterable, Protocol
 
 from src.paper_trading.models import (
     DEPLOYMENT_STATUSES,
+    EXECUTION_MODES,
     PaperDeployment,
     PaperLimits,
     PaperOrderLink,
@@ -61,6 +62,28 @@ def _finite_positive(value: float | None) -> bool:
     return value is not None and math.isfinite(float(value)) and float(value) > 0
 
 
+def _default_broker_order_executor(
+    *,
+    profile_id: str,
+    symbol: str,
+    side: str,
+    quantity: float,
+    order_type: str,
+    limit_price: float | None,
+) -> dict[str, Any]:
+    from src.trading.service import place_order
+
+    return place_order(
+        symbol,
+        profile_id,
+        side=side,
+        quantity=quantity,
+        order_type=order_type.lower(),
+        limit_price=limit_price,
+        time_in_force="day",
+    )
+
+
 class PaperTradingService:
     """Create, manage, and tick paper deployments."""
 
@@ -71,11 +94,13 @@ class PaperTradingService:
         strategy_store: StrategyStoreLike,
         shadow_service: ShadowTradingServiceLike,
         shadow_user_resolver: Any | None = None,
+        broker_order_executor: Any | None = None,
     ) -> None:
         self.store = store
         self.strategy_store = strategy_store
         self.shadow_service = shadow_service
         self.shadow_user_resolver = shadow_user_resolver or (lambda user_id: f"user:{user_id}")
+        self.broker_order_executor = broker_order_executor or _default_broker_order_executor
 
     def create_deployment(
         self,
@@ -83,12 +108,18 @@ class PaperTradingService:
         user_id: int,
         strategy_id: str,
         limits_payload: dict[str, Any] | None = None,
+        execution_mode: str = "shadow",
+        connector_profile_id: str = "",
     ) -> PaperDeployment:
         """Create a draft deployment from a user-owned strategy."""
         record = self._strategy_or_error(strategy_id, user_id=user_id)
         snapshot = StrategySnapshot.from_strategy_record(record)
         limits = PaperLimits.from_payload(limits_payload)
         limits.validate()
+        execution_mode, connector_profile_id = self._validate_execution_target(
+            execution_mode,
+            connector_profile_id,
+        )
         created = now_iso()
         deployment = PaperDeployment(
             deployment_id=_id("paper"),
@@ -99,6 +130,8 @@ class PaperTradingService:
             limits=limits,
             created_at=created,
             updated_at=created,
+            execution_mode=execution_mode,
+            connector_profile_id=connector_profile_id,
         )
         return self.store.create_deployment(deployment)
 
@@ -182,15 +215,17 @@ class PaperTradingService:
             self._stamp_last_tick(deployment)
             return self._tick_payload(tick, signal=signal, decision=decision)
 
-        order = await self._place_shadow_order(deployment, signal, decision)
+        order = await self._place_execution_order(deployment, signal, decision)
         link = self._link_order(deployment, signal, decision, order)
+        order_status = _order_status(order)
+        order_id = _order_id(order)
         tick = self._record_tick(
             deployment,
-            outcome="order_placed",
-            reason=f"shadow order {order.status.value if hasattr(order.status, 'value') else order.status}",
+            outcome="failed" if order_status == "REJECTED" else "order_placed",
+            reason=f"{deployment.execution_mode} order {order_status}",
             signal_id=signal.signal_id,
             decision_id=decision.decision_id,
-            shadow_order_id=order.order_id,
+            shadow_order_id=order_id,
         )
         self._stamp_last_tick(deployment)
         return self._tick_payload(tick, signal=signal, decision=decision, order_link=link)
@@ -222,6 +257,27 @@ class PaperTradingService:
             if str(record.id) == strategy_id:
                 return record
         raise PaperTradingError(f"Strategy {strategy_id} not found")
+
+    def _validate_execution_target(self, execution_mode: str, connector_profile_id: str) -> tuple[str, str]:
+        mode = str(execution_mode or "shadow").strip().lower()
+        if mode not in EXECUTION_MODES:
+            raise PaperTradingError("execution_mode must be shadow or broker_paper")
+        profile_id = str(connector_profile_id or "").strip().lower()
+        if mode == "shadow":
+            return mode, ""
+        if not profile_id:
+            raise PaperTradingError("broker paper execution requires connector_profile_id")
+        try:
+            from src.trading.profiles import profile_by_id
+
+            profile = profile_by_id(profile_id)
+        except Exception as exc:  # noqa: BLE001
+            raise PaperTradingError(str(exc)) from exc
+        if profile.environment != "paper":
+            raise PaperTradingError("broker paper execution only accepts paper connector profiles")
+        if profile.readonly or profile.transport != "broker_sdk" or "orders.place" not in profile.capabilities:
+            raise PaperTradingError("connector_profile_id must support paper order placement")
+        return mode, profile.id
 
     def _generate_signal(self, deployment: PaperDeployment) -> PaperSignal:
         package = self._load_strategy_package(deployment.strategy_snapshot)
@@ -420,6 +476,16 @@ class PaperTradingService:
         )
         return self.store.add_decision(item)
 
+    async def _place_execution_order(
+        self,
+        deployment: PaperDeployment,
+        signal: PaperSignal,
+        decision: PaperRiskDecision,
+    ) -> Any:
+        if deployment.execution_mode == "broker_paper":
+            return await self._place_broker_paper_order(deployment, signal, decision)
+        return await self._place_shadow_order(deployment, signal, decision)
+
     async def _place_shadow_order(
         self,
         deployment: PaperDeployment,
@@ -438,6 +504,39 @@ class PaperTradingService:
             price=price,
         )
 
+    async def _place_broker_paper_order(
+        self,
+        deployment: PaperDeployment,
+        signal: PaperSignal,
+        decision: PaperRiskDecision,
+    ) -> dict[str, Any]:
+        _mode, profile_id = self._validate_execution_target(
+            deployment.execution_mode,
+            deployment.connector_profile_id,
+        )
+        order_type = str(deployment.limits.order_type or "MARKET").strip().upper()
+        limit_price = decision.price if order_type == "LIMIT" else None
+        try:
+            from src.trading.profiles import profile_by_id
+
+            profile = profile_by_id(profile_id)
+            symbol = _connector_symbol(profile.connector, signal.symbol)
+            result = self.broker_order_executor(
+                profile_id=profile_id,
+                symbol=symbol,
+                side=signal.action.lower(),
+                quantity=decision.quantity,
+                order_type=order_type,
+                limit_price=limit_price,
+            )
+        except Exception as exc:  # noqa: BLE001
+            result = {"status": "error", "error": str(exc)}
+        return {
+            **(result if isinstance(result, dict) else {"status": "error", "raw": result}),
+            "execution_mode": "broker_paper",
+            "connector_profile_id": profile_id,
+        }
+
     def _link_order(
         self,
         deployment: PaperDeployment,
@@ -445,17 +544,23 @@ class PaperTradingService:
         decision: PaperRiskDecision,
         order: Any,
     ) -> PaperOrderLink:
-        status = order.status.value if hasattr(order.status, "value") else str(order.status)
+        status = _order_status(order)
+        order_id = _order_id(order)
+        broker_order_id = _broker_order_id(order)
         link = PaperOrderLink(
             link_id=_id("plink"),
             deployment_id=deployment.deployment_id,
             signal_id=signal.signal_id,
             decision_id=decision.decision_id,
             user_id=deployment.user_id,
-            shadow_order_id=str(order.order_id),
+            shadow_order_id=order_id,
             shadow_status=status,
-            rejection_reason=str(getattr(order, "rejection_reason", "") or ""),
+            rejection_reason=_rejection_reason(order),
             created_at=now_iso(),
+            execution_mode=deployment.execution_mode,
+            connector_profile_id=deployment.connector_profile_id,
+            broker_order_id=broker_order_id,
+            broker_payload=order if isinstance(order, dict) else {},
         )
         return self.store.add_order_link(link)
 
@@ -551,6 +656,43 @@ def _wallet_balance(account: dict[str, Any], asset: str) -> float:
         if str(wallet.get("asset_name") or "").upper() == asset:
             return float(wallet.get("balance") or 0.0)
     return 0.0
+
+
+def _connector_symbol(connector: str, symbol: str) -> str:
+    normalized = normalize_symbol(symbol)
+    if connector in {"binance", "okx"}:
+        return normalized.replace("_", "-")
+    return normalized
+
+
+def _order_status(order: Any) -> str:
+    if isinstance(order, dict):
+        if str(order.get("status") or "").lower() != "ok":
+            return "REJECTED"
+        broker_status = str(order.get("order_status") or order.get("broker_status") or "").strip().upper()
+        return broker_status or "SUBMITTED"
+    value = getattr(order, "status", "")
+    return value.value if hasattr(value, "value") else str(value)
+
+
+def _order_id(order: Any) -> str:
+    if isinstance(order, dict):
+        return str(order.get("order_id") or order.get("id") or f"BRK-{uuid.uuid4().hex[:12].upper()}")
+    return str(getattr(order, "order_id", "") or f"SHD-{uuid.uuid4().hex[:12].upper()}")
+
+
+def _broker_order_id(order: Any) -> str:
+    if not isinstance(order, dict):
+        return ""
+    return str(order.get("order_id") or order.get("id") or "")
+
+
+def _rejection_reason(order: Any) -> str:
+    if isinstance(order, dict):
+        if str(order.get("status") or "").lower() == "ok":
+            return ""
+        return str(order.get("error") or order.get("message") or "broker paper order rejected")
+    return str(getattr(order, "rejection_reason", "") or "")
 
 
 def _first_or_none(items: list[Any]) -> dict[str, Any] | None:

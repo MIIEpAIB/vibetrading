@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
 from datetime import datetime
 
 import pytest
 from fastapi import HTTPException
 
 import api_server
-from src.strategies.store import MySQLStrategyStore
+from src.strategies.store import MySQLStrategyStore, StrategyRecord
 
 
 def test_strategy_library_api_requires_mysql(monkeypatch) -> None:
@@ -116,3 +118,135 @@ def test_strategy_store_converts_datetime_rows_to_api_strings() -> None:
 
     assert record.createdAt == "2026-06-22T10:30:00"
     assert record.updatedAt == "2026-06-22T10:31:00"
+
+
+def test_strategy_record_supports_unified_language_set() -> None:
+    base = {
+        "id": "multi-lang",
+        "name": "Multi Lang",
+        "description": "",
+        "category": "utility",
+        "status": "draft",
+        "tags": [],
+        "code": "// strategy",
+        "createdAt": "2026-06-22T10:30:00",
+        "updatedAt": "2026-06-22T10:31:00",
+    }
+
+    for language in ["javascript", "python", "cpp", "rust", "pine"]:
+        assert StrategyRecord.from_payload({**base, "language": language}).language == language
+
+
+def test_strategy_record_maps_legacy_json_language_to_javascript() -> None:
+    record = StrategyRecord.from_payload(
+        {
+            "id": "legacy-json",
+            "name": "Legacy Json",
+            "description": "",
+            "language": "json",
+            "category": "utility",
+            "status": "draft",
+            "tags": [],
+            "code": "{}",
+            "createdAt": "2026-06-22T10:30:00",
+            "updatedAt": "2026-06-22T10:31:00",
+        }
+    )
+
+    assert record.language == "javascript"
+
+
+def test_user_python_strategy_backtest_disabled_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("VIBE_TRADING_ALLOW_UNSANDBOXED_PYTHON_STRATEGIES", raising=False)
+    record = SimpleNamespace(
+        code=(
+            "class SignalEngine:\n"
+            "    def generate(self, data_map):\n"
+            "        return {}\n"
+        ),
+        language="python",
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        api_server._strategy_signal_engine_code(record, "BTC-USDT")
+
+    assert excinfo.value.status_code == 403
+    assert "disabled until sandboxed execution is configured" in excinfo.value.detail
+
+
+def test_json_strategy_spec_still_builds_safe_signal_engine(monkeypatch) -> None:
+    monkeypatch.delenv("VIBE_TRADING_ALLOW_UNSANDBOXED_PYTHON_STRATEGIES", raising=False)
+    record = SimpleNamespace(
+        code=json.dumps(
+            {
+                "schema": "vibe.strategy_spec.v1",
+                "paper_signal": {"symbol": "BTC_USDT", "action": "BUY", "target_weight": 0.4},
+            }
+        ),
+        language="json",
+    )
+
+    source = api_server._strategy_signal_engine_code(record, "BTC-USDT")
+
+    assert "class SignalEngine" in source
+    assert "target_weight = 0.4" in source
+
+
+@pytest.mark.asyncio
+async def test_classic_turtle_personal_backtest_uses_saved_code(monkeypatch) -> None:
+    monkeypatch.setenv("VIBE_TRADING_ALLOW_UNSANDBOXED_PYTHON_STRATEGIES", "1")
+    record = SimpleNamespace(
+        id="classic-turtle-trading",
+        code=(
+            "class SignalEngine:\n"
+            "    def generate(self, data_map):\n"
+            "        return {}\n"
+        ),
+        language="python",
+    )
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(api_server, "_strategy_or_404", lambda strategy_id, *, user_id: record)
+
+    async def fake_market_backtest(*args, **kwargs):
+        raise AssertionError("personal strategy backtest must not call marketplace backtest")
+
+    async def fake_execute_backtest_run(**kwargs):
+        captured.update(kwargs)
+        return api_server.StrategyMarketBacktestResponse(
+            strategy_id="classic-turtle-trading",
+            status="passed",
+            run_id="strategy_test",
+            run_directory="/tmp/strategy_test",
+            symbol="BTC-USDT",
+            timeframe="4H",
+            period="2024-01-01 - 2024-02-01",
+            totalReturnPct=1.0,
+            annualizedReturnPct=12.0,
+            maxDrawdownPct=2.0,
+            sharpe=1.5,
+            winRatePct=55.0,
+            tradeCount=3,
+            engine="user_strategy_backtest_v1",
+            assumptions=[],
+            warnings=[],
+        )
+
+    monkeypatch.setattr(api_server, "_run_marketplace_backtest", fake_market_backtest)
+    monkeypatch.setattr(api_server, "_execute_backtest_run", fake_execute_backtest_run)
+
+    result = await api_server.run_strategy_backtest(
+        "classic-turtle-trading",
+        api_server.StrategyBacktestRequest(
+            start_date="2024-01-01",
+            end_date="2024-02-01",
+            symbol="BTC-USDT",
+            interval="4H",
+            source="okx",
+        ),
+        SimpleNamespace(user_id=123),
+    )
+
+    assert result.run_id == "strategy_test"
+    assert captured["context"] == {"user_id": 123, "strategy_id": "classic-turtle-trading"}
+    assert "class SignalEngine" in str(captured["signal_code"])

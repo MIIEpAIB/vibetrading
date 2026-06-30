@@ -1,9 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
-  AlertTriangle,
   ArrowRight,
-  BarChart3,
   Bot,
   CheckCircle2,
   Gauge,
@@ -252,13 +250,6 @@ function readLocalStrategies(): StrategyLibraryItem[] {
   }
 }
 
-function formatMoney(value: number): string {
-  const abs = Math.abs(value);
-  if (abs >= 1_000_000) return `$${(value / 1_000_000).toFixed(2)}M`;
-  if (abs >= 1) return `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
-  return `$${value.toPrecision(4)}`;
-}
-
 function openAgentWithPrompt(navigate: ReturnType<typeof useNavigate>, prompt: string) {
   const key = `cockpit_prompt_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   window.sessionStorage.setItem(key, prompt);
@@ -360,19 +351,20 @@ export function StrategyCockpit() {
 
   return (
     <div className="min-h-full bg-background">
-      <div className="mx-auto flex max-w-7xl flex-col gap-5 p-4 md:p-6">
-        <header className="grid gap-4 border-b pb-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
-          <div className="space-y-3">
-            <div className="inline-flex items-center gap-2 rounded-md border bg-card px-2.5 py-1 text-xs font-medium text-muted-foreground">
-              <ShieldCheck className="h-3.5 w-3.5 text-primary" />
+      <div className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-5 md:px-6 md:py-7">
+        <header className="flex flex-col gap-4 border-b pb-5 lg:flex-row lg:items-end lg:justify-between">
+          <div className="max-w-3xl">
+            <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
               {c.kicker}
             </div>
-            <div className="max-w-3xl">
-              <h1 className="text-2xl font-semibold tracking-normal md:text-3xl">{c.title}</h1>
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">{c.subtitle}</p>
-            </div>
+            <h1 className="text-2xl font-semibold tracking-normal text-foreground md:text-3xl">
+              {c.title}
+            </h1>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+              {c.subtitle}
+            </p>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => openAgentWithPrompt(navigate, c.tracks.trader.prompt || "")}
               className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition hover:bg-primary/90"
@@ -390,173 +382,173 @@ export function StrategyCockpit() {
           </div>
         </header>
 
-        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <Metric icon={Library} label={c.metrics.strategies} value={String(strategies.length)} sub={loading ? "..." : `${strategies.filter((s) => s.status === "testing").length} testing`} />
-          <Metric icon={WalletCards} label={c.metrics.shadowOrders} value={String(stats.orders)} sub={`${stats.filled} filled / ${stats.pending} pending`} />
-          <Metric icon={Gauge} label={c.metrics.readiness} value={`${stats.score}/100`} sub={nextStep} tone={readinessColor(stats.score)} />
-          <Metric icon={ShieldCheck} label={c.metrics.liveMode} value={stats.score >= 80 ? "Pilot" : "Locked"} sub={language === "zh-CN" ? "mandate 确认后才可实盘" : "live only after mandate"} />
+        <section className="grid gap-3 md:grid-cols-4">
+          <Metric
+            icon={Library}
+            label={c.metrics.strategies}
+            value={String(strategies.length)}
+            sub={loading ? "..." : `${strategies.filter((s) => s.status === "testing").length} testing`}
+          />
+          <Metric
+            icon={WalletCards}
+            label={c.metrics.shadowOrders}
+            value={String(stats.orders)}
+            sub={`${stats.filled} filled / ${stats.pending} pending`}
+          />
+          <Metric
+            icon={Gauge}
+            label={c.metrics.readiness}
+            value={`${stats.score}/100`}
+            sub={stats.score >= 70 ? c.actions.liveReview : c.sections.next}
+            tone={readinessColor(stats.score)}
+          />
+          <Metric
+            icon={ShieldCheck}
+            label={c.metrics.liveMode}
+            value={stats.score >= 80 ? "Pilot" : "Locked"}
+            sub={language === "zh-CN" ? "需用户确认 mandate" : "requires mandate"}
+          />
         </section>
 
-        <section className="grid gap-4 lg:grid-cols-3">
-          {(Object.keys(c.tracks) as TrackId[]).map((trackId) => {
-            const track = c.tracks[trackId];
-            const Icon = trackId === "trader" ? TrendingUp : trackId === "quant" ? Layers : Play;
-            const onClick = () => {
-              if (track.prompt) openAgentWithPrompt(navigate, track.prompt);
-              else navigate("/shadow-trading");
-            };
-            return (
-              <article key={trackId} className="rounded-lg border bg-card p-4 shadow-sm">
-                <div className="flex items-start justify-between gap-3">
-                  <span className="rounded-md bg-primary/10 p-2 text-primary">
-                    <Icon className="h-4 w-4" />
-                  </span>
-                  <button
-                    onClick={onClick}
-                    className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground"
-                  >
-                    {track.action}
-                    <ArrowRight className="h-3.5 w-3.5" />
-                  </button>
+        <main className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+          <section className="rounded-lg border bg-card">
+            <div className="border-b p-5">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-base font-semibold">{c.sections.readiness}</h2>
+                  <p className="mt-1 text-sm leading-6 text-muted-foreground">{c.sections.readinessDesc}</p>
                 </div>
-                <h2 className="mt-4 text-base font-semibold">{track.title}</h2>
-                <p className="mt-1 text-sm leading-6 text-muted-foreground">{track.desc}</p>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {track.bullets.map((bullet) => (
-                    <span key={bullet} className="rounded-md border bg-muted/30 px-2 py-1 text-xs text-muted-foreground">
-                      {bullet}
-                    </span>
-                  ))}
+                <div className="text-right">
+                  <div className={cn("text-4xl font-semibold", readinessColor(stats.score))}>{stats.score}</div>
+                  <div className="text-xs text-muted-foreground">/100</div>
                 </div>
-              </article>
-            );
-          })}
-        </section>
-
-        <section className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.65fr)]">
-          <div className="rounded-lg border bg-card p-4 shadow-sm">
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-base font-semibold">{c.sections.path}</h2>
-                <p className="text-xs text-muted-foreground">{c.sections.pathDesc}</p>
               </div>
-              <BarChart3 className="h-4 w-4 text-muted-foreground" />
+              <div className="mt-5 h-2 rounded-full bg-muted">
+                <div
+                  className={cn("h-2 rounded-full", stats.score >= 80 ? "bg-success" : stats.score >= 55 ? "bg-warning" : "bg-primary")}
+                  style={{ width: `${stats.score}%` }}
+                />
+              </div>
+              <p className="mt-4 text-sm leading-6 text-muted-foreground">
+                <span className="font-medium text-foreground">{c.sections.next}: </span>
+                {nextStep}
+              </p>
             </div>
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {stages.map((stage, index) => (
-                <div key={stage.title} className="rounded-lg border bg-background p-3">
-                  <div className="flex items-center gap-2">
+
+            <div className="grid gap-0 md:grid-cols-2">
+              <div className="border-b p-5 md:border-b-0 md:border-r">
+                <h3 className="text-sm font-semibold">{language === "zh-CN" ? "选择入口" : "Choose a path"}</h3>
+                <div className="mt-4 space-y-2">
+                  {(Object.keys(c.tracks) as TrackId[]).map((trackId) => {
+                    const track = c.tracks[trackId];
+                    const Icon = trackId === "trader" ? TrendingUp : trackId === "quant" ? Layers : Play;
+                    const onClick = () => {
+                      if (track.prompt) openAgentWithPrompt(navigate, track.prompt);
+                      else navigate("/shadow-trading");
+                    };
+                    return (
+                      <button
+                        key={trackId}
+                        onClick={onClick}
+                        className="group flex w-full items-center gap-3 rounded-md border bg-background p-3 text-left transition hover:border-primary/50 hover:bg-primary/5"
+                      >
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground group-hover:text-primary">
+                          <Icon className="h-4 w-4" />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm font-medium">{track.title}</span>
+                          <span className="mt-0.5 block truncate text-xs text-muted-foreground">{track.desc}</span>
+                        </span>
+                        <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground group-hover:text-primary" />
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="p-5">
+                <h3 className="text-sm font-semibold">{language === "zh-CN" ? "证据" : "Evidence"}</h3>
+                <div className="mt-4 space-y-3 text-sm">
+                  <ReadinessRow
+                    label={language === "zh-CN" ? "策略档案" : "Strategy evidence"}
+                    ok={strategies.length > 0}
+                    language={language}
+                  />
+                  <ReadinessRow
+                    label={language === "zh-CN" ? "测试状态" : "Testing state"}
+                    ok={strategies.some((strategy) => ["testing", "live"].includes(strategy.status))}
+                    language={language}
+                  />
+                  <ReadinessRow
+                    label={language === "zh-CN" ? "影子订单" : "Shadow orders"}
+                    ok={stats.orders > 0}
+                    language={language}
+                  />
+                  <ReadinessRow
+                    label={language === "zh-CN" ? "拒单记录" : "Rejected orders"}
+                    ok={stats.rejected === 0}
+                    warn={stats.rejected > 0}
+                    language={language}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2 border-t p-5">
+              <LinkButton to="/alpha-zoo" icon={Layers} label={c.actions.alpha} />
+              <LinkButton to="/strategies" icon={Library} label={c.actions.strategy} />
+              <LinkButton to="/shadow-trading" icon={WalletCards} label={c.actions.shadow} />
+              <button
+                onClick={() => openAgentWithPrompt(navigate, c.livePrompt)}
+                className="inline-flex h-9 items-center gap-2 rounded-md border px-3 text-sm font-medium text-muted-foreground transition hover:border-primary/50 hover:bg-primary/5 hover:text-foreground"
+              >
+                <Sparkles className="h-4 w-4" />
+                {c.actions.liveReview}
+              </button>
+            </div>
+          </section>
+
+          <aside className="space-y-4">
+            <div className="rounded-lg border bg-card p-5">
+              <h2 className="text-base font-semibold">{c.sections.path}</h2>
+              <p className="mt-1 text-sm leading-6 text-muted-foreground">{c.sections.pathDesc}</p>
+              <div className="mt-5 space-y-4">
+                {stages.slice(0, 5).map((stage, index) => (
+                  <div key={stage.title} className="flex gap-3">
                     <span className={cn(
-                      "flex h-7 w-7 items-center justify-center rounded-md text-xs font-semibold",
+                      "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-semibold",
                       stage.state === "done" && "bg-success/10 text-success",
                       stage.state === "active" && "bg-primary/10 text-primary",
                       stage.state === "locked" && "bg-muted text-muted-foreground",
                     )}>
                       {stage.state === "done" ? <CheckCircle2 className="h-4 w-4" /> : index + 1}
                     </span>
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-medium">{stage.title}</div>
-                      <div className="text-[11px] uppercase text-muted-foreground">{stage.state}</div>
+                    <div>
+                      <div className="text-sm font-medium">{stage.title}</div>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">{stage.desc}</p>
                     </div>
                   </div>
-                  <p className="mt-3 text-xs leading-5 text-muted-foreground">{stage.desc}</p>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          </div>
 
-          <div className="rounded-lg border bg-card p-4 shadow-sm">
-            <h2 className="text-base font-semibold">{c.sections.readiness}</h2>
-            <p className="mt-1 text-xs text-muted-foreground">{c.sections.readinessDesc}</p>
-            <div className="mt-5">
-              <div className="flex items-end justify-between">
-                <span className={cn("text-4xl font-semibold", readinessColor(stats.score))}>{stats.score}</span>
-                <span className="text-sm text-muted-foreground">/100</span>
-              </div>
-              <div className="mt-3 h-2 rounded-full bg-muted">
-                <div
-                  className={cn("h-2 rounded-full", stats.score >= 80 ? "bg-success" : stats.score >= 55 ? "bg-warning" : "bg-primary")}
-                  style={{ width: `${stats.score}%` }}
-                />
-              </div>
-            </div>
-            <div className="mt-5 space-y-3 text-sm">
-              <ReadinessRow label="Strategy evidence" ok={strategies.length > 0} />
-              <ReadinessRow label="Testing state" ok={strategies.some((strategy) => ["testing", "live"].includes(strategy.status))} />
-              <ReadinessRow label="Shadow orders" ok={stats.orders > 0} />
-              <ReadinessRow label="Rejected orders" ok={stats.rejected === 0} warn={stats.rejected > 0} />
-            </div>
-            <div className="mt-5 rounded-md border bg-muted/30 p-3 text-xs leading-5 text-muted-foreground">
-              <span className="font-medium text-foreground">{c.sections.next}: </span>
-              {nextStep}
-            </div>
-          </div>
-        </section>
-
-        <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-          <div className="rounded-lg border bg-card p-4 shadow-sm">
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-base font-semibold">{c.sections.exchange}</h2>
-                <p className="text-xs text-muted-foreground">{c.sections.exchangeDesc}</p>
-              </div>
-              <ShieldCheck className="h-4 w-4 text-muted-foreground" />
-            </div>
-            <div className="grid gap-3 md:grid-cols-3">
-              {c.exchanges.map((exchange) => (
-                <div key={exchange.name} className="rounded-lg border bg-background p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium">{exchange.name}</span>
-                    <span className="rounded-md bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">{exchange.status}</span>
+            <div className="rounded-lg border bg-card p-5">
+              <h2 className="text-base font-semibold">{c.sections.exchange}</h2>
+              <p className="mt-1 text-sm leading-6 text-muted-foreground">{c.sections.exchangeDesc}</p>
+              <div className="mt-4 divide-y">
+                {c.exchanges.slice(0, 2).map((exchange) => (
+                  <div key={exchange.name} className="flex items-start justify-between gap-3 py-3 first:pt-0 last:pb-0">
+                    <div>
+                      <div className="text-sm font-medium">{exchange.name}</div>
+                      <div className="mt-1 text-xs leading-5 text-muted-foreground">{exchange.desc}</div>
+                    </div>
+                    <span className="rounded-md bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">{exchange.status}</span>
                   </div>
-                  <p className="mt-2 text-xs leading-5 text-muted-foreground">{exchange.desc}</p>
-                </div>
-              ))}
-            </div>
-            <div className="mt-4 grid gap-2 sm:grid-cols-2">
-              {c.checks.map((check) => (
-                <div key={check.title} className="flex gap-2 rounded-md border bg-muted/20 p-3">
-                  <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-success" />
-                  <div>
-                    <div className="text-sm font-medium">{check.title}</div>
-                    <div className="mt-1 text-xs leading-5 text-muted-foreground">{check.desc}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="rounded-lg border bg-card p-4 shadow-sm">
-            <h2 className="text-base font-semibold">{c.sections.assets}</h2>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <AssetLink to="/alpha-zoo" icon={Layers} title={c.actions.alpha} desc={language === "zh-CN" ? "从因子库发现候选信号。" : "Discover candidate signals from factor libraries."} />
-              <AssetLink to="/strategies" icon={Library} title={c.actions.strategy} desc={language === "zh-CN" ? `${strategies.length} 个策略档案。` : `${strategies.length} strategy cards.`} />
-              <AssetLink to="/shadow-trading" icon={WalletCards} title={c.actions.shadow} desc={language === "zh-CN" ? `${formatMoney(stats.usdtBalance)} 可用虚拟 USDT。` : `${formatMoney(stats.usdtBalance)} virtual USDT available.`} />
-              <button
-                onClick={() => openAgentWithPrompt(navigate, c.livePrompt)}
-                className="rounded-lg border bg-background p-3 text-left transition hover:border-primary/50 hover:bg-primary/5"
-              >
-                <span className="flex items-center gap-2 text-sm font-medium">
-                  <Sparkles className="h-4 w-4 text-primary" />
-                  {c.actions.liveReview}
-                </span>
-                <span className="mt-2 block text-xs leading-5 text-muted-foreground">
-                  {language === "zh-CN" ? "只生成 mandate 提案，不绕过确认。" : "Generates a mandate proposal only, never bypassing consent."}
-                </span>
-              </button>
-            </div>
-            <div className="mt-4 rounded-md border border-warning/30 bg-warning/10 p-3 text-xs leading-5 text-muted-foreground">
-              <div className="flex gap-2">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
-                <span>
-                  {language === "zh-CN"
-                    ? "实盘不会从这里直接启动。必须由智能体提出 mandate，用户确认后才会进入连接器运行时。"
-                    : "Live trading is not started here. The agent must propose a mandate and the user must commit it before connector runtime can act."}
-                </span>
+                ))}
               </div>
             </div>
-          </div>
-        </section>
+          </aside>
+        </main>
       </div>
     </div>
   );
@@ -576,7 +568,7 @@ function Metric({
   tone?: string;
 }) {
   return (
-    <div className="rounded-lg border bg-card p-4 shadow-sm">
+    <div className="rounded-lg border bg-card p-4">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="text-xs text-muted-foreground">{label}</div>
@@ -591,7 +583,23 @@ function Metric({
   );
 }
 
-function ReadinessRow({ label, ok, warn }: { label: string; ok: boolean; warn?: boolean }) {
+function ReadinessRow({
+  label,
+  ok,
+  warn,
+  language,
+}: {
+  label: string;
+  ok: boolean;
+  warn?: boolean;
+  language: LanguageCode;
+}) {
+  const status = warn
+    ? language === "zh-CN" ? "需复核" : "review"
+    : ok
+      ? language === "zh-CN" ? "已就绪" : "ready"
+      : language === "zh-CN" ? "缺失" : "missing";
+
   return (
     <div className="flex items-center justify-between gap-3">
       <span className="text-muted-foreground">{label}</span>
@@ -601,30 +609,28 @@ function ReadinessRow({ label, ok, warn }: { label: string; ok: boolean; warn?: 
         warn && "bg-warning/10 text-warning",
         !ok && !warn && "bg-muted text-muted-foreground",
       )}>
-        {warn ? "review" : ok ? "ready" : "missing"}
+        {status}
       </span>
     </div>
   );
 }
 
-function AssetLink({
+function LinkButton({
   to,
   icon: Icon,
-  title,
-  desc,
+  label,
 }: {
   to: string;
   icon: LucideIcon;
-  title: string;
-  desc: string;
+  label: string;
 }) {
   return (
-    <Link to={to} className="rounded-lg border bg-background p-3 transition hover:border-primary/50 hover:bg-primary/5">
-      <span className="flex items-center gap-2 text-sm font-medium">
-        <Icon className="h-4 w-4 text-primary" />
-        {title}
-      </span>
-      <span className="mt-2 block text-xs leading-5 text-muted-foreground">{desc}</span>
+    <Link
+      to={to}
+      className="inline-flex h-9 items-center gap-2 rounded-md border px-3 text-sm font-medium text-muted-foreground transition hover:border-primary/50 hover:bg-primary/5 hover:text-foreground"
+    >
+      <Icon className="h-4 w-4" />
+      <span>{label}</span>
     </Link>
   );
 }

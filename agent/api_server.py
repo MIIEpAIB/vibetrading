@@ -729,6 +729,8 @@ class PaperDeploymentCreateRequest(BaseModel):
 
     strategy_id: str = Field(..., min_length=1, max_length=128)
     limits: Dict[str, Any] = Field(default_factory=dict)
+    execution_mode: str = Field("shadow", description="shadow or broker_paper")
+    connector_profile_id: str = Field("", max_length=128)
 
 
 class PaperDeploymentActionResponse(BaseModel):
@@ -1212,6 +1214,26 @@ def _has_trusted_dev_proxy_auth(request: Request) -> bool:
     return bool(token) and hmac.compare_digest(token, secret)
 
 
+def _has_dev_proxy_header(request: Request) -> bool:
+    """Return whether a request carries the dev-proxy marker header."""
+    return bool(request.headers.get(_DEV_PROXY_AUTH_HEADER, "").strip())
+
+
+def _validate_explicit_operator_bearer(
+    *,
+    cred: Optional[HTTPAuthorizationCredentials],
+    missing_detail: str,
+) -> None:
+    """Validate an explicit operator bearer token without local/proxy bypasses."""
+    api_key = _configured_api_key()
+    if not api_key:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=missing_detail)
+
+    token = _auth_credential_from_header_or_query(cred, None, allow_query=False)
+    if not token or not hmac.compare_digest(token, api_key):
+        raise HTTPException(status_code=401, detail="Invalid or missing operator API key")
+
+
 def _env_flag_enabled(name: str) -> bool:
     """Return whether a boolean environment flag is enabled."""
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
@@ -1272,6 +1294,13 @@ async def require_local_or_auth(
     loopback clients so an API server bound to 0.0.0.0 cannot accept remote
     credential reads or writes in dev mode.
     """
+    if _has_dev_proxy_header(request):
+        _validate_explicit_operator_bearer(
+            cred=cred,
+            missing_detail="Settings access through the dev proxy requires API_AUTH_KEY",
+        )
+        return
+
     if _configured_api_key():
         _validate_api_auth(request=request, cred=cred)
         return
@@ -1287,7 +1316,33 @@ async def require_operator_auth(
     cred: Optional[HTTPAuthorizationCredentials] = Security(_security),
 ) -> None:
     """Require local/operator API access, not an application user token."""
+    if _has_dev_proxy_header(request):
+        _validate_explicit_operator_bearer(
+            cred=cred,
+            missing_detail="Operator access through the dev proxy requires API_AUTH_KEY",
+        )
+        return
+
     _validate_api_auth(request=request, cred=cred)
+
+
+async def require_live_credential_config_auth(
+    request: Request,
+    cred: Optional[HTTPAuthorizationCredentials] = Security(_security),
+) -> None:
+    """Require explicit local/operator authority for live credential writes.
+
+    This endpoint saves server-wide exchange API keys. It must not accept
+    application-user tokens or the dev-proxy trust header, because a publicly
+    exposed Vite dev proxy would otherwise become a credential-write path.
+    """
+    if _is_local_client(request) and not _has_dev_proxy_header(request):
+        return
+
+    _validate_explicit_operator_bearer(
+        cred=cred,
+        missing_detail="Live credential configuration requires API_AUTH_KEY or local loopback access",
+    )
 
 
 def _validate_username(username: str) -> str:
@@ -2849,6 +2904,7 @@ _MARKET_BACKTEST_IDS = {
     "crypto-vol-target-rotation",
     "crypto-event-driven-risk",
     "professional-grid-trading",
+    "classic-turtle-trading",
 }
 
 
@@ -2929,6 +2985,18 @@ def _market_backtest_strategy_config(strategy_id: str) -> Dict[str, Any]:
                 "OKX public OHLCV candles",
                 "range grid proxy around 54k-76k",
                 "volatility pause and stop-loss guardrails",
+            ],
+        },
+        "classic-turtle-trading": {
+            "codes": ["BTC-USDT"],
+            "interval": "4H",
+            "engine_name": "real_classic_turtle_v1",
+            "assumptions": [
+                "OKX public OHLCV candles",
+                "20/10 and 55/20 Donchian breakout systems",
+                "20-bar ATR risk unit sizing",
+                "0.5ATR pyramiding with 2ATR protective stop",
+                "12% strategy drawdown pause for new entries",
             ],
         },
     }
@@ -3091,6 +3159,110 @@ class SignalEngine:
             out[code] = signal.ffill().fillna(0.0).clip(0.0, 0.35)
         return out
 ''',
+        "classic-turtle-trading": '''import pandas as pd
+
+
+class SignalEngine:
+    def generate(self, data_map):
+        out = {}
+        for code, df in data_map.items():
+            close = df["close"].astype(float)
+            high = df["high"].astype(float)
+            low = df["low"].astype(float)
+
+            prev_close = close.shift(1)
+            tr = pd.concat(
+                [
+                    high - low,
+                    (high - prev_close).abs(),
+                    (low - prev_close).abs(),
+                ],
+                axis=1,
+            ).max(axis=1)
+            atr = tr.rolling(20, min_periods=10).mean()
+
+            fast_entry_high = high.rolling(20, min_periods=20).max().shift(1)
+            fast_entry_low = low.rolling(20, min_periods=20).min().shift(1)
+            fast_exit_high = high.rolling(10, min_periods=10).max().shift(1)
+            fast_exit_low = low.rolling(10, min_periods=10).min().shift(1)
+            slow_entry_high = high.rolling(55, min_periods=35).max().shift(1)
+            slow_entry_low = low.rolling(55, min_periods=35).min().shift(1)
+            slow_exit_high = high.rolling(20, min_periods=20).max().shift(1)
+            slow_exit_low = low.rolling(20, min_periods=20).min().shift(1)
+
+            signal = pd.Series(0.0, index=df.index)
+            position = 0
+            units = 0
+            last_unit_price = 0.0
+            stop_price = 0.0
+            peak_equity = 1.0
+            strategy_equity = 1.0
+            previous_price = None
+            pause_new_entries = False
+
+            base_unit_weight = 0.10
+            max_units = 4
+            add_unit_atr = 0.5
+            stop_atr = 2.0
+            max_drawdown_pause = 0.12
+
+            for ts in df.index:
+                price = close.loc[ts]
+                current_atr = atr.loc[ts]
+                if pd.isna(price) or pd.isna(current_atr) or current_atr <= 0:
+                    signal.loc[ts] = position * units * base_unit_weight
+                    previous_price = price if not pd.isna(price) else previous_price
+                    continue
+
+                if previous_price is not None and position != 0:
+                    strategy_equity *= 1 + position * units * base_unit_weight * ((price / previous_price) - 1)
+                    peak_equity = max(peak_equity, strategy_equity)
+                    pause_new_entries = ((peak_equity - strategy_equity) / peak_equity) >= max_drawdown_pause
+
+                long_exit = price < min(fast_exit_low.loc[ts], slow_exit_low.loc[ts]) if not pd.isna(fast_exit_low.loc[ts]) and not pd.isna(slow_exit_low.loc[ts]) else False
+                short_exit = price > max(fast_exit_high.loc[ts], slow_exit_high.loc[ts]) if not pd.isna(fast_exit_high.loc[ts]) and not pd.isna(slow_exit_high.loc[ts]) else False
+
+                if position > 0 and (price <= stop_price or long_exit):
+                    position = 0
+                    units = 0
+                    last_unit_price = 0.0
+                    stop_price = 0.0
+                elif position < 0 and (price >= stop_price or short_exit):
+                    position = 0
+                    units = 0
+                    last_unit_price = 0.0
+                    stop_price = 0.0
+
+                if position == 0 and not pause_new_entries:
+                    fast_long = not pd.isna(fast_entry_high.loc[ts]) and price > fast_entry_high.loc[ts]
+                    slow_long = not pd.isna(slow_entry_high.loc[ts]) and price > slow_entry_high.loc[ts]
+                    fast_short = not pd.isna(fast_entry_low.loc[ts]) and price < fast_entry_low.loc[ts]
+                    slow_short = not pd.isna(slow_entry_low.loc[ts]) and price < slow_entry_low.loc[ts]
+                    if fast_long or slow_long:
+                        position = 1
+                        units = 1
+                        last_unit_price = float(price)
+                        stop_price = float(price - stop_atr * current_atr)
+                    elif fast_short or slow_short:
+                        position = -1
+                        units = 1
+                        last_unit_price = float(price)
+                        stop_price = float(price + stop_atr * current_atr)
+                elif position > 0 and units < max_units and price >= last_unit_price + add_unit_atr * current_atr:
+                    units += 1
+                    last_unit_price = float(price)
+                    stop_price = max(stop_price, float(price - stop_atr * current_atr))
+                elif position < 0 and units < max_units and price <= last_unit_price - add_unit_atr * current_atr:
+                    units += 1
+                    last_unit_price = float(price)
+                    stop_price = min(stop_price, float(price + stop_atr * current_atr))
+
+                signal.loc[ts] = position * units * base_unit_weight
+                previous_price = price
+
+            out[code] = signal.ffill().fillna(0.0).clip(-0.40, 0.40)
+        return out
+''',
     }
     return engines[strategy_id]
 
@@ -3154,14 +3326,26 @@ class SignalEngine:
         return out
 '''
 
+    allow_unsandboxed_python = os.getenv("VIBE_TRADING_ALLOW_UNSANDBOXED_PYTHON_STRATEGIES", "").strip().lower()
+    if allow_unsandboxed_python not in {"1", "true", "yes", "on"}:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Python strategy backtests are disabled until sandboxed execution is configured. "
+                "Use JSON StrategySpec/market templates, or set "
+                "VIBE_TRADING_ALLOW_UNSANDBOXED_PYTHON_STRATEGIES=1 only for trusted single-tenant deployments."
+            ),
+        )
+
     if language != "python":
         raise HTTPException(status_code=400, detail="real backtest currently supports Python strategies or JSON StrategySpec only")
 
     if "class SignalEngine" in code:
+        _validate_strategy_python_syntax(code)
         return code
 
     if re.search(r"\bdef\s+generate_signals\s*\(", code):
-        return code + '''
+        generated_code = code + '''
 
 
 import pandas as pd
@@ -3177,11 +3361,27 @@ class SignalEngine:
             out[code] = signal.reindex(df.index).ffill().fillna(0.0).clip(-1.0, 1.0)
         return out
 '''
+        _validate_strategy_python_syntax(generated_code)
+        return generated_code
 
     raise HTTPException(
         status_code=400,
         detail="Python strategy must define class SignalEngine or def generate_signals(data)",
     )
+
+
+def _validate_strategy_python_syntax(source: str) -> None:
+    try:
+        compile(source, "<strategy-editor>", "exec")
+    except SyntaxError as exc:
+        location = f"line {exc.lineno}" if exc.lineno else "unknown line"
+        if exc.offset:
+            location = f"{location}, column {exc.offset}"
+        message = exc.msg or "invalid syntax"
+        raise HTTPException(
+            status_code=400,
+            detail=f"Strategy code syntax error at {location}: {message}",
+        ) from exc
 
 
 async def _execute_backtest_run(
@@ -3319,23 +3519,6 @@ async def run_strategy_backtest(
     """Run a real, server-side backtest for a saved personal strategy."""
     record = _strategy_or_404(strategy_id, user_id=ctx.user_id)
 
-    try:
-        package = json.loads(str(record.code or ""))
-    except json.JSONDecodeError:
-        package = None
-    market_id = str(package.get("strategy_id") or record.id) if isinstance(package, dict) else ""
-    if market_id in _MARKET_BACKTEST_IDS:
-        return await _run_marketplace_backtest(
-            StrategyMarketBacktestRequest(
-                strategy_id=market_id,
-                start_date=payload.start_date,
-                end_date=payload.end_date,
-                symbol=payload.symbol,
-                interval=payload.interval,
-            ),
-            ctx,
-        )
-
     from backtest.loaders.registry import VALID_SOURCES
 
     symbol = _normalize_backtest_symbol(payload.symbol)
@@ -3443,6 +3626,8 @@ async def create_paper_deployment(payload: PaperDeploymentCreateRequest, ctx: Au
             user_id=_paper_user_id(ctx),
             strategy_id=payload.strategy_id,
             limits_payload=payload.limits,
+            execution_mode=payload.execution_mode,
+            connector_profile_id=payload.connector_profile_id,
         )
         return {"deployment": deployment.to_dict()}
     except (PaperTradingError, ValueError) as exc:
@@ -4657,7 +4842,7 @@ def _save_crypto_live_connector_config(
                     "margin_mode": margin_mode,
                 }
             )
-            path = okx_sdk.save_config(cfg)
+            okx_sdk.save_config(cfg)
         elif exchange == "binance":
             from src.trading.connectors.binance import sdk as binance_sdk
 
@@ -4669,7 +4854,7 @@ def _save_crypto_live_connector_config(
                     "product_type": product_type,
                 }
             )
-            path = binance_sdk.save_config(cfg)
+            binance_sdk.save_config(cfg)
         else:
             raise HTTPException(status_code=400, detail="exchange must be okx or binance")
     except ValueError as exc:
@@ -4686,7 +4871,7 @@ def _save_crypto_live_connector_config(
         "exchange": exchange,
         "product_type": product_type,
         "profile_id": profile_id,
-        "config_path": str(path),
+        "config_path": f"connector://{profile_id}",
         "connection": connection,
     }
 
@@ -4694,7 +4879,7 @@ def _save_crypto_live_connector_config(
 @app.post("/live/crypto/configure", response_model=CryptoLiveConfigureResponse)
 async def configure_crypto_live_endpoint(
     payload: CryptoLiveConfigureRequest,
-    _ctx: AuthContext = Depends(require_auth),
+    _auth: None = Depends(require_live_credential_config_auth),
 ):
     """Persist user-supplied OKX/Binance live credentials for strategy trading.
 

@@ -44,6 +44,31 @@ describe("paper deployment api", () => {
     }));
   });
 
+  it("creates a broker paper deployment", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ deployment: { deployment_id: "paper_2" } }));
+
+    await api.createPaperDeployment({
+      strategy_id: "crypto-grid",
+      limits: {
+        symbols: ["BTC_USDT"],
+      },
+      execution_mode: "broker_paper",
+      connector_profile_id: "binance-paper-trade",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith("/paper/deployments", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({
+        strategy_id: "crypto-grid",
+        limits: {
+          symbols: ["BTC_USDT"],
+        },
+        execution_mode: "broker_paper",
+        connector_profile_id: "binance-paper-trade",
+      }),
+    }));
+  });
+
   it("runs a paper deployment tick", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ tick: { outcome: "no_action" } }));
 

@@ -15,6 +15,11 @@ function toTags(value: unknown): string[] {
     : [];
 }
 
+function normalizeLanguage(value: unknown, fallback: string): string {
+  if (value === "json") return "javascript";
+  return typeof value === "string" && value.trim() ? value : fallback;
+}
+
 function fallbackStrategy(): StrategyLibraryItem {
   const now = new Date().toISOString();
   return {
@@ -39,7 +44,7 @@ export function normalizeOwnedStrategy(value: unknown, fallback = fallbackStrate
     id: typeof value.id === "string" && value.id.trim() ? value.id : fallback.id,
     name: typeof value.name === "string" && value.name.trim() ? value.name : fallback.name,
     description: typeof value.description === "string" ? value.description : fallback.description,
-    language: typeof value.language === "string" && value.language.trim() ? value.language : fallback.language,
+    language: normalizeLanguage(value.language, fallback.language),
     category: typeof value.category === "string" && value.category.trim() ? value.category : fallback.category,
     status: typeof value.status === "string" && value.status.trim() ? value.status : fallback.status,
     tags: toTags(value.tags),

@@ -26,10 +26,13 @@ import {
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { api, ApiError, type StrategyLibraryItem } from "@/lib/api";
+import { StrategyCodeEditor } from "@/components/strategy/StrategyCodeEditor";
+import { PAPER_EXECUTION_OPTIONS, executionOptionValue, paperExecutionPayload } from "@/lib/paperExecution";
+import { buildClassicTurtlePythonStrategyCode } from "@/lib/strategyMarketplace";
 import { useTranslation } from "@/i18n/I18nProvider";
 import { mergeOwnedStrategies, readOwnedStrategies, saveOwnedStrategies } from "@/lib/strategyStorage";
 
-type StrategyLanguage = "python" | "pine" | "javascript";
+type StrategyLanguage = "javascript" | "python" | "cpp" | "rust" | "pine";
 type StrategyStatus = "draft" | "testing" | "live" | "archived";
 type StrategyCategory = "trend" | "mean_reversion" | "grid" | "risk" | "portfolio" | "arbitrage" | "utility";
 
@@ -54,16 +57,12 @@ type MoreMenuState = {
   left: number;
 };
 
-const supportedMarketBacktestIds = new Set([
-  "crypto-trend-momentum",
-  "crypto-stat-arb-pairs",
-  "professional-grid-trading",
-]);
-
 const languageOptions: Array<{ value: StrategyLanguage; label: string }> = [
-  { value: "python", label: "Python" },
-  { value: "pine", label: "Pine Script" },
   { value: "javascript", label: "JavaScript" },
+  { value: "python", label: "Python" },
+  { value: "cpp", label: "C++" },
+  { value: "rust", label: "Rust" },
+  { value: "pine", label: "Pine" },
 ];
 
 const statusOptions: Array<{ value: StrategyStatus }> = [
@@ -109,6 +108,25 @@ function isStrategyLanguage(value: unknown): value is StrategyLanguage {
   return languageOptions.some((option) => option.value === value);
 }
 
+function normalizeStrategyLanguage(value: unknown, fallback: StrategyLanguage): StrategyLanguage {
+  if (value === "json") return "javascript";
+  return isStrategyLanguage(value) ? value : fallback;
+}
+
+function isLegacyClassicTurtleJsonSpec(id: string, code: string): boolean {
+  if (id !== "classic-turtle-trading" || !code.trim().startsWith("{")) return false;
+  try {
+    const parsed = JSON.parse(code) as unknown;
+    return (
+      isRecord(parsed)
+      && parsed.schema === "vibe.strategy_spec.v1"
+      && parsed.strategy_id === "classic-turtle-trading"
+    );
+  } catch {
+    return false;
+  }
+}
+
 function isStrategyStatus(value: unknown): value is StrategyStatus {
   return statusOptions.some((option) => option.value === value);
 }
@@ -134,18 +152,21 @@ function normalizeStrategy(value: unknown, fallback: StrategyItem): StrategyItem
     ? value.tags.filter((tag): tag is string => typeof tag === "string").slice(0, 8)
     : fallback.tags;
   const now = new Date().toISOString();
+  const id = typeof value.id === "string" && value.id.trim() ? value.id : fallback.id;
+  const rawCode = typeof value.code === "string" ? value.code : fallback.code;
+  const shouldMigrateClassicTurtle = isLegacyClassicTurtleJsonSpec(id, rawCode);
 
   return {
-    id: typeof value.id === "string" && value.id.trim() ? value.id : fallback.id,
+    id,
     name: typeof value.name === "string" && value.name.trim() ? value.name : fallback.name,
     description: typeof value.description === "string" ? value.description : fallback.description,
-    language: isStrategyLanguage(value.language) ? value.language : fallback.language,
+    language: shouldMigrateClassicTurtle ? "python" : normalizeStrategyLanguage(value.language, fallback.language),
     category: isStrategyCategory(value.category) ? value.category : fallback.category,
     status: isStrategyStatus(value.status) ? value.status : fallback.status,
     tags,
-    code: typeof value.code === "string" ? value.code : fallback.code,
+    code: shouldMigrateClassicTurtle ? buildClassicTurtlePythonStrategyCode() : rawCode,
     createdAt: typeof value.createdAt === "string" ? value.createdAt : fallback.createdAt,
-    updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : now,
+    updatedAt: shouldMigrateClassicTurtle ? now : typeof value.updatedAt === "string" ? value.updatedAt : now,
   };
 }
 
@@ -215,20 +236,6 @@ function downloadJson(fileName: string, data: unknown) {
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
-}
-
-function marketBacktestId(strategy: StrategyItem): string | null {
-  if (supportedMarketBacktestIds.has(strategy.id)) return strategy.id;
-  try {
-    const parsed = JSON.parse(strategy.code) as unknown;
-    if (isRecord(parsed)) {
-      const strategyId = typeof parsed.strategy_id === "string" ? parsed.strategy_id : "";
-      if (supportedMarketBacktestIds.has(strategyId)) return strategyId;
-    }
-  } catch {
-    // Non-JSON strategies use the personal strategy backtest endpoint.
-  }
-  return null;
 }
 
 function paperLimitsForStrategy(strategy: StrategyItem) {
@@ -304,6 +311,7 @@ export function StrategyLibrary() {
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [runningId, setRunningId] = useState<string | null>(null);
   const [paperRunningId, setPaperRunningId] = useState<string | null>(null);
+  const [paperExecution, setPaperExecution] = useState("shadow");
   const [moreMenu, setMoreMenu] = useState<MoreMenuState | null>(null);
   const [editorId, setEditorId] = useState<string | null>(null);
   const [savingEditor, setSavingEditor] = useState(false);
@@ -425,6 +433,7 @@ export function StrategyLibrary() {
       paperRun: "模拟盘运行",
       paperRunning: "启动中",
       paperExists: "该策略已在模拟盘运行",
+      paperExecution: "模拟盘执行",
       liveRun: "实盘",
       liveTitle: "实盘配置",
       liveDescription: "填写你自己的交易所 API 配置。保存后会使用对应的 live profile；真实下单仍受 mandate 和 kill switch 保护。",
@@ -483,6 +492,7 @@ export function StrategyLibrary() {
       paperRun: "Run Paper",
       paperRunning: "Starting",
       paperExists: "This strategy is already running in paper trading",
+      paperExecution: "Paper execution",
       liveRun: "Live",
       liveTitle: "Live Trading Config",
       liveDescription: "Enter your own exchange API credentials. Saving uses the matching live profile; real orders remain guarded by mandate and kill switch.",
@@ -527,13 +537,7 @@ export function StrategyLibrary() {
   };
 
   const handleNew = () => {
-    const draft = newStrategy({
-      name: t("strategy.untitled"),
-      description: t("strategy.defaultDescription"),
-    });
-    setStrategies((current) => [draft, ...current]);
-    setActiveId(draft.id);
-    toast.success(t("strategy.created"));
+    navigate("/m/add-strategy");
   };
 
   const handleDuplicate = (strategy: StrategyItem) => {
@@ -614,7 +618,7 @@ export function StrategyLibrary() {
 
   const handleEdit = (strategy: StrategyItem) => {
     setActiveId(strategy.id);
-    setEditorId(strategy.id);
+    navigate(`/m/edit-strategy/${encodeURIComponent(strategy.id)}`);
   };
 
   const handleSaveEditor = async () => {
@@ -638,14 +642,11 @@ export function StrategyLibrary() {
     setRunningId(strategy.id);
     try {
       await api.upsertStrategy(toApiStrategy(strategy));
-      const marketId = marketBacktestId(strategy);
-      const result = marketId
-        ? await api.runStrategyMarketBacktest({ strategy_id: marketId })
-        : await api.runStrategyBacktest(strategy.id, {
-          symbol: "BTC-USDT",
-          interval: "4H",
-          source: "okx",
-        });
+      const result = await api.runStrategyBacktest(strategy.id, {
+        symbol: "BTC-USDT",
+        interval: "4H",
+        source: "okx",
+      });
       toast.success(language === "zh-CN" ? "真实回测完成" : "Real backtest completed");
       navigate(`/runs/${encodeURIComponent(result.run_id)}`);
     } catch (error) {
@@ -671,6 +672,7 @@ export function StrategyLibrary() {
       const result = await api.createPaperDeployment({
         strategy_id: strategy.id,
         limits: paperLimitsForStrategy(strategy),
+        ...paperExecutionPayload(paperExecution),
       });
       await api.startPaperDeployment(result.deployment.deployment_id);
       await api.runPaperDeploymentTick(result.deployment.deployment_id).catch(() => undefined);
@@ -811,6 +813,20 @@ export function StrategyLibrary() {
               className="h-10 w-full rounded-md border bg-background pl-9 pr-3 text-sm outline-none transition focus:ring-2 focus:ring-primary/25"
             />
           </div>
+          <label className="mt-3 flex max-w-md flex-col gap-1 text-xs font-semibold text-muted-foreground sm:mt-0">
+            {copy.paperExecution}
+            <select
+              value={paperExecution}
+              onChange={(event) => setPaperExecution(event.target.value)}
+              className="h-10 rounded-md border bg-background px-3 text-sm font-medium text-foreground outline-none transition focus:ring-2 focus:ring-primary/25"
+            >
+              {PAPER_EXECUTION_OPTIONS.map((option) => (
+                <option key={executionOptionValue(option)} value={executionOptionValue(option)}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
       </div>
 
@@ -1062,11 +1078,10 @@ export function StrategyLibrary() {
                 <div className="border-b px-4 py-2 text-xs font-semibold uppercase text-muted-foreground">
                   {copy.codeLabel}
                 </div>
-                <textarea
+                <StrategyCodeEditor
                   value={editorStrategy.code}
-                  onChange={(event) => updateStrategy(editorStrategy.id, { code: event.target.value })}
-                  spellCheck={false}
-                  className="min-h-0 flex-1 resize-none border-0 bg-[#080a0c] p-4 font-mono text-sm leading-6 text-zinc-100 outline-none"
+                  language={editorStrategy.language}
+                  onChange={(code) => updateStrategy(editorStrategy.id, { code })}
                 />
               </div>
             </div>

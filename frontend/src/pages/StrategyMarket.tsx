@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, type StrategyLibraryItem, type StrategyMarketAdminItem } from "@/lib/api";
+import { PAPER_EXECUTION_OPTIONS, executionOptionValue, paperExecutionPayload } from "@/lib/paperExecution";
 import { useTranslation } from "@/i18n/I18nProvider";
 import {
   builtInStrategyCatalog,
@@ -325,6 +326,7 @@ export function StrategyMarket() {
   const [backtestingId, setBacktestingId] = useState<string | null>(null);
   const [deployingId, setDeployingId] = useState<string | null>(null);
   const [marketConfig, setMarketConfig] = useState<StrategyMarketAdminItem[]>([]);
+  const [paperExecution, setPaperExecution] = useState("shadow");
 
   useEffect(() => {
     let cancelled = false;
@@ -447,6 +449,7 @@ export function StrategyMarket() {
       const result = await api.createPaperDeployment({
         strategy_id: strategy.id,
         limits: defaultPaperLimitsForMarketStrategy(backtestSelection.item),
+        ...paperExecutionPayload(paperExecution),
       });
       await api.startPaperDeployment(result.deployment.deployment_id);
       toast.success(language === "zh-CN" ? "已启动模拟盘" : "Paper trading started");
@@ -589,6 +592,20 @@ export function StrategyMarket() {
                   ? (language === "zh-CN" ? "启动中" : "Starting")
                   : (language === "zh-CN" ? "跑模拟盘" : "Run paper")}
               </button>
+              <label className="flex min-w-[13rem] flex-col gap-1 text-xs font-semibold text-muted-foreground">
+                {language === "zh-CN" ? "模拟盘执行" : "Paper execution"}
+                <select
+                  value={paperExecution}
+                  onChange={(event) => setPaperExecution(event.target.value)}
+                  className="h-10 rounded-md border bg-background px-3 text-sm font-medium text-foreground outline-none transition focus:ring-2 focus:ring-primary/25"
+                >
+                  {PAPER_EXECUTION_OPTIONS.map((option) => (
+                    <option key={executionOptionValue(option)} value={executionOptionValue(option)}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
             <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
               {[

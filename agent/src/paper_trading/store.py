@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from src.paper_trading.models import (
+    EXECUTION_MODES,
     PaperDeployment,
     PaperLimits,
     PaperOrderLink,
@@ -72,6 +73,18 @@ def _default_db_path() -> Path:
     if raw:
         return Path(raw).expanduser()
     return _DEFAULT_DB_PATH
+
+
+def _row_text(row: sqlite3.Row, key: str, default: str = "") -> str:
+    if key not in row.keys():
+        return default
+    value = row[key]
+    if value is None:
+        return default
+    text = str(value)
+    if key == "execution_mode" and text not in EXECUTION_MODES:
+        return default
+    return text
 
 
 class InMemoryPaperTradingStore:
@@ -191,6 +204,8 @@ class SQLitePaperTradingStore:
                     limits_json TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
+                    execution_mode TEXT NOT NULL DEFAULT 'shadow',
+                    connector_profile_id TEXT NOT NULL DEFAULT '',
                     started_at TEXT,
                     paused_at TEXT,
                     archived_at TEXT,
@@ -247,7 +262,11 @@ class SQLitePaperTradingStore:
                     shadow_order_id TEXT NOT NULL,
                     shadow_status TEXT NOT NULL,
                     created_at TEXT NOT NULL,
-                    rejection_reason TEXT NOT NULL
+                    rejection_reason TEXT NOT NULL,
+                    execution_mode TEXT NOT NULL DEFAULT 'shadow',
+                    connector_profile_id TEXT NOT NULL DEFAULT '',
+                    broker_order_id TEXT NOT NULL DEFAULT '',
+                    broker_payload_json TEXT NOT NULL DEFAULT '{}'
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_paper_order_links_deployment_created
@@ -269,7 +288,19 @@ class SQLitePaperTradingStore:
                     ON paper_ticks(deployment_id, user_id, created_at);
                 """
             )
+            self._ensure_column("paper_deployments", "execution_mode", "TEXT NOT NULL DEFAULT 'shadow'")
+            self._ensure_column("paper_deployments", "connector_profile_id", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column("paper_order_links", "execution_mode", "TEXT NOT NULL DEFAULT 'shadow'")
+            self._ensure_column("paper_order_links", "connector_profile_id", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column("paper_order_links", "broker_order_id", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column("paper_order_links", "broker_payload_json", "TEXT NOT NULL DEFAULT '{}'")
             self._conn.commit()
+
+    def _ensure_column(self, table: str, column: str, definition: str) -> None:
+        rows = self._conn.execute(f"PRAGMA table_info({table})").fetchall()
+        if any(str(row["name"]) == column for row in rows):
+            return
+        self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def create_deployment(self, deployment: PaperDeployment) -> PaperDeployment:
         with self._lock:
@@ -277,10 +308,10 @@ class SQLitePaperTradingStore:
                 """
                 INSERT INTO paper_deployments (
                     deployment_id, user_id, status, strategy_id, strategy_snapshot_json,
-                    limits_json, created_at, updated_at, started_at, paused_at,
-                    archived_at, last_tick_at
+                    limits_json, created_at, updated_at, execution_mode, connector_profile_id,
+                    started_at, paused_at, archived_at, last_tick_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 self._deployment_params(deployment),
             )
@@ -293,8 +324,9 @@ class SQLitePaperTradingStore:
                 """
                 UPDATE paper_deployments
                 SET user_id = ?, status = ?, strategy_id = ?, strategy_snapshot_json = ?,
-                    limits_json = ?, created_at = ?, updated_at = ?, started_at = ?,
-                    paused_at = ?, archived_at = ?, last_tick_at = ?
+                    limits_json = ?, created_at = ?, updated_at = ?, execution_mode = ?,
+                    connector_profile_id = ?, started_at = ?, paused_at = ?, archived_at = ?,
+                    last_tick_at = ?
                 WHERE deployment_id = ?
                 """,
                 (
@@ -305,6 +337,8 @@ class SQLitePaperTradingStore:
                     _json_dumps(deployment.limits.to_dict()),
                     deployment.created_at,
                     deployment.updated_at,
+                    deployment.execution_mode,
+                    deployment.connector_profile_id,
                     deployment.started_at,
                     deployment.paused_at,
                     deployment.archived_at,
@@ -434,9 +468,10 @@ class SQLitePaperTradingStore:
                 """
                 INSERT INTO paper_order_links (
                     link_id, deployment_id, signal_id, decision_id, user_id,
-                    shadow_order_id, shadow_status, created_at, rejection_reason
+                    shadow_order_id, shadow_status, created_at, rejection_reason,
+                    execution_mode, connector_profile_id, broker_order_id, broker_payload_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     link.link_id,
@@ -448,6 +483,10 @@ class SQLitePaperTradingStore:
                     link.shadow_status,
                     link.created_at,
                     link.rejection_reason,
+                    link.execution_mode,
+                    link.connector_profile_id,
+                    link.broker_order_id,
+                    _json_dumps(link.broker_payload),
                 ),
             )
             self._conn.commit()
@@ -527,6 +566,8 @@ class SQLitePaperTradingStore:
             _json_dumps(deployment.limits.to_dict()),
             deployment.created_at,
             deployment.updated_at,
+            deployment.execution_mode,
+            deployment.connector_profile_id,
             deployment.started_at,
             deployment.paused_at,
             deployment.archived_at,
@@ -546,6 +587,8 @@ class SQLitePaperTradingStore:
             limits=limits,
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            execution_mode=_row_text(row, "execution_mode", "shadow"),
+            connector_profile_id=_row_text(row, "connector_profile_id"),
             started_at=row["started_at"],
             paused_at=row["paused_at"],
             archived_at=row["archived_at"],
@@ -600,6 +643,10 @@ class SQLitePaperTradingStore:
             shadow_status=row["shadow_status"],
             created_at=row["created_at"],
             rejection_reason=row["rejection_reason"],
+            execution_mode=_row_text(row, "execution_mode", "shadow"),
+            connector_profile_id=_row_text(row, "connector_profile_id"),
+            broker_order_id=_row_text(row, "broker_order_id"),
+            broker_payload=dict(_json_loads(_row_text(row, "broker_payload_json", "{}"), {})),
         )
 
     @staticmethod

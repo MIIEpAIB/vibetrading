@@ -303,7 +303,7 @@ export const api = {
     request<CryptoLiveConfigureResponse>("/live/crypto/configure", {
       method: "POST",
       body: JSON.stringify(body),
-    }),
+    }, operatorAuthHeaders),
   authorizeLive: (broker: string) =>
     request<LiveAuthorizeResponse>("/live/authorize", {
       method: "POST",
@@ -596,6 +596,8 @@ export interface PaperDeployment {
   strategy_id: string;
   strategy_snapshot: StrategySnapshot;
   limits: PaperLimits;
+  execution_mode?: "shadow" | "broker_paper" | string;
+  connector_profile_id?: string;
   created_at: string;
   updated_at: string;
   started_at?: string | null;
@@ -646,6 +648,10 @@ export interface PaperOrderLink {
   shadow_status: ShadowOrder["status"] | string;
   created_at: string;
   rejection_reason: string;
+  execution_mode?: "shadow" | "broker_paper" | string;
+  connector_profile_id?: string;
+  broker_order_id?: string;
+  broker_payload?: Record<string, unknown>;
 }
 
 export interface PaperTick {
@@ -663,6 +669,8 @@ export interface PaperTick {
 export interface CreatePaperDeploymentRequest {
   strategy_id: string;
   limits: Partial<PaperLimits>;
+  execution_mode?: "shadow" | "broker_paper";
+  connector_profile_id?: string;
 }
 
 export interface PaperDeploymentActionResponse {
@@ -920,6 +928,13 @@ export interface StrategyMarketBacktestRequest {
   end_date?: string;
   symbol?: string;
   interval?: string;
+  source?: string;
+  exchange?: string;
+  mode?: string;
+  quote_currency?: string;
+  initial_capital?: number;
+  trading_currency?: string;
+  parameters?: Record<string, unknown>;
 }
 
 export interface StrategyBacktestRequest {
@@ -928,6 +943,12 @@ export interface StrategyBacktestRequest {
   symbol?: string;
   interval?: string;
   source?: string;
+  exchange?: string;
+  mode?: string;
+  quote_currency?: string;
+  initial_capital?: number;
+  trading_currency?: string;
+  parameters?: Record<string, unknown>;
 }
 
 export interface StrategyMarketBacktestResponse {

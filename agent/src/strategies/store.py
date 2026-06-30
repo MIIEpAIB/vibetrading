@@ -12,7 +12,7 @@ from typing import Any, Iterator
 
 from src.persistence.mysql import mysql_connection
 
-VALID_LANGUAGES = {"python", "pine", "javascript"}
+VALID_LANGUAGES = {"javascript", "python", "cpp", "rust", "pine"}
 VALID_STATUSES = {"draft", "testing", "live", "archived"}
 VALID_CATEGORIES = {"trend", "mean_reversion", "grid", "risk", "portfolio", "arbitrage", "utility"}
 logger = logging.getLogger(__name__)
@@ -42,6 +42,13 @@ def _row_text(value: Any) -> str:
     return str(value or "")
 
 
+def _normalize_language(value: Any) -> str:
+    language = str(value or "python").strip()
+    if language == "json":
+        return "javascript"
+    return language
+
+
 @dataclass(frozen=True)
 class StrategyRecord:
     """Persisted personal strategy record."""
@@ -69,7 +76,7 @@ class StrategyRecord:
         code = str(payload.get("code") or "")
         if not code.strip():
             raise ValueError("strategy code is required")
-        language = str(payload.get("language") or "python").strip()
+        language = _normalize_language(payload.get("language"))
         status = str(payload.get("status") or "draft").strip()
         category = str(payload.get("category") or "trend").strip()
         if language not in VALID_LANGUAGES:
@@ -381,7 +388,7 @@ class MySQLStrategyStore:
             id=row["id"],
             name=row["name"],
             description=row["description"],
-            language=row["language"],
+            language=_normalize_language(row["language"]),
             category=row["category"],
             status=row["status"],
             tags=list(_json_loads(row["tags_json"], [])),

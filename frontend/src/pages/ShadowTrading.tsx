@@ -39,6 +39,7 @@ import {
   type ShadowOrder,
   type ShadowWallet,
 } from "@/lib/api";
+import { executionLabel } from "@/lib/paperExecution";
 import { loadShadowImportDraft, SHADOW_SYMBOLS, type ShadowImportDraft, type ShadowImportRunTrade } from "@/lib/shadowImport";
 import { cn } from "@/lib/utils";
 import { useTranslation } from "@/i18n/I18nProvider";
@@ -115,6 +116,7 @@ const COPY = {
     riskDecision: "Risk decision",
     latestTick: "Latest tick",
     paperOrder: "Paper order",
+    executionTarget: "Execution",
     funds: "Funds",
     cashBuffer: "Cash buffer",
     defaultNotional: "Default notional",
@@ -276,6 +278,7 @@ const COPY = {
     riskDecision: "风控决策",
     latestTick: "最新运行",
     paperOrder: "模拟订单",
+    executionTarget: "执行目标",
     funds: "资金",
     cashBuffer: "现金缓冲",
     defaultNotional: "默认下单额",
@@ -2837,6 +2840,7 @@ function PaperDeploymentCard({
     `Trades/day: ${deployment.limits.max_trades_per_day}`,
     `${copy.cashBuffer}: ${formatMoney(deployment.limits.min_cash_buffer)}`,
   ].join(" · ");
+  const executionTarget = executionLabel(deployment.execution_mode, deployment.connector_profile_id);
 
   return (
     <article className={cn(
@@ -2866,6 +2870,9 @@ function PaperDeploymentCard({
             </span>
             <span className="rounded border border-zinc-700 px-1.5 py-0.5">
               {copy.startedAt}: {Number.isFinite(startedTs) ? formatTime(startedTs / 1000) : "-"}
+            </span>
+            <span className="rounded border border-zinc-700 px-1.5 py-0.5">
+              {copy.executionTarget}: {executionTarget}
             </span>
           </div>
         </div>
@@ -2922,7 +2929,7 @@ function PaperDeploymentCard({
         <PaperInfo
           label={copy.paperOrder}
           value={latestOrder?.shadow_status || "-"}
-          detail={latestOrder?.shadow_order_id || latestOrder?.rejection_reason || ""}
+          detail={latestOrder?.broker_order_id || latestOrder?.shadow_order_id || latestOrder?.rejection_reason || ""}
         />
         <PaperInfo
           label={copy.latestTick}

@@ -31,6 +31,9 @@ const StrategyMarket = lazy(() =>
 const StrategyLibrary = lazy(() =>
   import("@/pages/StrategyLibrary").then((m) => ({ default: m.StrategyLibrary })),
 );
+const StrategyEdit = lazy(() =>
+  import("@/pages/StrategyEdit").then((m) => ({ default: m.StrategyEdit })),
+);
 const StrategyCockpit = lazy(() =>
   import("@/pages/StrategyCockpit").then((m) => ({ default: m.StrategyCockpit })),
 );
@@ -106,6 +109,8 @@ export const router = createBrowserRouter([
           { path: "/cockpit", element: wrap(StrategyCockpit) },
           { path: "/agent", element: wrap(Agent) },
           { path: "/strategies", element: wrap(StrategyLibrary) },
+          { path: "/m/add-strategy", element: wrap(StrategyEdit) },
+          { path: "/m/edit-strategy/:strategyId", element: wrap(StrategyEdit) },
           { path: "/shadow-trading", element: wrap(ShadowTrading) },
           { path: "/live-trading", element: wrap(LiveTrading) },
           { path: "/personal-settings", element: wrap(PersonalSettings) },

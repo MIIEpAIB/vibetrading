@@ -8,6 +8,7 @@ from typing import Any
 
 
 DEPLOYMENT_STATUSES = {"draft", "running", "paused", "archived"}
+EXECUTION_MODES = {"shadow", "broker_paper"}
 SIGNAL_ACTIONS = {"BUY", "SELL", "HOLD", "CLOSE"}
 RISK_DECISIONS = {"allowed", "rejected"}
 TICK_OUTCOMES = {"no_action", "failed", "rejected", "order_placed"}
@@ -145,6 +146,8 @@ class PaperDeployment:
     limits: PaperLimits
     created_at: str
     updated_at: str
+    execution_mode: str = "shadow"
+    connector_profile_id: str = ""
     started_at: str | None = None
     paused_at: str | None = None
     archived_at: str | None = None
@@ -214,6 +217,10 @@ class PaperOrderLink:
     shadow_status: str
     created_at: str
     rejection_reason: str = ""
+    execution_mode: str = "shadow"
+    connector_profile_id: str = ""
+    broker_order_id: str = ""
+    broker_payload: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
