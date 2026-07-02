@@ -6,8 +6,13 @@ import { StrategyMarket } from "@/pages/StrategyMarket";
 import { StrategyLibrary } from "@/pages/StrategyLibrary";
 import { StrategyEdit } from "@/pages/StrategyEdit";
 import { api } from "@/lib/api";
+import { getStrategyRouteId } from "@/lib/strategyMarketplace";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), message: vi.fn() } }));
+
+vi.mock("@/components/charts/StrategyReturnChart", () => ({
+  StrategyReturnChart: () => <div data-testid="strategy-return-chart" />,
+}));
 
 vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
@@ -39,6 +44,10 @@ vi.mock("@/lib/api", async () => {
           metrics: { total_return: 0.082 },
           warnings: [],
         },
+        equity_curve: [
+          { time: "2024-01-01", equity: 50000, drawdown: 0 },
+          { time: "2024-01-02", equity: 54100, drawdown: -0.01 },
+        ],
         trade_log: [{ time: "2024-01-02", code: "BTC-USDT", side: "BUY", price: "42000", qty: "1" }],
       }),
       runStrategyBacktest: vi.fn().mockResolvedValue({
@@ -92,6 +101,19 @@ vi.mock("@/lib/api", async () => {
 function LocationProbe() {
   const location = useLocation();
   return <div data-testid="location">{location.pathname + location.search}</div>;
+}
+
+function dateInputValue(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function oneYearAgoInputValue() {
+  const date = new Date();
+  date.setFullYear(date.getFullYear() - 1);
+  return dateInputValue(date);
 }
 
 describe("strategy market / library split", () => {
@@ -318,17 +340,23 @@ describe("strategy market / library split", () => {
     expect(screen.getByDisplayValue("8")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "开始回测" }));
 
+    const expectedStartDate = oneYearAgoInputValue();
+    const expectedEndDate = dateInputValue(new Date());
+
     await waitFor(() => expect(api.runStrategyBacktest).toHaveBeenCalledWith("owned-1", expect.objectContaining({
       symbol: "BTC-USDT",
       interval: "1D",
       source: "okx",
       exchange: "okx_spot",
       mode: "simulation",
+      start_date: expectedStartDate,
+      end_date: expectedEndDate,
       quote_currency: "USDT",
       initial_capital: 50000,
       trading_currency: "USDT",
       parameters: expect.objectContaining({
-        start_date: "2024-01-01",
+        start_date: expectedStartDate,
+        end_date: expectedEndDate,
         symbol: "BTC-USDT",
         interval: "1D",
         source: "okx",
@@ -347,8 +375,11 @@ describe("strategy market / library split", () => {
     })));
     expect(await screen.findByText("回测结果")).toBeInTheDocument();
     expect(await screen.findByText("详细结果")).toBeInTheDocument();
+    expect(await screen.findByText("收益曲线")).toBeInTheDocument();
     expect(await screen.findByText("交易明细")).toBeInTheDocument();
     expect(screen.getByText("strategy_owned_1")).toBeInTheDocument();
+    expect(screen.queryByText("运行目录")).not.toBeInTheDocument();
+    expect(screen.queryByText("可复现信息")).not.toBeInTheDocument();
   });
 
   it("runs classic turtle from the editor using its saved code", async () => {
@@ -369,7 +400,7 @@ describe("strategy market / library split", () => {
     });
 
     render(
-      <MemoryRouter initialEntries={["/m/edit-strategy/classic-turtle-trading?tab=backtest"]}>
+      <MemoryRouter initialEntries={["/m/edit-strategy/360003?tab=backtest"]}>
         <I18nProvider>
           <Routes>
             <Route path="/m/edit-strategy/:strategyId" element={<StrategyEdit />} />
@@ -546,7 +577,7 @@ describe("strategy market / library split", () => {
     expect(await screen.findByText("详情策略")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "编辑" }));
 
-    expect(screen.getByTestId("location")).toHaveTextContent("/m/edit-strategy/owned-edit-1");
+    expect(screen.getByTestId("location")).toHaveTextContent(`/m/edit-strategy/${getStrategyRouteId("owned-edit-1")}`);
   });
 
   it("starts paper trading from the owned strategy row", async () => {

@@ -19,6 +19,7 @@ const apiPrefixes = [
   "/auth",
   "/correlation",
   "/crypto",
+  "/dm",
   "/health",
   "/live",
   "/mandate",
@@ -29,6 +30,7 @@ const apiPrefixes = [
   "/settings/llm",
   "/shadow",
   "/shadow-reports",
+  "/social",
   "/strategy-market",
   "/strategies",
   "/swarm/presets",
@@ -48,6 +50,7 @@ const spaHtmlExactPaths = new Set([
 
 const spaHtmlPathPatterns = [
   /^\/runs\/[^/]+\/?$/,
+  /^\/strategy\/[^/]+\/?$/,
 ];
 
 const contentTypes = {

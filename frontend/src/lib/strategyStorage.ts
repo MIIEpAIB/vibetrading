@@ -26,6 +26,7 @@ function fallbackStrategy(): StrategyLibraryItem {
     id: `strategy_${Date.now()}`,
     name: "Untitled Strategy",
     description: "",
+    strategyDescription: "",
     language: "python",
     category: "utility",
     status: "draft",
@@ -44,6 +45,11 @@ export function normalizeOwnedStrategy(value: unknown, fallback = fallbackStrate
     id: typeof value.id === "string" && value.id.trim() ? value.id : fallback.id,
     name: typeof value.name === "string" && value.name.trim() ? value.name : fallback.name,
     description: typeof value.description === "string" ? value.description : fallback.description,
+    strategyDescription: typeof value.strategyDescription === "string"
+      ? value.strategyDescription
+      : typeof value.strategy_description === "string"
+        ? value.strategy_description
+        : fallback.strategyDescription,
     language: normalizeLanguage(value.language, fallback.language),
     category: typeof value.category === "string" && value.category.trim() ? value.category : fallback.category,
     status: typeof value.status === "string" && value.status.trim() ? value.status : fallback.status,

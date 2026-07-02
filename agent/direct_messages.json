@@ -1,0 +1,37 @@
+{
+  "threads": [
+    {
+      "thread_id": "8380809958fb4bfd8f12645375a31298",
+      "participant_user_ids": [
+        2,
+        11
+      ],
+      "created_at": "2026-07-02T12:50:30.762199+00:00",
+      "updated_at": "2026-07-02T12:51:03.321331+00:00"
+    }
+  ],
+  "messages": [
+    {
+      "message_id": "4ff089ab341b4c42834464d2205d1470",
+      "thread_id": "8380809958fb4bfd8f12645375a31298",
+      "sender_user_id": 11,
+      "content": "你好",
+      "created_at": "2026-07-02T12:50:35.624745+00:00",
+      "read_by": [
+        2,
+        11
+      ]
+    },
+    {
+      "message_id": "6a0cd3d891c74e36b3af01587c4ce51e",
+      "thread_id": "8380809958fb4bfd8f12645375a31298",
+      "sender_user_id": 2,
+      "content": "你好呀,你的策略卖吗",
+      "created_at": "2026-07-02T12:51:03.321331+00:00",
+      "read_by": [
+        2,
+        11
+      ]
+    }
+  ]
+}

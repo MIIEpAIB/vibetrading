@@ -156,6 +156,64 @@ def test_strategy_record_maps_legacy_json_language_to_javascript() -> None:
     assert record.language == "javascript"
 
 
+@pytest.mark.asyncio
+async def test_publish_strategy_creates_public_snapshot(monkeypatch) -> None:
+    record = StrategyRecord.from_payload(
+        {
+            "id": "breakout",
+            "name": "Breakout",
+            "description": "Breakout strategy",
+            "strategyDescription": "Detailed rules",
+            "language": "python",
+            "category": "trend",
+            "status": "draft",
+            "tags": ["trend"],
+            "code": "class SignalEngine:\n    def generate(self, data_map):\n        return {}\n",
+            "createdAt": "2026-06-22T10:30:00",
+            "updatedAt": "2026-06-22T10:31:00",
+        }
+    )
+    captured: dict[str, object] = {}
+
+    class FakeStore:
+        def publish_strategy(self, strategy, *, user_id, backtest_summary=None, risk_warnings=None):
+            captured.update(
+                strategy=strategy,
+                user_id=user_id,
+                backtest_summary=backtest_summary,
+                risk_warnings=risk_warnings,
+            )
+            return SimpleNamespace(
+                to_dict=lambda: {
+                    "publicId": "pub_test",
+                    "sourceStrategyId": strategy.id,
+                    "name": strategy.name,
+                    "summary": strategy.description,
+                    "description": strategy.description,
+                    "strategyDescription": strategy.strategyDescription,
+                    "language": strategy.language,
+                    "category": strategy.category,
+                    "tags": strategy.tags,
+                    "codeSnapshot": strategy.code,
+                    "reviewStatus": "published",
+                    "publishedAt": "2026-06-22T10:32:00",
+                    "updatedAt": "2026-06-22T10:32:00",
+                    "backtestSummary": {},
+                    "riskWarnings": risk_warnings or [],
+                }
+            )
+
+    monkeypatch.setattr(api_server, "_strategy_or_404", lambda strategy_id, *, user_id: record)
+    monkeypatch.setattr(api_server, "_get_strategy_store", lambda: FakeStore())
+
+    result = await api_server.publish_strategy("breakout", SimpleNamespace(user_id=123))
+
+    assert result["publicId"] == "pub_test"
+    assert result["codeSnapshot"] == record.code
+    assert captured["user_id"] == 123
+    assert captured["strategy"] is record
+
+
 def test_user_python_strategy_backtest_disabled_by_default(monkeypatch) -> None:
     monkeypatch.delenv("VIBE_TRADING_ALLOW_UNSANDBOXED_PYTHON_STRATEGIES", raising=False)
     record = SimpleNamespace(
@@ -174,6 +232,25 @@ def test_user_python_strategy_backtest_disabled_by_default(monkeypatch) -> None:
     assert "disabled until sandboxed execution is configured" in excinfo.value.detail
 
 
+def test_user_python_strategy_backtest_enabled_from_agent_env(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("VIBE_TRADING_ALLOW_UNSANDBOXED_PYTHON_STRATEGIES", raising=False)
+    env_path = tmp_path / ".env"
+    env_path.write_text("VIBE_TRADING_ALLOW_UNSANDBOXED_PYTHON_STRATEGIES=1\n", encoding="utf-8")
+    monkeypatch.setattr(api_server, "ENV_PATH", env_path)
+    record = SimpleNamespace(
+        code=(
+            "class SignalEngine:\n"
+            "    def generate(self, data_map):\n"
+            "        return {}\n"
+        ),
+        language="python",
+    )
+
+    source = api_server._strategy_signal_engine_code(record, "BTC-USDT")
+
+    assert "class SignalEngine" in source
+
+
 def test_json_strategy_spec_still_builds_safe_signal_engine(monkeypatch) -> None:
     monkeypatch.delenv("VIBE_TRADING_ALLOW_UNSANDBOXED_PYTHON_STRATEGIES", raising=False)
     record = SimpleNamespace(
@@ -190,6 +267,25 @@ def test_json_strategy_spec_still_builds_safe_signal_engine(monkeypatch) -> None
 
     assert "class SignalEngine" in source
     assert "target_weight = 0.4" in source
+
+
+def test_python_strategy_syntax_error_stops_before_backtest(monkeypatch) -> None:
+    monkeypatch.setenv("VIBE_TRADING_ALLOW_UNSANDBOXED_PYTHON_STRATEGIES", "1")
+    record = SimpleNamespace(
+        code=(
+            "class SignalEngine:\n"
+            "    def generate(self, data_map)\n"
+            "        return {}\n"
+        ),
+        language="python",
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        api_server._strategy_signal_engine_code(record, "BTC-USDT")
+
+    assert excinfo.value.status_code == 400
+    assert "Strategy code syntax error" in excinfo.value.detail
+    assert "line 2" in excinfo.value.detail
 
 
 @pytest.mark.asyncio
@@ -243,10 +339,12 @@ async def test_classic_turtle_personal_backtest_uses_saved_code(monkeypatch) -> 
             symbol="BTC-USDT",
             interval="4H",
             source="okx",
+            initial_capital=50000,
         ),
         SimpleNamespace(user_id=123),
     )
 
     assert result.run_id == "strategy_test"
     assert captured["context"] == {"user_id": 123, "strategy_id": "classic-turtle-trading"}
+    assert captured["config"]["initial_cash"] == 50000.0
     assert "class SignalEngine" in str(captured["signal_code"])

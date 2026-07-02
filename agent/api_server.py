@@ -29,7 +29,9 @@ from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 from rich.console import Console
 
+from src.direct_messages import DirectMessageStore
 from src.goal.context import default_goal_criteria
+from src.social_graph import SocialGraphStore
 from src.ui_services import build_run_analysis, load_run_context
 
 # UTF-8 on Windows
@@ -46,6 +48,8 @@ AGENT_DIR = Path(__file__).resolve().parent
 ENV_PATH = AGENT_DIR / ".env"
 ENV_EXAMPLE_PATH = AGENT_DIR / ".env.example"
 STRATEGY_MARKET_ADMIN_PATH = AGENT_DIR / "strategy_market_admin.json"
+DIRECT_MESSAGES_PATH = AGENT_DIR / "direct_messages.json"
+SOCIAL_GRAPH_PATH = AGENT_DIR / "social_graph.json"
 
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
 _UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1 MB
@@ -452,6 +456,85 @@ class CreateExchangeApiKeyBindingRequest(BaseModel):
     margin_mode: str = Field("cross", pattern="^(cross|isolated)$")
 
 
+class DirectMessageUserResponse(BaseModel):
+    """Public user profile used by direct messages."""
+
+    user_id: int
+    username: str
+    display_name: str
+
+
+class SocialUserResponse(BaseModel):
+    """Public social profile for follow and direct message surfaces."""
+
+    user_id: int
+    username: str
+    display_name: str
+    follower_count: int = 0
+    following_count: int = 0
+    is_following: bool = False
+
+
+class DirectMessageThreadResponse(BaseModel):
+    """One-to-one direct message thread."""
+
+    thread_id: str
+    peer: DirectMessageUserResponse
+    created_at: str
+    updated_at: str
+    unread_count: int = 0
+    last_message: Optional["DirectMessageResponse"] = None
+
+
+class DirectMessageResponse(BaseModel):
+    """A direct message payload."""
+
+    message_id: str
+    thread_id: str
+    sender: DirectMessageUserResponse
+    content: str
+    created_at: str
+    read_by_current_user: bool = False
+
+
+class DirectMessageThreadListResponse(BaseModel):
+    """List of current user's direct message threads."""
+
+    threads: List[DirectMessageThreadResponse]
+
+
+class DirectMessageListResponse(BaseModel):
+    """List of messages in one direct message thread."""
+
+    messages: List[DirectMessageResponse]
+
+
+class DirectMessageUserSearchResponse(BaseModel):
+    """Search result for users available to message."""
+
+    users: List[DirectMessageUserResponse]
+
+
+class SocialUserSearchResponse(BaseModel):
+    """Search result for social users."""
+
+    users: List[SocialUserResponse]
+
+
+class CreateDirectMessageThreadRequest(BaseModel):
+    """Create or return a one-to-one direct message thread."""
+
+    recipient_user_id: Optional[int] = None
+    recipient_username: Optional[str] = Field(None, min_length=1, max_length=64)
+    initial_message: Optional[str] = Field(None, max_length=5000)
+
+
+class SendDirectMessageRequest(BaseModel):
+    """Send a direct message."""
+
+    content: str = Field(..., min_length=1, max_length=5000)
+
+
 class AdminUserUpdateRequest(BaseModel):
     """Operator-managed application user update."""
 
@@ -662,6 +745,7 @@ class StrategyLibraryItem(BaseModel):
     id: str = Field(..., min_length=1, max_length=128)
     name: str = Field(..., min_length=1, max_length=500)
     description: str = ""
+    strategyDescription: str = ""
     language: str = "python"
     category: str = "trend"
     status: str = "draft"
@@ -675,6 +759,32 @@ class StrategyLibraryResponse(BaseModel):
     """Strategy library list response."""
 
     strategies: List[StrategyLibraryItem]
+
+
+class PublicStrategyMarketItem(BaseModel):
+    """Published strategy snapshot available in the public strategy market."""
+
+    publicId: str
+    sourceStrategyId: str
+    name: str
+    summary: str
+    description: str = ""
+    strategyDescription: str = ""
+    language: str = "python"
+    category: str = "trend"
+    tags: List[str] = Field(default_factory=list)
+    codeSnapshot: str
+    reviewStatus: str = "published"
+    publishedAt: str
+    updatedAt: str
+    backtestSummary: Dict[str, Any] = Field(default_factory=dict)
+    riskWarnings: List[str] = Field(default_factory=list)
+
+
+class PublicStrategyMarketResponse(BaseModel):
+    """List of published community strategies."""
+
+    strategies: List[PublicStrategyMarketItem]
 
 
 class ReplaceStrategyLibraryRequest(BaseModel):
@@ -722,6 +832,7 @@ class StrategyBacktestRequest(BaseModel):
     symbol: str = "BTC-USDT"
     interval: str = "4H"
     source: str = "okx"
+    initial_capital: float = Field(100000.0, gt=0)
 
 
 class PaperDeploymentCreateRequest(BaseModel):
@@ -1236,7 +1347,14 @@ def _validate_explicit_operator_bearer(
 
 def _env_flag_enabled(name: str) -> bool:
     """Return whether a boolean environment flag is enabled."""
-    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+    raw = os.getenv(name, "").strip()
+    if raw:
+        return raw.lower() in {"1", "true", "yes", "on"}
+    try:
+        raw = _read_dotenv_values(ENV_PATH).get(name, "").strip()
+    except Exception:
+        raw = ""
+    return raw.lower() in {"1", "true", "yes", "on"}
 
 
 def _default_gateway_ips() -> set[ipaddress.IPv4Address]:
@@ -1409,6 +1527,303 @@ async def change_current_user_password(
     if not changed:
         raise HTTPException(status_code=400, detail="Current password is incorrect")
     return {"status": "ok"}
+
+
+_direct_message_store: DirectMessageStore | None = None
+_social_graph_store: SocialGraphStore | None = None
+
+
+def _get_direct_message_store() -> DirectMessageStore:
+    global _direct_message_store
+    if _direct_message_store is None or _direct_message_store.path != DIRECT_MESSAGES_PATH:
+        _direct_message_store = DirectMessageStore(DIRECT_MESSAGES_PATH)
+    return _direct_message_store
+
+
+def _get_social_graph_store() -> SocialGraphStore:
+    global _social_graph_store
+    if _social_graph_store is None or _social_graph_store.path != SOCIAL_GRAPH_PATH:
+        _social_graph_store = SocialGraphStore(SOCIAL_GRAPH_PATH)
+    return _social_graph_store
+
+
+def _require_dm_user(ctx: AuthContext) -> int:
+    if ctx.user is None or ctx.user_id is None:
+        raise HTTPException(status_code=401, detail="Login required")
+    return int(ctx.user_id)
+
+
+def _dm_user_response(user: Any) -> DirectMessageUserResponse:
+    return DirectMessageUserResponse(
+        user_id=int(user.user_id),
+        username=str(user.username),
+        display_name=str(user.display_name),
+    )
+
+
+def _social_user_response(user: Any, current_user_id: int | None = None) -> SocialUserResponse:
+    graph = _get_social_graph_store()
+    user_id = int(user.user_id)
+    return SocialUserResponse(
+        user_id=user_id,
+        username=str(user.username),
+        display_name=str(user.display_name),
+        follower_count=graph.follower_count(user_id),
+        following_count=graph.following_count(user_id),
+        is_following=bool(current_user_id and graph.is_following(current_user_id, user_id)),
+    )
+
+
+def _dm_user_map() -> dict[int, Any]:
+    return {int(user.user_id): user for user in _get_auth_store().list_users(limit=1000)}
+
+
+def _dm_find_user(*, user_id: int | None = None, username: str | None = None) -> Any | None:
+    users = list(_dm_user_map().values())
+    if user_id is not None:
+        for user in users:
+            if int(user.user_id) == int(user_id):
+                return user
+    if username:
+        normalized = username.strip().lower()
+        for user in users:
+            if str(user.username).lower() == normalized:
+                return user
+    return None
+
+
+def _dm_message_response(message: Any, users_by_id: dict[int, Any], current_user_id: int) -> DirectMessageResponse:
+    sender = users_by_id.get(int(message.sender_user_id))
+    if sender is None:
+        sender = type("DeletedUser", (), {
+            "user_id": int(message.sender_user_id),
+            "username": f"user:{message.sender_user_id}",
+            "display_name": "Deleted user",
+        })()
+    return DirectMessageResponse(
+        message_id=message.message_id,
+        thread_id=message.thread_id,
+        sender=_dm_user_response(sender),
+        content=message.content,
+        created_at=message.created_at,
+        read_by_current_user=int(current_user_id) in set(message.read_by),
+    )
+
+
+def _dm_thread_response(thread: Any, current_user_id: int, users_by_id: dict[int, Any]) -> DirectMessageThreadResponse:
+    peer_id = next((item for item in thread.participant_user_ids if int(item) != int(current_user_id)), None)
+    peer = users_by_id.get(int(peer_id)) if peer_id is not None else None
+    if peer is None:
+        peer = type("DeletedUser", (), {
+            "user_id": int(peer_id or 0),
+            "username": f"user:{peer_id or 0}",
+            "display_name": "Deleted user",
+        })()
+    store = _get_direct_message_store()
+    last_message = store.last_message(thread.thread_id)
+    return DirectMessageThreadResponse(
+        thread_id=thread.thread_id,
+        peer=_dm_user_response(peer),
+        created_at=thread.created_at,
+        updated_at=thread.updated_at,
+        unread_count=store.unread_count(thread.thread_id, current_user_id),
+        last_message=_dm_message_response(last_message, users_by_id, current_user_id) if last_message else None,
+    )
+
+
+def _require_dm_thread_access(thread_id: str, user_id: int) -> Any:
+    thread = _get_direct_message_store().get_thread(thread_id)
+    if thread is None:
+        raise HTTPException(status_code=404, detail="Direct message thread not found")
+    if int(user_id) not in thread.participant_user_ids:
+        raise HTTPException(status_code=403, detail="Direct message thread access denied")
+    return thread
+
+
+@app.get("/social/users", response_model=SocialUserSearchResponse)
+async def search_social_users(
+    query: str = Query("", max_length=64),
+    ctx: AuthContext = Depends(require_auth),
+):
+    """Search application users with follow metadata."""
+    current_user_id = _require_dm_user(ctx)
+    needle = query.strip().lower()
+    users = []
+    for user in _get_auth_store().list_users(limit=1000):
+        if int(user.user_id) == current_user_id:
+            continue
+        haystack = f"{user.username} {user.display_name}".lower()
+        if needle and needle not in haystack:
+            continue
+        users.append(_social_user_response(user, current_user_id))
+        if len(users) >= 20:
+            break
+    return {"users": users}
+
+
+@app.get("/social/users/{user_id}", response_model=SocialUserResponse)
+async def get_social_user(user_id: int, ctx: AuthContext = Depends(require_auth)):
+    """Return one user's public social profile."""
+    current_user_id = _require_dm_user(ctx)
+    user = _dm_find_user(user_id=user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return _social_user_response(user, current_user_id)
+
+
+@app.post("/social/follows/{user_id}", response_model=SocialUserResponse)
+async def follow_user(user_id: int, ctx: AuthContext = Depends(require_auth)):
+    """Follow another user."""
+    current_user_id = _require_dm_user(ctx)
+    user = _dm_find_user(user_id=user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    try:
+        _get_social_graph_store().follow(current_user_id, user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _social_user_response(user, current_user_id)
+
+
+@app.delete("/social/follows/{user_id}", response_model=SocialUserResponse)
+async def unfollow_user(user_id: int, ctx: AuthContext = Depends(require_auth)):
+    """Unfollow another user."""
+    current_user_id = _require_dm_user(ctx)
+    user = _dm_find_user(user_id=user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    _get_social_graph_store().unfollow(current_user_id, user_id)
+    return _social_user_response(user, current_user_id)
+
+
+@app.get("/social/following", response_model=SocialUserSearchResponse)
+async def list_following(
+    user_id: Optional[int] = Query(None),
+    ctx: AuthContext = Depends(require_auth),
+):
+    """List users followed by a user. Defaults to current user."""
+    current_user_id = _require_dm_user(ctx)
+    target_user_id = int(user_id or current_user_id)
+    users_by_id = _dm_user_map()
+    users = [
+        _social_user_response(users_by_id[item], current_user_id)
+        for item in _get_social_graph_store().following_ids(target_user_id)
+        if item in users_by_id
+    ]
+    return {"users": users}
+
+
+@app.get("/social/followers", response_model=SocialUserSearchResponse)
+async def list_followers(
+    user_id: Optional[int] = Query(None),
+    ctx: AuthContext = Depends(require_auth),
+):
+    """List a user's followers. Defaults to current user."""
+    current_user_id = _require_dm_user(ctx)
+    target_user_id = int(user_id or current_user_id)
+    users_by_id = _dm_user_map()
+    users = [
+        _social_user_response(users_by_id[item], current_user_id)
+        for item in _get_social_graph_store().follower_ids(target_user_id)
+        if item in users_by_id
+    ]
+    return {"users": users}
+
+
+@app.get("/dm/users", response_model=DirectMessageUserSearchResponse)
+async def search_direct_message_users(
+    query: str = Query("", max_length=64),
+    ctx: AuthContext = Depends(require_auth),
+):
+    """Search application users available for one-to-one direct messages."""
+    current_user_id = _require_dm_user(ctx)
+    needle = query.strip().lower()
+    users = []
+    for user in _get_auth_store().list_users(limit=1000):
+        if int(user.user_id) == current_user_id:
+            continue
+        haystack = f"{user.username} {user.display_name}".lower()
+        if needle and needle not in haystack:
+            continue
+        users.append(_dm_user_response(user))
+        if len(users) >= 20:
+            break
+    return {"users": users}
+
+
+@app.get("/dm/threads", response_model=DirectMessageThreadListResponse)
+async def list_direct_message_threads(ctx: AuthContext = Depends(require_auth)):
+    """List the current user's direct message threads."""
+    current_user_id = _require_dm_user(ctx)
+    users_by_id = _dm_user_map()
+    threads = [
+        _dm_thread_response(thread, current_user_id, users_by_id)
+        for thread in _get_direct_message_store().list_threads(current_user_id)
+    ]
+    return {"threads": threads}
+
+
+@app.post("/dm/threads", response_model=DirectMessageThreadResponse, status_code=status.HTTP_201_CREATED)
+async def create_direct_message_thread(
+    payload: CreateDirectMessageThreadRequest,
+    ctx: AuthContext = Depends(require_auth),
+):
+    """Create or return a one-to-one direct message thread."""
+    current_user_id = _require_dm_user(ctx)
+    recipient = _dm_find_user(user_id=payload.recipient_user_id, username=payload.recipient_username)
+    if recipient is None:
+        raise HTTPException(status_code=404, detail="Recipient user not found")
+    if int(recipient.user_id) == current_user_id:
+        raise HTTPException(status_code=400, detail="Cannot message yourself")
+
+    store = _get_direct_message_store()
+    thread = store.get_or_create_thread(current_user_id, int(recipient.user_id))
+    if payload.initial_message and payload.initial_message.strip():
+        store.send_message(thread.thread_id, current_user_id, payload.initial_message)
+        thread = store.get_thread(thread.thread_id) or thread
+    return _dm_thread_response(thread, current_user_id, _dm_user_map())
+
+
+@app.get("/dm/threads/{thread_id}/messages", response_model=DirectMessageListResponse)
+async def list_direct_messages(
+    thread_id: str,
+    limit: int = Query(100, ge=1, le=500),
+    ctx: AuthContext = Depends(require_auth),
+):
+    """List messages in a direct message thread."""
+    current_user_id = _require_dm_user(ctx)
+    _require_dm_thread_access(thread_id, current_user_id)
+    users_by_id = _dm_user_map()
+    messages = [
+        _dm_message_response(message, users_by_id, current_user_id)
+        for message in _get_direct_message_store().list_messages(thread_id, limit=limit)
+    ]
+    return {"messages": messages}
+
+
+@app.post("/dm/threads/{thread_id}/messages", response_model=DirectMessageResponse, status_code=status.HTTP_201_CREATED)
+async def send_direct_message(
+    thread_id: str,
+    payload: SendDirectMessageRequest,
+    ctx: AuthContext = Depends(require_auth),
+):
+    """Send a direct message in a thread."""
+    current_user_id = _require_dm_user(ctx)
+    _require_dm_thread_access(thread_id, current_user_id)
+    try:
+        message = _get_direct_message_store().send_message(thread_id, current_user_id, payload.content)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _dm_message_response(message, _dm_user_map(), current_user_id)
+
+
+@app.post("/dm/threads/{thread_id}/read")
+async def mark_direct_message_thread_read(thread_id: str, ctx: AuthContext = Depends(require_auth)):
+    """Mark all messages in a thread as read for the current user."""
+    current_user_id = _require_dm_user(ctx)
+    _require_dm_thread_access(thread_id, current_user_id)
+    changed = _get_direct_message_store().mark_read(thread_id, current_user_id)
+    return {"status": "ok", "updated": changed}
 
 
 @app.get("/auth/exchange-api-keys", response_model=ExchangeApiKeyBindingListResponse)
@@ -1732,6 +2147,13 @@ async def admin_delete_user(user_id: int):
 async def get_strategy_market_catalog_config():
     """Return public strategy market operator metadata."""
     return {"items": _load_strategy_market_admin_items()}
+
+
+@app.get("/strategy-market/public", response_model=PublicStrategyMarketResponse)
+async def list_public_strategy_market(ctx: AuthContext = Depends(require_auth)):
+    """List user-published community strategy snapshots."""
+    store = _get_strategy_store()
+    return {"strategies": [item.to_dict() for item in store.list_public_strategies()]}
 
 
 @app.get("/admin/strategy-market", response_model=StrategyMarketAdminResponse, dependencies=[Depends(require_operator_auth)])
@@ -3326,8 +3748,7 @@ class SignalEngine:
         return out
 '''
 
-    allow_unsandboxed_python = os.getenv("VIBE_TRADING_ALLOW_UNSANDBOXED_PYTHON_STRATEGIES", "").strip().lower()
-    if allow_unsandboxed_python not in {"1", "true", "yes", "on"}:
+    if not _env_flag_enabled("VIBE_TRADING_ALLOW_UNSANDBOXED_PYTHON_STRATEGIES"):
         raise HTTPException(
             status_code=403,
             detail=(
@@ -3541,7 +3962,7 @@ async def run_strategy_backtest(
         "end_date": payload.end_date,
         "interval": payload.interval,
         "engine": "daily",
-        "initial_cash": 100000.0,
+        "initial_cash": float(payload.initial_capital),
         "leverage": 1.0,
         "maker_rate": 0.0002,
         "taker_rate": 0.0005,
@@ -3603,6 +4024,27 @@ async def upsert_strategy(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return store.upsert_strategy(record, user_id=ctx.user_id).to_dict()
+
+
+@app.post("/strategies/{strategy_id}/publish", response_model=PublicStrategyMarketItem)
+async def publish_strategy(strategy_id: str, ctx: AuthContext = Depends(require_auth)):
+    """Publish the current user's strategy as an immutable public market snapshot."""
+    record = _strategy_or_404(strategy_id, user_id=ctx.user_id)
+    if not str(record.description or record.strategyDescription or "").strip():
+        raise HTTPException(status_code=400, detail="strategy description is required before publishing")
+    if not str(record.code or "").strip():
+        raise HTTPException(status_code=400, detail="strategy code is required before publishing")
+    store = _get_strategy_store()
+    risk_warnings = [
+        "User-published strategy. Review code, assumptions, and risk limits before running live.",
+    ]
+    public_record = store.publish_strategy(
+        record,
+        user_id=ctx.user_id,
+        backtest_summary={},
+        risk_warnings=risk_warnings,
+    )
+    return public_record.to_dict()
 
 
 @app.delete("/strategies/{strategy_id}")

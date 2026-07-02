@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import hashlib
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -56,6 +57,7 @@ class StrategyRecord:
     id: str
     name: str
     description: str
+    strategyDescription: str
     language: str
     category: str
     status: str
@@ -94,6 +96,7 @@ class StrategyRecord:
             id=strategy_id,
             name=name,
             description=str(payload.get("description") or ""),
+            strategyDescription=str(payload.get("strategyDescription") or payload.get("strategy_description") or ""),
             language=language,
             category=category,
             status=status,
@@ -108,6 +111,7 @@ class StrategyRecord:
             "id": self.id,
             "name": self.name,
             "description": self.description,
+            "strategyDescription": self.strategyDescription,
             "language": self.language,
             "category": self.category,
             "status": self.status,
@@ -115,6 +119,48 @@ class StrategyRecord:
             "code": self.code,
             "createdAt": self.createdAt,
             "updatedAt": self.updatedAt,
+        }
+
+
+@dataclass(frozen=True)
+class PublicStrategyRecord:
+    """Published immutable snapshot shown in the public strategy market."""
+
+    publicId: str
+    ownerUserId: int
+    sourceStrategyId: str
+    name: str
+    summary: str
+    description: str
+    strategyDescription: str
+    language: str
+    category: str
+    tags: list[str]
+    codeSnapshot: str
+    reviewStatus: str
+    publishedAt: str
+    updatedAt: str
+    backtestSummary: dict[str, Any]
+    riskWarnings: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "publicId": self.publicId,
+            "ownerUserId": self.ownerUserId,
+            "sourceStrategyId": self.sourceStrategyId,
+            "name": self.name,
+            "summary": self.summary,
+            "description": self.description,
+            "strategyDescription": self.strategyDescription,
+            "language": self.language,
+            "category": self.category,
+            "tags": list(self.tags),
+            "codeSnapshot": self.codeSnapshot,
+            "reviewStatus": self.reviewStatus,
+            "publishedAt": self.publishedAt,
+            "updatedAt": self.updatedAt,
+            "backtestSummary": dict(self.backtestSummary),
+            "riskWarnings": list(self.riskWarnings),
         }
 
 
@@ -146,6 +192,7 @@ class MySQLStrategyStore:
                         user_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
                         name TEXT NOT NULL,
                         description TEXT NOT NULL,
+                        strategy_description MEDIUMTEXT NOT NULL,
                         language VARCHAR(32) NOT NULL,
                         category VARCHAR(64) NOT NULL,
                         status VARCHAR(32) NOT NULL,
@@ -163,11 +210,14 @@ class MySQLStrategyStore:
                 )
                 self._migrate_legacy_columns(cur)
                 self._ensure_column(cur, "strategy_library", "user_id", "BIGINT UNSIGNED NOT NULL DEFAULT 0")
+                self._ensure_column(cur, "strategy_library", "strategy_description", "MEDIUMTEXT NULL")
                 self._ensure_timestamp_text_columns(cur)
+                cur.execute("UPDATE strategy_library SET strategy_description = '' WHERE strategy_description IS NULL")
                 cur.execute("UPDATE strategy_library SET user_id = 0 WHERE user_id IS NULL")
                 cur.execute("ALTER TABLE strategy_library MODIFY COLUMN user_id BIGINT UNSIGNED NOT NULL DEFAULT 0")
                 self._ensure_index(cur, "strategy_library", "idx_strategy_user_updated", "user_id, updated_at")
                 self._ensure_composite_primary_key(cur)
+                self._init_public_strategy_marketplace(cur)
 
     def list_strategies(self, user_id: int | None = None) -> list[StrategyRecord]:
         with self._lock, mysql_connection() as conn:
@@ -220,19 +270,106 @@ class MySQLStrategyStore:
                     )
                 return cur.rowcount > 0
 
+    def list_public_strategies(self) -> list[PublicStrategyRecord]:
+        with self._lock, mysql_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT * FROM public_strategy_marketplace
+                    WHERE review_status = 'published'
+                    ORDER BY published_at DESC, public_id
+                    """
+                )
+                rows = cur.fetchall()
+        return [self._public_from_row(row) for row in rows]
+
+    def publish_strategy(
+        self,
+        strategy: StrategyRecord,
+        *,
+        user_id: int,
+        backtest_summary: dict[str, Any] | None = None,
+        risk_warnings: list[str] | None = None,
+    ) -> PublicStrategyRecord:
+        now = _now_iso()
+        record = PublicStrategyRecord(
+            publicId=self._public_id(user_id, strategy.id),
+            ownerUserId=self._scope_user_id(user_id),
+            sourceStrategyId=strategy.id,
+            name=strategy.name,
+            summary=strategy.description or strategy.name,
+            description=strategy.description,
+            strategyDescription=strategy.strategyDescription,
+            language=strategy.language,
+            category=strategy.category,
+            tags=list(dict.fromkeys([*strategy.tags, "community"]))[:8],
+            codeSnapshot=strategy.code,
+            reviewStatus="published",
+            publishedAt=now,
+            updatedAt=now,
+            backtestSummary=backtest_summary or {},
+            riskWarnings=risk_warnings or [],
+        )
+        with self._lock, self._transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO public_strategy_marketplace (
+                        public_id, owner_user_id, source_strategy_id, name, summary,
+                        description, strategy_description, language, category, tags_json,
+                        code_snapshot, review_status, published_at, updated_at,
+                        backtest_summary_json, risk_warnings_json
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        name = VALUES(name),
+                        summary = VALUES(summary),
+                        description = VALUES(description),
+                        strategy_description = VALUES(strategy_description),
+                        language = VALUES(language),
+                        category = VALUES(category),
+                        tags_json = VALUES(tags_json),
+                        code_snapshot = VALUES(code_snapshot),
+                        review_status = VALUES(review_status),
+                        updated_at = VALUES(updated_at),
+                        backtest_summary_json = VALUES(backtest_summary_json),
+                        risk_warnings_json = VALUES(risk_warnings_json)
+                    """,
+                    (
+                        record.publicId,
+                        record.ownerUserId,
+                        record.sourceStrategyId,
+                        record.name,
+                        record.summary,
+                        record.description,
+                        record.strategyDescription,
+                        record.language,
+                        record.category,
+                        _json_dumps(record.tags),
+                        record.codeSnapshot,
+                        record.reviewStatus,
+                        record.publishedAt,
+                        record.updatedAt,
+                        _json_dumps(record.backtestSummary),
+                        _json_dumps(record.riskWarnings),
+                    ),
+                )
+        return record
+
     @staticmethod
     def _upsert_with_cursor(cur: Any, strategy: StrategyRecord, user_id: int | None = None) -> None:
         cur.execute(
             """
             INSERT INTO strategy_library (
                 id, user_id, name, description, language, category, status, tags_json,
-                code, created_at, updated_at
+                code, created_at, updated_at, strategy_description
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
                 user_id = VALUES(user_id),
                 name = VALUES(name),
                 description = VALUES(description),
+                strategy_description = VALUES(strategy_description),
                 language = VALUES(language),
                 category = VALUES(category),
                 status = VALUES(status),
@@ -253,6 +390,7 @@ class MySQLStrategyStore:
                 strategy.code,
                 strategy.createdAt,
                 strategy.updatedAt,
+                strategy.strategyDescription,
             ),
         )
 
@@ -379,8 +517,42 @@ class MySQLStrategyStore:
         cur.execute("ALTER TABLE strategy_library ADD PRIMARY KEY (user_id, id)")
 
     @staticmethod
+    def _init_public_strategy_marketplace(cur: Any) -> None:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS public_strategy_marketplace (
+                public_id VARCHAR(128) NOT NULL,
+                owner_user_id BIGINT UNSIGNED NOT NULL,
+                source_strategy_id VARCHAR(128) NOT NULL,
+                name TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                description TEXT NOT NULL,
+                strategy_description MEDIUMTEXT NOT NULL,
+                language VARCHAR(32) NOT NULL,
+                category VARCHAR(64) NOT NULL,
+                tags_json JSON NOT NULL,
+                code_snapshot MEDIUMTEXT NOT NULL,
+                review_status VARCHAR(32) NOT NULL,
+                published_at VARCHAR(64) NOT NULL,
+                updated_at VARCHAR(64) NOT NULL,
+                backtest_summary_json JSON NOT NULL,
+                risk_warnings_json JSON NOT NULL,
+                PRIMARY KEY (public_id),
+                INDEX idx_public_strategy_published (review_status, published_at),
+                INDEX idx_public_strategy_owner (owner_user_id, updated_at),
+                INDEX idx_public_strategy_source (owner_user_id, source_strategy_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """
+        )
+
+    @staticmethod
     def _scope_user_id(user_id: int | None) -> int:
         return int(user_id) if user_id is not None else 0
+
+    @staticmethod
+    def _public_id(user_id: int, strategy_id: str) -> str:
+        digest = hashlib.sha1(f"{user_id}:{strategy_id}".encode("utf-8")).hexdigest()[:16]
+        return f"pub_{digest}"
 
     @staticmethod
     def _from_row(row: dict[str, Any]) -> StrategyRecord:
@@ -388,6 +560,7 @@ class MySQLStrategyStore:
             id=row["id"],
             name=row["name"],
             description=row["description"],
+            strategyDescription=row.get("strategy_description") or "",
             language=_normalize_language(row["language"]),
             category=row["category"],
             status=row["status"],
@@ -395,4 +568,25 @@ class MySQLStrategyStore:
             code=row["code"],
             createdAt=_row_text(row["created_at"]),
             updatedAt=_row_text(row["updated_at"]),
+        )
+
+    @staticmethod
+    def _public_from_row(row: dict[str, Any]) -> PublicStrategyRecord:
+        return PublicStrategyRecord(
+            publicId=row["public_id"],
+            ownerUserId=int(row["owner_user_id"]),
+            sourceStrategyId=row["source_strategy_id"],
+            name=row["name"],
+            summary=row.get("summary") or row.get("description") or row["name"],
+            description=row.get("description") or "",
+            strategyDescription=row.get("strategy_description") or "",
+            language=_normalize_language(row["language"]),
+            category=row["category"],
+            tags=list(_json_loads(row["tags_json"], [])),
+            codeSnapshot=row["code_snapshot"],
+            reviewStatus=row["review_status"],
+            publishedAt=_row_text(row["published_at"]),
+            updatedAt=_row_text(row["updated_at"]),
+            backtestSummary=dict(_json_loads(row.get("backtest_summary_json"), {})),
+            riskWarnings=list(_json_loads(row.get("risk_warnings_json"), [])),
         )

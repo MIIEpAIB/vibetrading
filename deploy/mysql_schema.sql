@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS strategy_library (
   user_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
   name TEXT NOT NULL,
   description TEXT NOT NULL,
+  strategy_description MEDIUMTEXT NOT NULL,
   language VARCHAR(32) NOT NULL,
   category VARCHAR(64) NOT NULL,
   status VARCHAR(32) NOT NULL,
@@ -81,6 +82,29 @@ CREATE TABLE IF NOT EXISTS strategy_library (
   KEY idx_strategy_updated_at (updated_at),
   KEY idx_strategy_status (status),
   KEY idx_strategy_category (category)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS public_strategy_marketplace (
+  public_id VARCHAR(128) NOT NULL,
+  owner_user_id BIGINT UNSIGNED NOT NULL,
+  source_strategy_id VARCHAR(128) NOT NULL,
+  name TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  description TEXT NOT NULL,
+  strategy_description MEDIUMTEXT NOT NULL,
+  language VARCHAR(32) NOT NULL,
+  category VARCHAR(64) NOT NULL,
+  tags_json JSON NOT NULL,
+  code_snapshot MEDIUMTEXT NOT NULL,
+  review_status VARCHAR(32) NOT NULL,
+  published_at VARCHAR(64) NOT NULL,
+  updated_at VARCHAR(64) NOT NULL,
+  backtest_summary_json JSON NOT NULL,
+  risk_warnings_json JSON NOT NULL,
+  PRIMARY KEY (public_id),
+  KEY idx_public_strategy_published (review_status, published_at),
+  KEY idx_public_strategy_owner (owner_user_id, updated_at),
+  KEY idx_public_strategy_source (owner_user_id, source_strategy_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS assistant_prompts (

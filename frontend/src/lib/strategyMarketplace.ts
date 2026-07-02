@@ -1,16 +1,20 @@
 import type { StrategyLibraryItem } from "@/lib/api";
 
 export type StrategyCategory = "trend" | "mean_reversion" | "grid" | "risk" | "portfolio" | "arbitrage" | "utility";
-export type StrategyCatalogKind = "built-in" | "paid";
+export type StrategyCatalogKind = "built-in" | "paid" | "community";
 export type MarketOwnership = "favorite" | "purchased";
 
 export interface StrategyCatalogItem {
   id: string;
+  publicId?: string;
   name: string;
   summary: string;
   description?: string;
+  strategyDescription?: string;
   usage?: string[];
   riskNotes?: string[];
+  language?: string;
+  codeSnapshot?: string;
   tags: string[];
   category: StrategyCategory;
   kind: StrategyCatalogKind;
@@ -106,6 +110,7 @@ export const builtInStrategyCatalog: StrategyCatalogItem[] = [
   },
   {
     id: "professional-grid-trading",
+    publicId: "359806",
     name: "专业网格交易策略",
     summary: "价格区间、层级仓位和极端行情保护。",
     tags: ["grid", "risk", "official"],
@@ -283,6 +288,36 @@ export const strategyMarketCatalog = {
   paid: paidStrategyCatalog,
 } as const;
 
+const allMarketStrategies = [...builtInStrategyCatalog, ...paidStrategyCatalog];
+const marketPublicIdByInternalId = new Map(
+  allMarketStrategies.map((strategy, index) => [strategy.id, strategy.publicId ?? String(360000 + index)]),
+);
+const marketInternalIdByPublicId = new Map(
+  allMarketStrategies.map((strategy, index) => [strategy.publicId ?? String(360000 + index), strategy.id]),
+);
+
+function buildStableNumericRouteId(strategyId: string): string {
+  let hash = 0;
+  for (let index = 0; index < strategyId.length; index += 1) {
+    hash = (hash * 31 + strategyId.charCodeAt(index)) >>> 0;
+  }
+  return String(100000000 + (hash % 900000000));
+}
+
+export function getStrategyRouteId(strategyId: string): string {
+  if (/^\d+$/.test(strategyId)) return strategyId;
+  return marketPublicIdByInternalId.get(strategyId) ?? buildStableNumericRouteId(strategyId);
+}
+
+export function findMarketStrategyByRouteId(routeId: string): StrategyCatalogItem | null {
+  const internalId = resolveStrategyRouteId(routeId);
+  return allMarketStrategies.find((strategy) => strategy.id === internalId || getStrategyRouteId(strategy.id) === routeId) ?? null;
+}
+
+export function resolveStrategyRouteId(routeId: string): string {
+  return marketInternalIdByPublicId.get(routeId) ?? routeId;
+}
+
 const professionalGridConfig: ProfessionalGridConfig = {
   symbol: "BTC_USDT",
   timeframe: "1h",
@@ -432,6 +467,9 @@ export function getMarketOwnershipTag(tags: readonly string[]): MarketOwnership 
 }
 
 export function buildMarketStarterCode(strategy: StrategyCatalogItem): string {
+  if (strategy.codeSnapshot) {
+    return strategy.codeSnapshot;
+  }
   if (strategy.id === "classic-turtle-trading") {
     return buildClassicTurtlePythonStrategyCode();
   }
@@ -610,11 +648,17 @@ export function createMarketOwnedStrategy(
 ): StrategyLibraryItem {
   const now = new Date().toISOString();
   const isClassicTurtle = strategy.id === "classic-turtle-trading";
+  const isCommunity = strategy.kind === "community";
   return {
-    id: strategy.id,
+    id: isCommunity ? `owned_${strategy.id}` : strategy.id,
     name: strategy.name,
     description: strategy.summary,
-    language: isClassicTurtle ? "python" : "javascript",
+    strategyDescription: strategy.strategyDescription ?? [
+      strategy.description ?? strategy.summary,
+      strategy.usage?.length ? `\n## 使用方式\n${strategy.usage.map((item) => `- ${item}`).join("\n")}` : "",
+      strategy.riskNotes?.length ? `\n## 风控要点\n${strategy.riskNotes.map((item) => `- ${item}`).join("\n")}` : "",
+    ].filter(Boolean).join("\n"),
+    language: isCommunity ? strategy.language ?? "python" : isClassicTurtle ? "python" : "javascript",
     category: strategy.category,
     status: "draft",
     tags: Array.from(new Set([...strategy.tags, ownership, "market"])).slice(0, 8),

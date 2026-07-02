@@ -25,6 +25,7 @@ const NAV = [
   { to: "/api-docs", icon: Code2, labelKey: "nav.apiDocs" },
   { to: "/shadow-trading", icon: WalletCards, labelKey: "nav.shadowTrading" },
   { to: "/live-trading", icon: RadioTower, labelKey: "nav.liveTrading" },
+  { to: "/messages", icon: MessageSquare, labelKey: "nav.messages" },
   { to: "/personal-settings", icon: UserCog, labelKey: "nav.personalSettings" },
   { to: "/alpha-zoo", icon: Layers, labelKey: "nav.alphaZoo" },
   { to: "/correlation", icon: BarChart3, labelKey: "nav.correlation" },

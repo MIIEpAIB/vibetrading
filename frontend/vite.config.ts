@@ -15,10 +15,12 @@ const PROXY_PATHS = [
   "/strategies",
   "/paper",
   "/crypto",
+  "/dm",
   "/mandate",
   "/live",
   "/upload",
   "/shadow-reports",
+  "/social",
 ];
 
 function cleanBuildArtifacts() {

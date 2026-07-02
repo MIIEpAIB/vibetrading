@@ -480,6 +480,33 @@ cd frontend && npm install && npm run dev
 
 Open `http://localhost:8765`. The frontend binds `0.0.0.0:8765` and proxies API calls to `localhost:8899`.
 
+**Standalone admin (Next.js, optional):**
+
+```bash
+# Terminal 1: API server
+vibe-trading serve --port 8899
+
+# Terminal 2: Admin dev server
+cd admin && npm install
+VIBE_API_URL=http://127.0.0.1:8899 npm run dev
+```
+
+Open `http://localhost:8787`. The admin app lives in the standalone `admin/` directory and proxies existing API calls through `/api/vibe/*`.
+
+**Admin build:**
+
+```bash
+cd admin && npm install
+npm run build
+```
+
+**Admin production start:**
+
+```bash
+cd admin
+VIBE_API_URL=http://127.0.0.1:8899 npm run start
+```
+
 **Production mode (single server):**
 
 ```bash
@@ -1071,6 +1098,10 @@ Vibe-Trading/
 │       ├── pages/                  #   Home, Agent, AlphaZoo, RunDetail, Compare, Correlation, Settings
 │       ├── components/             #   chat, charts, layout
 │       └── stores/                 #   Zustand state management
+│
+├── admin/                          # Standalone admin (Next.js + API proxy)
+│   ├── app/                        #   App Router pages and /api/vibe/* proxy
+│   └── src/                        #   Admin components and API client
 │
 ├── Dockerfile                      # Multi-stage build
 ├── docker-compose.yml              # One-command deploy

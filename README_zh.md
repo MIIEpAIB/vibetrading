@@ -471,6 +471,33 @@ cd frontend && npm install && npm run dev
 
 打开 `http://localhost:8765`。前端默认绑定 `0.0.0.0:8765`，并将 API 调用代理到 `localhost:8899`。
 
+**独立后台（Next.js，可选）：**
+
+```bash
+# Terminal 1: API server
+vibe-trading serve --port 8899
+
+# Terminal 2: Admin dev server
+cd admin && npm install
+VIBE_API_URL=http://127.0.0.1:8899 npm run dev
+```
+
+打开 `http://localhost:8787`。后台位于独立的 `admin/` 目录，通过 `/api/vibe/*` 代理统一调用现有 API。
+
+**后台编译打包：**
+
+```bash
+cd admin && npm install
+npm run build
+```
+
+**后台生产启动：**
+
+```bash
+cd admin
+VIBE_API_URL=http://127.0.0.1:8899 npm run start
+```
+
 **生产模式（单 server）：**
 
 ```bash
@@ -882,6 +909,10 @@ Vibe-Trading/
 │       ├── pages/                  #   Home、Agent、AlphaZoo、RunDetail、Compare、Correlation、Settings
 │       ├── components/             #   chat、charts、layout
 │       └── stores/                 #   Zustand 状态管理
+│
+├── admin/                          # 独立后台（Next.js + API proxy）
+│   ├── app/                        #   App Router 页面与 /api/vibe/* 代理
+│   └── src/                        #   后台组件与 API client
 │
 ├── Dockerfile                      # 多阶段构建
 ├── docker-compose.yml              # 一条命令部署

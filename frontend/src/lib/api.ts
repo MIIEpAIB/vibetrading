@@ -20,13 +20,24 @@ export function isAuthRequiredError(error: unknown): boolean {
   return error instanceof ApiError && (error.status === 401 || error.status === 403);
 }
 
+function isGenericAuthDetail(detail: string): boolean {
+  const normalized = detail.trim().toLowerCase();
+  return normalized === "http 401"
+    || normalized === "http 403"
+    || normalized === "not authenticated"
+    || normalized === "invalid or missing api key"
+    || normalized === "invalid or missing operator api key"
+    || normalized === "missing authorization header"
+    || normalized === "missing bearer token";
+}
+
 async function errorFromResponse(res: Response): Promise<ApiError> {
   let detail = `HTTP ${res.status}`;
   try {
     const body = await res.json();
     detail = body.detail || body.message || detail;
   } catch { /* ignore */ }
-  if (res.status === 401 || res.status === 403) {
+  if ((res.status === 401 || res.status === 403) && isGenericAuthDetail(detail)) {
     detail = AUTH_REQUIRED_MESSAGE;
   }
   return new ApiError(detail, res.status);
@@ -169,6 +180,11 @@ export const api = {
     request<{ status: string; id: string }>(`/strategies/${encodeURIComponent(strategyId)}`, {
       method: "DELETE",
     }),
+  publishStrategy: (strategyId: string) =>
+    request<PublicStrategyMarketItem>(`/strategies/${encodeURIComponent(strategyId)}/publish`, {
+      method: "POST",
+    }),
+  listPublicStrategies: () => request<PublicStrategyMarketResponse>("/strategy-market/public"),
   runStrategyMarketBacktest: (body: StrategyMarketBacktestRequest) =>
     request<StrategyMarketBacktestResponse>("/strategy-market/backtest", {
       method: "POST",
@@ -343,7 +359,93 @@ export const api = {
       body: JSON.stringify(body),
     }),
   resetShadowAccount: () => request<ShadowAccountResponse>("/shadow/reset", { method: "POST" }),
+  searchDirectMessageUsers: (query = "") => {
+    const q = new URLSearchParams();
+    if (query.trim()) q.set("query", query.trim());
+    const qs = q.toString();
+    return request<DirectMessageUserSearchResponse>(`/dm/users${qs ? `?${qs}` : ""}`);
+  },
+  listDirectMessageThreads: () => request<DirectMessageThreadListResponse>("/dm/threads"),
+  createDirectMessageThread: (body: CreateDirectMessageThreadRequest) =>
+    request<DirectMessageThread>("/dm/threads", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  listDirectMessages: (threadId: string, limit = 100) =>
+    request<DirectMessageListResponse>(`/dm/threads/${encodeURIComponent(threadId)}/messages?limit=${encodeURIComponent(String(limit))}`),
+  sendDirectMessage: (threadId: string, content: string) =>
+    request<DirectMessage>(`/dm/threads/${encodeURIComponent(threadId)}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ content }),
+    }),
+  markDirectMessageThreadRead: (threadId: string) =>
+    request<{ status: string; updated: number }>(`/dm/threads/${encodeURIComponent(threadId)}/read`, { method: "POST" }),
+  searchSocialUsers: (query = "") => {
+    const q = new URLSearchParams();
+    if (query.trim()) q.set("query", query.trim());
+    const qs = q.toString();
+    return request<SocialUserSearchResponse>(`/social/users${qs ? `?${qs}` : ""}`);
+  },
+  getSocialUser: (userId: number) => request<SocialUser>(`/social/users/${encodeURIComponent(String(userId))}`),
+  followUser: (userId: number) => request<SocialUser>(`/social/follows/${encodeURIComponent(String(userId))}`, { method: "POST" }),
+  unfollowUser: (userId: number) => request<SocialUser>(`/social/follows/${encodeURIComponent(String(userId))}`, { method: "DELETE" }),
+  listFollowing: (userId?: number) =>
+    request<SocialUserSearchResponse>(`/social/following${userId ? `?user_id=${encodeURIComponent(String(userId))}` : ""}`),
+  listFollowers: (userId?: number) =>
+    request<SocialUserSearchResponse>(`/social/followers${userId ? `?user_id=${encodeURIComponent(String(userId))}` : ""}`),
 };
+
+export interface DirectMessageUser {
+  user_id: number;
+  username: string;
+  display_name: string;
+}
+
+export interface SocialUser extends DirectMessageUser {
+  follower_count: number;
+  following_count: number;
+  is_following: boolean;
+}
+
+export interface SocialUserSearchResponse {
+  users: SocialUser[];
+}
+
+export interface DirectMessage {
+  message_id: string;
+  thread_id: string;
+  sender: DirectMessageUser;
+  content: string;
+  created_at: string;
+  read_by_current_user: boolean;
+}
+
+export interface DirectMessageThread {
+  thread_id: string;
+  peer: DirectMessageUser;
+  created_at: string;
+  updated_at: string;
+  unread_count: number;
+  last_message?: DirectMessage | null;
+}
+
+export interface DirectMessageThreadListResponse {
+  threads: DirectMessageThread[];
+}
+
+export interface DirectMessageListResponse {
+  messages: DirectMessage[];
+}
+
+export interface DirectMessageUserSearchResponse {
+  users: DirectMessageUser[];
+}
+
+export interface CreateDirectMessageThreadRequest {
+  recipient_user_id?: number;
+  recipient_username?: string;
+  initial_message?: string;
+}
 
 // --- Swarm types ---
 
@@ -1180,6 +1282,7 @@ export interface StrategyLibraryItem {
   id: string;
   name: string;
   description: string;
+  strategyDescription?: string;
   language: string;
   category: string;
   status: string;
@@ -1191,6 +1294,28 @@ export interface StrategyLibraryItem {
 
 export interface StrategyLibraryResponse {
   strategies: StrategyLibraryItem[];
+}
+
+export interface PublicStrategyMarketItem {
+  publicId: string;
+  sourceStrategyId: string;
+  name: string;
+  summary: string;
+  description: string;
+  strategyDescription?: string;
+  language: string;
+  category: string;
+  tags: string[];
+  codeSnapshot: string;
+  reviewStatus: "published" | "submitted" | "rejected" | "hidden" | "archived";
+  publishedAt: string;
+  updatedAt: string;
+  backtestSummary: Record<string, unknown>;
+  riskWarnings: string[];
+}
+
+export interface PublicStrategyMarketResponse {
+  strategies: PublicStrategyMarketItem[];
 }
 
 // --- Alpha Zoo types ---

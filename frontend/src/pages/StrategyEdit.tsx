@@ -4,7 +4,7 @@ import { AlertTriangle, ArrowLeft, Check, ExternalLink, FileCode2, Play } from "
 import { toast } from "sonner";
 import { api, ApiError, type RunData, type StrategyLibraryItem, type StrategyMarketBacktestResponse } from "@/lib/api";
 import { StrategyCodeEditor } from "@/components/strategy/StrategyCodeEditor";
-import { EquityChart } from "@/components/charts/EquityChart";
+import { StrategyReturnChart } from "@/components/charts/StrategyReturnChart";
 import { useTranslation } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/utils";
 import {
@@ -13,11 +13,13 @@ import {
   readOwnedStrategies,
   saveOwnedStrategies,
 } from "@/lib/strategyStorage";
+import { getStrategyRouteId, resolveStrategyRouteId } from "@/lib/strategyMarketplace";
 
 type StrategyLanguage = "javascript" | "python" | "cpp" | "rust" | "pine";
 type StrategyStatus = "draft" | "testing" | "live" | "archived";
 type StrategyCategory = "trend" | "mean_reversion" | "grid" | "risk" | "portfolio" | "arbitrage" | "utility";
 type StrategyTab = "edit" | "backtest";
+type EditorPane = "code" | "description";
 type BacktestExchange = "okx_spot" | "okx_futures" | "binance_spot" | "binance_futures";
 type BacktestInterval = "1D" | "1H" | "1m";
 type BacktestMode = "simulation" | "live_grade";
@@ -199,6 +201,7 @@ function createDraftStrategy(): StrategyLibraryItem {
     id: createId(),
     name: "Untitled Strategy",
     description: "Describe the signal, universe, timeframe, and risk rule.",
+    strategyDescription: "## 策略介绍\n\n补充策略逻辑、适用品种、参数说明和风控要点。支持 Markdown 文本与图片，例如：\n\n![策略图](https://example.com/chart.png)",
     language: "python",
     category: "trend",
     status: "draft",
@@ -237,13 +240,26 @@ function formatDate(value: string) {
   }).format(date);
 }
 
+function dateInputValue(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function todayInputValue() {
-  return new Date().toISOString().slice(0, 10);
+  return dateInputValue(new Date());
+}
+
+function oneYearAgoInputValue() {
+  const date = new Date();
+  date.setFullYear(date.getFullYear() - 1);
+  return dateInputValue(date);
 }
 
 function createBacktestFormState(): BacktestFormState {
   return {
-    startDate: "2024-01-01",
+    startDate: oneYearAgoInputValue(),
     endDate: todayInputValue(),
     interval: "1D",
     mode: "simulation",
@@ -297,12 +313,18 @@ function nonEmptyEntries(data?: Record<string, unknown>) {
   return Object.entries(data ?? {}).filter(([, value]) => value !== undefined && value !== null && value !== "");
 }
 
+function findStrategyByRouteId(strategies: StrategyLibraryItem[], routeId: string, resolvedId: string) {
+  return strategies.find((item) => item.id === resolvedId || getStrategyRouteId(item.id) === routeId) ?? null;
+}
+
 export function StrategyEdit() {
   const { language } = useTranslation();
   const navigate = useNavigate();
   const params = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
-  const strategyId = params.strategyId ? decodeURIComponent(params.strategyId) : "";
+  const routeStrategyId = params.strategyId ? decodeURIComponent(params.strategyId) : "";
+  const strategyId = routeStrategyId;
+  const resolvedStrategyId = routeStrategyId ? resolveStrategyRouteId(routeStrategyId) : "";
   const isNewStrategy = !strategyId;
   const activeTab = tabFromSearch(searchParams.get("tab"));
   const [strategy, setStrategy] = useState<StrategyLibraryItem | null>(null);
@@ -313,6 +335,8 @@ export function StrategyEdit() {
   const [backtestResult, setBacktestResult] = useState<StrategyMarketBacktestResponse | null>(null);
   const [backtestRun, setBacktestRun] = useState<RunData | null>(null);
   const [backtestRunLoading, setBacktestRunLoading] = useState(false);
+  const [editorPane, setEditorPane] = useState<EditorPane>("code");
+  const [backtestInitialCapital, setBacktestInitialCapital] = useState(() => Number(createBacktestFormState().initialCapital));
   const [backtestForm, setBacktestForm] = useState<BacktestFormState>(() => createBacktestFormState());
 
   const copy = useMemo(() => language === "zh-CN"
@@ -330,6 +354,8 @@ export function StrategyEdit() {
       statusLabel: "状态",
       tagsLabel: "标签",
       codeLabel: "策略代码",
+      strategyDescriptionTab: "策略描述",
+      strategyDescriptionPlaceholder: "写下会展示在策略分享页的详细介绍。支持 Markdown 文本和图片，例如 ![说明](https://example.com/image.png)。",
       createdAt: "创建时间",
       updatedAt: "最后修改",
       save: "保存",
@@ -342,14 +368,12 @@ export function StrategyEdit() {
       openRun: "打开运行详情",
       runId: "运行 ID",
       runStatus: "运行状态",
-      runDirectory: "运行目录",
       elapsed: "耗时",
       assumptions: "假设",
       warnings: "警告",
       metrics: "指标",
       backtestSummary: "回测摘要",
-      reproducibility: "可复现信息",
-      equityCurve: "权益曲线",
+      equityCurve: "收益曲线",
       tradeDetails: "交易明细",
       noDetail: "详细结果暂不可用，请打开运行详情查看。",
       loadingDetail: "正在加载详细结果...",
@@ -386,6 +410,8 @@ export function StrategyEdit() {
       statusLabel: "Status",
       tagsLabel: "Tags",
       codeLabel: "Strategy Code",
+      strategyDescriptionTab: "Strategy Description",
+      strategyDescriptionPlaceholder: "Write the long-form description shown on the shared strategy page. Markdown text and images are supported.",
       createdAt: "Created",
       updatedAt: "Last Modified",
       save: "Save",
@@ -398,14 +424,12 @@ export function StrategyEdit() {
       openRun: "Open run detail",
       runId: "Run ID",
       runStatus: "Run Status",
-      runDirectory: "Run Directory",
       elapsed: "Elapsed",
       assumptions: "Assumptions",
       warnings: "Warnings",
       metrics: "Metrics",
       backtestSummary: "Backtest Summary",
-      reproducibility: "Reproducibility",
-      equityCurve: "Equity Curve",
+      equityCurve: "Return Curve",
       tradeDetails: "Trade Details",
       noDetail: "Detailed result is not available here. Open the run detail page to inspect it.",
       loadingDetail: "Loading detailed result...",
@@ -459,7 +483,7 @@ export function StrategyEdit() {
         const localStrategies = readOwnedStrategies();
         const hydrated = mergeOwnedStrategies(payload.strategies, localStrategies).map((item) => normalizeOwnedStrategy(item));
         saveOwnedStrategies(hydrated);
-        setStrategy(hydrated.find((item) => item.id === strategyId) ?? null);
+        setStrategy(findStrategyByRouteId(hydrated, routeStrategyId, resolvedStrategyId));
       })
       .catch((error) => {
         if (cancelled) return;
@@ -467,7 +491,7 @@ export function StrategyEdit() {
         if (!isRemotePersistenceUnavailable(error)) {
           toast.error(error instanceof Error ? error.message : "Failed to load strategies");
         }
-        setStrategy(readOwnedStrategies().find((item) => item.id === strategyId) ?? null);
+        setStrategy(findStrategyByRouteId(readOwnedStrategies(), routeStrategyId, resolvedStrategyId));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -516,7 +540,7 @@ export function StrategyEdit() {
       await persistStrategy(strategy);
       toast.success(copy.saved);
       if (isNewStrategy) {
-        navigate(`/m/edit-strategy/${encodeURIComponent(strategy.id)}`, { replace: true });
+        navigate(`/m/edit-strategy/${encodeURIComponent(getStrategyRouteId(strategy.id))}`, { replace: true });
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : language === "zh-CN" ? "保存策略失败" : "Failed to save strategy");
@@ -533,6 +557,8 @@ export function StrategyEdit() {
     setBacktestRunLoading(false);
     try {
       await persistStrategy(strategy);
+      const initialCapital = Number(backtestForm.initialCapital) || 50000;
+      setBacktestInitialCapital(initialCapital);
       const selectedExchange = exchangeOptions.find((option) => option.value === backtestForm.exchange) ?? exchangeOptions[0];
       const fullBacktestParameters = {
         start_date: backtestForm.startDate,
@@ -543,7 +569,7 @@ export function StrategyEdit() {
         source: selectedExchange.source,
         symbol: backtestForm.symbol,
         quote_currency: backtestForm.quoteCurrency,
-        initial_capital: Number(backtestForm.initialCapital) || 50000,
+        initial_capital: initialCapital,
         trading_currency: backtestForm.tradingCurrency,
         ...backtestForm.parameters,
       };
@@ -556,7 +582,7 @@ export function StrategyEdit() {
         exchange: backtestForm.exchange,
         mode: backtestForm.mode,
         quote_currency: backtestForm.quoteCurrency,
-        initial_capital: Number(backtestForm.initialCapital) || 50000,
+        initial_capital: initialCapital,
         trading_currency: backtestForm.tradingCurrency,
         parameters: fullBacktestParameters,
       };
@@ -619,7 +645,6 @@ export function StrategyEdit() {
   const detailMetrics = nonEmptyEntries(backtestRun?.metrics);
   const runCardBacktest = nonEmptyEntries(backtestRun?.run_card?.backtest);
   const runCardMetrics = nonEmptyEntries(backtestRun?.run_card?.metrics);
-  const runCardReproducibility = nonEmptyEntries(backtestRun?.run_card?.reproducibility);
   const tradeRows = backtestRun?.trade_log ?? [];
   const tradeColumns = tradeRows.length > 0 ? [...new Set(tradeRows.slice(0, 25).flatMap(Object.keys))].slice(0, 8) : [];
   const detailWarnings = [
@@ -773,14 +798,38 @@ export function StrategyEdit() {
             </div>
 
             <div className="flex min-h-[46rem] min-w-0 flex-col">
-              <div className="border-b px-4 py-2 text-xs font-semibold uppercase text-muted-foreground">
-                {copy.codeLabel}
+              <div className="flex items-center gap-1 border-b bg-background px-2 py-1">
+                {[
+                  ["code", copy.codeLabel],
+                  ["description", copy.strategyDescriptionTab],
+                ].map(([pane, label]) => (
+                  <button
+                    key={pane}
+                    type="button"
+                    onClick={() => setEditorPane(pane as EditorPane)}
+                    className={cn(
+                      "rounded px-3 py-1.5 text-xs font-semibold transition",
+                      editorPane === pane ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
-              <StrategyCodeEditor
-                value={strategy.code}
-                language={strategy.language}
-                onChange={(code) => updateStrategy({ code })}
-              />
+              {editorPane === "code" ? (
+                <StrategyCodeEditor
+                  value={strategy.code}
+                  language={strategy.language}
+                  onChange={(code) => updateStrategy({ code })}
+                />
+              ) : (
+                <textarea
+                  value={strategy.strategyDescription ?? ""}
+                  onChange={(event) => updateStrategy({ strategyDescription: event.target.value })}
+                  placeholder={copy.strategyDescriptionPlaceholder}
+                  className="min-h-[46rem] flex-1 resize-none bg-background p-4 font-mono text-sm leading-6 outline-none"
+                />
+              )}
             </div>
           </div>
         ) : (
@@ -947,22 +996,22 @@ export function StrategyEdit() {
                       className="mt-1 h-10 w-full rounded-md border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary/25"
                     />
                   </label>
-                  <label className="flex h-full min-h-16 items-center justify-between gap-3 rounded-md border bg-card px-3 py-2">
+                  <label className="flex h-10 items-center justify-between gap-3 rounded-md border bg-card px-3 text-sm">
                     <span className="text-xs font-semibold uppercase text-muted-foreground">启用趋势</span>
                     <input
                       type="checkbox"
                       checked={backtestForm.parameters.enableTrend}
                       onChange={(event) => updateBacktestParameter({ enableTrend: event.target.checked })}
-                      className="h-5 w-5 rounded border"
+                      className="h-4 w-4 rounded border"
                     />
                   </label>
-                  <label className="flex h-full min-h-16 items-center justify-between gap-3 rounded-md border bg-card px-3 py-2">
+                  <label className="flex h-10 items-center justify-between gap-3 rounded-md border bg-card px-3 text-sm">
                     <span className="text-xs font-semibold uppercase text-muted-foreground">启用回调</span>
                     <input
                       type="checkbox"
                       checked={backtestForm.parameters.enableCallback}
                       onChange={(event) => updateBacktestParameter({ enableCallback: event.target.checked })}
-                      className="h-5 w-5 rounded border"
+                      className="h-4 w-4 rounded border"
                     />
                   </label>
                   {[
@@ -996,22 +1045,22 @@ export function StrategyEdit() {
                       />
                     </label>
                   ))}
-                  <label className="flex h-full min-h-16 items-center justify-between gap-3 rounded-md border bg-card px-3 py-2">
+                  <label className="flex h-10 items-center justify-between gap-3 rounded-md border bg-card px-3 text-sm">
                     <span className="text-xs font-semibold uppercase text-muted-foreground">是否自动解套</span>
                     <input
                       type="checkbox"
                       checked={backtestForm.parameters.autoRescue}
                       onChange={(event) => updateBacktestParameter({ autoRescue: event.target.checked })}
-                      className="h-5 w-5 rounded border"
+                      className="h-4 w-4 rounded border"
                     />
                   </label>
-                  <label className="flex h-full min-h-16 items-center justify-between gap-3 rounded-md border bg-card px-3 py-2">
+                  <label className="flex h-10 items-center justify-between gap-3 rounded-md border bg-card px-3 text-sm">
                     <span className="text-xs font-semibold uppercase text-muted-foreground">是否止损</span>
                     <input
                       type="checkbox"
                       checked={backtestForm.parameters.enableStopLoss}
                       onChange={(event) => updateBacktestParameter({ enableStopLoss: event.target.checked })}
-                      className="h-5 w-5 rounded border"
+                      className="h-4 w-4 rounded border"
                     />
                   </label>
                 </div>
@@ -1088,7 +1137,6 @@ export function StrategyEdit() {
                       <div className="grid gap-3 md:grid-cols-3">
                         {[
                           [copy.runStatus, backtestRun.status],
-                          [copy.runDirectory, backtestRun.run_directory || backtestResult.run_directory],
                           [copy.engine, backtestResult.engine],
                         ].map(([label, value]) => (
                           <div key={label} className="rounded-md border bg-card p-3">
@@ -1122,11 +1170,10 @@ export function StrategyEdit() {
                         </div>
                       )}
 
-                      {(detailMetrics.length > 0 || runCardMetrics.length > 0 || runCardBacktest.length > 0 || runCardReproducibility.length > 0) && (
+                      {(detailMetrics.length > 0 || runCardMetrics.length > 0 || runCardBacktest.length > 0) && (
                         <div className="grid gap-4 xl:grid-cols-2">
                           <DetailKeyValue title={copy.metrics} entries={detailMetrics.length ? detailMetrics : runCardMetrics} />
                           <DetailKeyValue title={copy.backtestSummary} entries={runCardBacktest} />
-                          <DetailKeyValue title={copy.reproducibility} entries={runCardReproducibility} />
                         </div>
                       )}
 
@@ -1134,7 +1181,11 @@ export function StrategyEdit() {
                         <section className="rounded-md border bg-card p-4">
                           <h5 className="text-sm font-semibold">{copy.equityCurve}</h5>
                           <div className="mt-3">
-                            <EquityChart data={backtestRun.equity_curve} height={260} />
+                            <StrategyReturnChart
+                              data={backtestRun.equity_curve}
+                              initialCapital={backtestInitialCapital}
+                              height={260}
+                            />
                           </div>
                         </section>
                       )}

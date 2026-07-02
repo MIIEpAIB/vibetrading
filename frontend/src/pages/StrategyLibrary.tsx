@@ -26,9 +26,10 @@ import {
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { api, ApiError, type StrategyLibraryItem } from "@/lib/api";
+import { adminUrl } from "@/lib/adminUrl";
 import { StrategyCodeEditor } from "@/components/strategy/StrategyCodeEditor";
 import { PAPER_EXECUTION_OPTIONS, executionOptionValue, paperExecutionPayload } from "@/lib/paperExecution";
-import { buildClassicTurtlePythonStrategyCode } from "@/lib/strategyMarketplace";
+import { buildClassicTurtlePythonStrategyCode, getStrategyRouteId } from "@/lib/strategyMarketplace";
 import { useTranslation } from "@/i18n/I18nProvider";
 import { mergeOwnedStrategies, readOwnedStrategies, saveOwnedStrategies } from "@/lib/strategyStorage";
 
@@ -40,6 +41,7 @@ interface StrategyItem {
   id: string;
   name: string;
   description: string;
+  strategyDescription?: string;
   language: StrategyLanguage;
   category: StrategyCategory;
   status: StrategyStatus;
@@ -160,6 +162,11 @@ function normalizeStrategy(value: unknown, fallback: StrategyItem): StrategyItem
     id,
     name: typeof value.name === "string" && value.name.trim() ? value.name : fallback.name,
     description: typeof value.description === "string" ? value.description : fallback.description,
+    strategyDescription: typeof value.strategyDescription === "string"
+      ? value.strategyDescription
+      : typeof value.strategy_description === "string"
+        ? value.strategy_description
+        : fallback.strategyDescription,
     language: shouldMigrateClassicTurtle ? "python" : normalizeStrategyLanguage(value.language, fallback.language),
     category: isStrategyCategory(value.category) ? value.category : fallback.category,
     status: isStrategyStatus(value.status) ? value.status : fallback.status,
@@ -176,6 +183,7 @@ function newStrategy(overrides: Partial<StrategyItem> = {}): StrategyItem {
     id: createId(),
     name: "Untitled Strategy",
     description: "Describe the signal, universe, timeframe, and risk rule.",
+    strategyDescription: "",
     language: "python",
     category: "trend",
     status: "draft",
@@ -197,6 +205,7 @@ function toApiStrategy(strategy: StrategyItem): StrategyLibraryItem {
     id: strategy.id,
     name: strategy.name,
     description: strategy.description,
+    strategyDescription: strategy.strategyDescription ?? "",
     language: strategy.language,
     category: strategy.category,
     status: strategy.status,
@@ -311,6 +320,7 @@ export function StrategyLibrary() {
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [runningId, setRunningId] = useState<string | null>(null);
   const [paperRunningId, setPaperRunningId] = useState<string | null>(null);
+  const [publishingId, setPublishingId] = useState<string | null>(null);
   const [paperExecution, setPaperExecution] = useState("shadow");
   const [moreMenu, setMoreMenu] = useState<MoreMenuState | null>(null);
   const [editorId, setEditorId] = useState<string | null>(null);
@@ -428,6 +438,8 @@ export function StrategyLibrary() {
       delete: "删除",
       more: "更多",
       share: "分享",
+      publishing: "发布中",
+      published: "已发布到公共策略库",
       rent: "出租",
       run: "运行",
       paperRun: "模拟盘运行",
@@ -487,6 +499,8 @@ export function StrategyLibrary() {
       delete: "Delete",
       more: "More",
       share: "Share",
+      publishing: "Publishing",
+      published: "Published to public strategy market",
       rent: "Rent",
       run: "Run",
       paperRun: "Run Paper",
@@ -618,7 +632,7 @@ export function StrategyLibrary() {
 
   const handleEdit = (strategy: StrategyItem) => {
     setActiveId(strategy.id);
-    navigate(`/m/edit-strategy/${encodeURIComponent(strategy.id)}`);
+    navigate(`/m/edit-strategy/${encodeURIComponent(getStrategyRouteId(strategy.id))}`);
   };
 
   const handleSaveEditor = async () => {
@@ -703,6 +717,23 @@ export function StrategyLibrary() {
     }
   };
 
+  const handleShare = async (strategy: StrategyItem) => {
+    setMoreMenu(null);
+    setPublishingId(strategy.id);
+    try {
+      if (remoteReadyRef.current) {
+        await api.upsertStrategy(toApiStrategy(strategy));
+      }
+      await api.publishStrategy(strategy.id);
+      toast.success(copy.published);
+      navigate("/market");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : language === "zh-CN" ? "发布策略失败" : "Failed to publish strategy");
+    } finally {
+      setPublishingId(null);
+    }
+  };
+
   const handlePendingAction = (label: string) => {
     setMoreMenu(null);
     toast.message(language === "zh-CN" ? `${label}功能待接入` : `${label} will be connected later`);
@@ -770,7 +801,7 @@ export function StrategyLibrary() {
               </button>
               <button
                 type="button"
-                onClick={() => navigate("/operator#settings")}
+                onClick={() => window.location.assign(adminUrl("settings"))}
                 className="inline-flex items-center justify-center gap-2 rounded-md border bg-background px-3 py-2 text-sm font-semibold transition hover:bg-muted"
               >
                 <ShieldCheck className="h-4 w-4 text-primary" />
@@ -1099,11 +1130,12 @@ export function StrategyLibrary() {
         >
           <button
             type="button"
-            onClick={() => handlePendingAction(copy.share)}
+            onClick={() => handleShare(moreMenu.strategy)}
+            disabled={publishingId === moreMenu.strategy.id}
             className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-xs font-semibold text-foreground hover:bg-muted"
           >
             <Share2 className="h-3.5 w-3.5" />
-            {copy.share}
+            {publishingId === moreMenu.strategy.id ? copy.publishing : copy.share}
           </button>
           <button
             type="button"

@@ -9,11 +9,12 @@ import {
   ShoppingBag,
   Sparkles,
   Star,
+  Users,
   TrendingUp,
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
-import { api, type StrategyLibraryItem, type StrategyMarketAdminItem } from "@/lib/api";
+import { api, type PublicStrategyMarketItem, type StrategyLibraryItem, type StrategyMarketAdminItem } from "@/lib/api";
 import { PAPER_EXECUTION_OPTIONS, executionOptionValue, paperExecutionPayload } from "@/lib/paperExecution";
 import { useTranslation } from "@/i18n/I18nProvider";
 import {
@@ -21,6 +22,7 @@ import {
   createMarketOwnedStrategy,
   defaultPaperLimitsForMarketStrategy,
   getMarketOwnershipTag,
+  getStrategyRouteId,
   type MarketBacktestSummary,
   paidStrategyCatalog,
   type MarketOwnership,
@@ -34,7 +36,7 @@ type MarketSection = {
   descriptionZh: string;
   descriptionEn: string;
   icon: LucideIcon;
-  kind: "built-in" | "paid";
+  kind: "built-in" | "paid" | "community";
   items: StrategyCatalogItem[];
 };
 
@@ -87,6 +89,10 @@ const MARKET_COPY = {
       title: "Paid strategies",
       description: "Subscription-style strategies that can be purchased into your library.",
     },
+    community: {
+      title: "Community strategies",
+      description: "User-published strategy snapshots you can save into your own library.",
+    },
   },
   "zh-CN": {
     kicker: "策略商城",
@@ -113,8 +119,38 @@ const MARKET_COPY = {
       title: "付费策略",
       description: "订阅型策略，可购买后进入你的策略库继续使用。",
     },
+    community: {
+      title: "社区策略",
+      description: "用户发布的策略快照，可保存到自己的策略库继续编辑和回测。",
+    },
   },
 } as const;
+
+const strategyCategories = ["trend", "mean_reversion", "grid", "risk", "portfolio", "arbitrage", "utility"] as const;
+
+function normalizeCategory(value: string): StrategyCatalogItem["category"] {
+  return strategyCategories.includes(value as StrategyCatalogItem["category"])
+    ? value as StrategyCatalogItem["category"]
+    : "utility";
+}
+
+function publicStrategyToCatalogItem(item: PublicStrategyMarketItem): StrategyCatalogItem {
+  return {
+    id: item.publicId,
+    publicId: item.publicId,
+    name: item.name,
+    summary: item.summary || item.description || item.name,
+    description: item.description,
+    strategyDescription: item.strategyDescription,
+    usage: [],
+    riskNotes: item.riskWarnings,
+    language: item.language,
+    codeSnapshot: item.codeSnapshot,
+    tags: Array.from(new Set([...(item.tags ?? []), "community"])).slice(0, 8),
+    category: normalizeCategory(item.category),
+    kind: "community",
+  };
+}
 
 function formatOwnershipLabel(language: "en-US" | "zh-CN", ownership: MarketOwnership | null) {
   if (!ownership) return null;
@@ -145,7 +181,7 @@ function MarketCard({
   secondaryBusy?: boolean;
   onAction: () => void;
   onSecondaryAction: () => void;
-  kind: "built-in" | "paid";
+  kind: "built-in" | "paid" | "community";
   language: "en-US" | "zh-CN";
 }) {
   const ownTag = ownedLabel ? <span className="rounded-md border bg-background px-2 py-1 text-[11px] font-medium text-primary">{ownedLabel}</span> : null;
@@ -159,7 +195,11 @@ function MarketCard({
     <article className="flex min-h-[13rem] flex-col rounded-lg border bg-card p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="text-base font-semibold leading-6 text-foreground">{item.name}</h3>
+          <h3 className="text-base font-semibold leading-6 text-foreground">
+            <Link to={`/strategy/${encodeURIComponent(getStrategyRouteId(item.id))}`} className="transition hover:text-primary">
+              {item.name}
+            </Link>
+          </h3>
           <p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground">{item.summary}</p>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-2">
@@ -209,7 +249,7 @@ function MarketCard({
           disabled={secondaryBusy}
           className="inline-flex min-w-0 items-center justify-center gap-2 rounded-md border bg-background px-3 py-2 text-sm font-semibold transition hover:bg-muted disabled:opacity-60"
         >
-          {kind === "built-in" ? <Gauge className="h-4 w-4 shrink-0 text-primary" /> : <Sparkles className="h-4 w-4 shrink-0 text-primary" />}
+          {kind === "built-in" ? <Gauge className="h-4 w-4 shrink-0 text-primary" /> : kind === "community" ? <Users className="h-4 w-4 shrink-0 text-primary" /> : <Sparkles className="h-4 w-4 shrink-0 text-primary" />}
           <span className="truncate">{secondaryBusy ? (language === "zh-CN" ? "回测中" : "Running") : secondaryLabel}</span>
         </button>
         <button
@@ -217,7 +257,7 @@ function MarketCard({
           onClick={onAction}
           className="inline-flex min-w-0 items-center justify-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90"
         >
-          {kind === "built-in" ? <Star className="h-4 w-4 shrink-0" /> : <ShoppingBag className="h-4 w-4 shrink-0" />}
+          {kind === "built-in" ? <Star className="h-4 w-4 shrink-0" /> : kind === "community" ? <Library className="h-4 w-4 shrink-0" /> : <ShoppingBag className="h-4 w-4 shrink-0" />}
           <span className="truncate">{actionLabel}</span>
         </button>
       </div>
@@ -261,7 +301,7 @@ function MarketSectionBlock({
         </div>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {section.items.map((item) => {
-            const ownedRecord = ownedStrategies.find((strategy) => strategy.id === item.id);
+            const ownedRecord = ownedStrategies.find((strategy) => strategy.id === item.id || strategy.id === `owned_${item.id}`);
             const ownedTag = ownedRecord ? getMarketOwnershipTag(ownedRecord.tags ?? []) : null;
             const ownedLabel = formatOwnershipLabel(language, ownedTag) ?? (language === "zh-CN" ? "已拥有" : "Owned");
             const isOwned = Boolean(ownedRecord);
@@ -269,13 +309,15 @@ function MarketSectionBlock({
               <MarketCard
                 key={item.id}
                 item={item}
-                kind={section.kind === "built-in" ? "built-in" : "paid"}
+                  kind={section.kind}
                 ownedLabel={ownedLabel}
                 actionLabel={
                   isOwned
                     ? (language === "zh-CN" ? "去策略库" : "Open library")
                     : section.kind === "built-in"
                       ? (language === "zh-CN" ? MARKET_COPY["zh-CN"].favorite : MARKET_COPY["en-US"].favorite)
+                      : section.kind === "community"
+                        ? (language === "zh-CN" ? "保存" : "Save")
                       : (language === "zh-CN" ? MARKET_COPY["zh-CN"].purchase : MARKET_COPY["en-US"].purchase)
                 }
                 secondaryLabel={
@@ -297,6 +339,10 @@ function MarketSectionBlock({
                     return;
                   }
                   if (section.kind === "built-in") {
+                    onFavorite(item);
+                    return;
+                  }
+                  if (section.kind === "community") {
                     onFavorite(item);
                     return;
                   }
@@ -326,6 +372,7 @@ export function StrategyMarket() {
   const [backtestingId, setBacktestingId] = useState<string | null>(null);
   const [deployingId, setDeployingId] = useState<string | null>(null);
   const [marketConfig, setMarketConfig] = useState<StrategyMarketAdminItem[]>([]);
+  const [communityStrategies, setCommunityStrategies] = useState<StrategyCatalogItem[]>([]);
   const [paperExecution, setPaperExecution] = useState("shadow");
 
   useEffect(() => {
@@ -356,6 +403,18 @@ export function StrategyMarket() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    api.listPublicStrategies()
+      .then((payload) => {
+        if (!cancelled) setCommunityStrategies((payload.strategies ?? []).map(publicStrategyToCatalogItem));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const sections = useMemo<MarketSection[]>(
     () => [
       {
@@ -376,8 +435,17 @@ export function StrategyMarket() {
         kind: "paid",
         items: applyMarketAdminConfig(paidStrategyCatalog, marketConfig),
       },
+      {
+        titleZh: copy.community.title,
+        titleEn: copy.community.title,
+        descriptionZh: copy.community.description,
+        descriptionEn: copy.community.description,
+        icon: Users,
+        kind: "community",
+        items: communityStrategies,
+      },
     ],
-    [copy, marketConfig],
+    [copy, communityStrategies, marketConfig],
   );
 
   const saveStrategy = (item: StrategyCatalogItem, ownership: MarketOwnership) => {
@@ -393,7 +461,7 @@ export function StrategyMarket() {
   const handleFavorite = (item: StrategyCatalogItem) => saveStrategy(item, "favorite");
   const handlePurchase = (item: StrategyCatalogItem) => saveStrategy(item, "purchased");
   const handlePreview = (item: StrategyCatalogItem) => {
-    toast.message(language === "zh-CN" ? `预览：${item.name}` : `Preview: ${item.name}`);
+    navigate(`/strategy/${encodeURIComponent(getStrategyRouteId(item.id))}`);
   };
   const handleBacktest = async (item: StrategyCatalogItem) => {
     setBacktestingId(item.id);
@@ -506,8 +574,8 @@ export function StrategyMarket() {
                 <div className="mt-1 text-xs text-muted-foreground">{language === "zh-CN" ? "付费" : "Paid"}</div>
               </div>
               <div className="rounded-md border bg-card p-3">
-                <div className="font-mono text-lg font-semibold">{ownedStrategies.length}</div>
-                <div className="mt-1 text-xs text-muted-foreground">{copy.owned}</div>
+                <div className="font-mono text-lg font-semibold">{communityStrategies.length}</div>
+                <div className="mt-1 text-xs text-muted-foreground">{language === "zh-CN" ? "社区" : "Community"}</div>
               </div>
             </div>
           </div>
