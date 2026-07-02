@@ -5,6 +5,7 @@ import {
   api,
   getApiKey,
   setApiKey,
+  type AdminChatMessage,
   type AdminDashboardResponse,
   type AdminUserUsageRow,
   type JsonObject,
@@ -21,6 +22,7 @@ const nav = [
   ["overview", "运营看板"],
   ["settings", "系统设置"],
   ["users", "用户管理"],
+  ["chat", "后台查看聊天"],
   ["market", "策略商城"],
   ["usage", "调用情况"],
 ] as const;
@@ -34,12 +36,92 @@ function jsonPretty(value: unknown) {
   return JSON.stringify(value ?? {}, null, 2);
 }
 
+function splitTerms(value: string) {
+  return value
+    .split(/[\n,，;；]+/)
+    .map((term) => term.trim())
+    .filter(Boolean);
+}
+
+function maskTerms(content: string, terms: string[]) {
+  return terms.reduce((text, term) => {
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return text.replace(new RegExp(escaped, "gi"), "***");
+  }, content);
+}
+
 function Metric({ label, value, detail }: { label: string; value: number | string; detail?: string }) {
   return (
     <div className="metric">
       <div className="metric-label">{label}</div>
       <div className="metric-value">{value}</div>
       {detail ? <div className="metric-detail">{detail}</div> : null}
+    </div>
+  );
+}
+
+function ChatModerationTable({
+  rows,
+  masked,
+  terms,
+  onDeleteUser,
+}: {
+  rows: AdminChatMessage[];
+  masked: boolean;
+  terms: string[];
+  onDeleteUser: (userId: number) => void;
+}) {
+  return (
+    <div className="table-wrap chat-table-wrap">
+      <table className="chat-table">
+        <thead>
+          <tr>
+            <th>时间</th>
+            <th>来源</th>
+            <th>用户</th>
+            <th>会话</th>
+            <th>角色</th>
+            <th>内容</th>
+            <th>敏感词</th>
+            <th>处理</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.message_id}>
+              <td>{row.created_at || "-"}</td>
+              <td>{row.source === "direct_message" ? "用户私信" : "Agent 会话"}</td>
+              <td>
+                <strong>{row.display_name || row.username}</strong>
+                <span>{row.username}{row.user_id != null ? ` · ID ${row.user_id}` : ""}</span>
+              </td>
+              <td>
+                <strong>{row.session_title || "未命名会话"}</strong>
+                <span>{row.session_id}</span>
+              </td>
+              <td>{row.role === "sender" ? "发送者" : row.role === "peer" ? "对方" : row.role}</td>
+              <td className="message-cell">{masked ? maskTerms(row.content, terms) : row.content}</td>
+              <td>
+                {row.matched_terms.length ? (
+                  <div className="term-list">
+                    {row.matched_terms.map((term) => <span key={term}>{term}</span>)}
+                  </div>
+                ) : "-"}
+              </td>
+              <td>
+                {row.user_id != null ? (
+                  <button className="danger" onClick={() => onDeleteUser(row.user_id!)}>删除账号</button>
+                ) : "-"}
+              </td>
+            </tr>
+          ))}
+          {!rows.length ? (
+            <tr>
+              <td colSpan={8} className="empty-cell">暂无聊天记录</td>
+            </tr>
+          ) : null}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -123,6 +205,12 @@ export function AdminConsole() {
   const [apiKeyDraft, setApiKeyDraft] = useState("");
   const [authenticated, setAuthenticated] = useState(false);
   const [dashboard, setDashboard] = useState<AdminDashboardResponse | null>(null);
+  const [chatMessages, setChatMessages] = useState<AdminChatMessage[]>([]);
+  const [chatStats, setChatStats] = useState({ total: 0, scanned: 0 });
+  const [chatQuery, setChatQuery] = useState("");
+  const [chatUserId, setChatUserId] = useState("");
+  const [sensitiveWords, setSensitiveWords] = useState("");
+  const [maskSensitive, setMaskSensitive] = useState(true);
   const [marketItems, setMarketItems] = useState<StrategyMarketAdminItem[]>([]);
   const [llmSettings, setLlmSettings] = useState<JsonObject | null>(null);
   const [dataSourceSettings, setDataSourceSettings] = useState<JsonObject | null>(null);
@@ -135,13 +223,20 @@ export function AdminConsole() {
     setLoading(true);
     setMessage("");
     try {
-      const [dashboardResponse, marketResponse, llmResponse, dataSourceResponse] = await Promise.all([
+      const [dashboardResponse, chatResponse, marketResponse, llmResponse, dataSourceResponse] = await Promise.all([
         api.getAdminDashboard(),
+        api.getAdminChatMessages({
+          q: chatQuery.trim(),
+          userId: chatUserId.trim() ? Number(chatUserId) : null,
+          sensitiveWords,
+        }),
         api.getAdminStrategyMarket(),
         api.getLLMSettings(),
         api.getDataSourceSettings(),
       ]);
       setDashboard(dashboardResponse);
+      setChatMessages(chatResponse.messages);
+      setChatStats({ total: chatResponse.total, scanned: chatResponse.scanned });
       setMarketItems(marketResponse.items);
       setLlmSettings(llmResponse);
       setDataSourceSettings(dataSourceResponse);
@@ -173,6 +268,7 @@ export function AdminConsole() {
   const completionRate = summary ? formatPercent(summary.completed_attempts, summary.total_attempts) : "0%";
   const enabledItems = useMemo(() => marketItems.filter((item) => item.enabled).length, [marketItems]);
   const featuredItems = useMemo(() => marketItems.filter((item) => item.featured).length, [marketItems]);
+  const moderationTerms = useMemo(() => splitTerms(sensitiveWords), [sensitiveWords]);
 
   const login = async () => {
     setApiKey(apiKeyDraft);
@@ -184,6 +280,10 @@ export function AdminConsole() {
     setAuthenticated(false);
     setDashboard(null);
     setMarketItems([]);
+  };
+
+  const scrollToSection = (id: string) => {
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   const updateUser = async (userId: number) => {
@@ -202,6 +302,25 @@ export function AdminConsole() {
     await api.deleteAdminUser(userId);
     setMessage("用户已删除");
     await load();
+  };
+
+  const searchChat = async () => {
+    setLoading(true);
+    setMessage("");
+    try {
+      const chatResponse = await api.getAdminChatMessages({
+        q: chatQuery.trim(),
+        userId: chatUserId.trim() ? Number(chatUserId) : null,
+        sensitiveWords,
+      });
+      setChatMessages(chatResponse.messages);
+      setChatStats({ total: chatResponse.total, scanned: chatResponse.scanned });
+      setMessage("聊天记录已刷新");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "聊天记录加载失败");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const saveMarket = async () => {
@@ -255,7 +374,11 @@ export function AdminConsole() {
           </div>
         </div>
         <nav>
-          {nav.map(([id, label]) => <a key={id} href={`#${id}`}>{label}</a>)}
+          {nav.map(([id, label]) => (
+            <button key={id} type="button" className="nav-button" onClick={() => scrollToSection(id)}>
+              {label}
+            </button>
+          ))}
         </nav>
         <button className="ghost" onClick={logout}>退出</button>
       </aside>
@@ -268,6 +391,7 @@ export function AdminConsole() {
           </div>
           <div className="toolbar">
             {message ? <span>{message}</span> : null}
+            <button className="primary" onClick={() => scrollToSection("chat")}>后台查看聊天</button>
             <button onClick={load} disabled={loading}>{loading ? "刷新中" : "刷新"}</button>
           </div>
         </header>
@@ -366,6 +490,63 @@ export function AdminConsole() {
           </div>
         </section>
 
+        <section id="chat" className="section">
+          <div className="section-title row">
+            <div>
+              <h2>聊天审计</h2>
+              <p>展示所有用户会话消息，支持按用户、关键词和敏感词命中筛选。</p>
+            </div>
+            <button onClick={searchChat} disabled={loading}>{loading ? "查询中" : "查询聊天"}</button>
+          </div>
+          <div className="moderation-controls">
+            <label>
+              内容搜索
+              <input
+                value={chatQuery}
+                onChange={(event) => setChatQuery(event.target.value)}
+                placeholder="输入消息关键词"
+              />
+            </label>
+            <label>
+              用户 ID
+              <input
+                inputMode="numeric"
+                value={chatUserId}
+                onChange={(event) => setChatUserId(event.target.value.replace(/\D/g, ""))}
+                placeholder="留空查看全部用户"
+              />
+            </label>
+            <label>
+              敏感词
+              <textarea
+                className="terms-editor"
+                value={sensitiveWords}
+                onChange={(event) => setSensitiveWords(event.target.value)}
+                placeholder="多个敏感词用逗号或换行分隔"
+              />
+            </label>
+            <label className="check-row moderation-toggle">
+              <input
+                type="checkbox"
+                checked={maskSensitive}
+                onChange={(event) => setMaskSensitive(event.target.checked)}
+              />
+              遮蔽命中词
+            </label>
+          </div>
+          <div className="audit-summary">
+            <span>显示 {chatStats.total} 条</span>
+            <span>扫描 {chatStats.scanned} 条</span>
+            <span>敏感词 {moderationTerms.length} 个</span>
+          </div>
+          <ChatModerationTable
+            rows={chatMessages}
+            masked={maskSensitive}
+            terms={moderationTerms}
+            onDeleteUser={(userId) => void deleteUser(userId)}
+          />
+        </section>
+
         <section id="market" className="section">
           <div className="section-title row">
             <div>
@@ -390,7 +571,10 @@ export function AdminConsole() {
               <tbody>
                 {marketItems.map((item, index) => (
                   <tr key={item.id}>
-                    <td><strong>{item.id}</strong></td>
+                    <td>
+                      <strong>{item.name || item.id}</strong>
+                      <span>{item.kind === "community" ? `${item.id} · 用户 ${item.owner_user_id ?? "-"}` : item.id}</span>
+                    </td>
                     <td>{item.kind}</td>
                     <td>
                       <input
@@ -412,7 +596,10 @@ export function AdminConsole() {
                         onChange={(event) => setMarketItems((prev) => prev.map((row, i) => i === index ? { ...row, status: event.target.value } : row))}
                       >
                         <option value="draft">draft</option>
+                        {item.kind === "community" ? <option value="submitted">submitted</option> : null}
                         <option value="published">published</option>
+                        {item.kind === "community" ? <option value="rejected">rejected</option> : null}
+                        <option value="hidden">hidden</option>
                         <option value="archived">archived</option>
                       </select>
                     </td>

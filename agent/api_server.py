@@ -581,17 +581,46 @@ class AdminDashboardResponse(BaseModel):
     usage: List[AdminUserUsageRow]
 
 
+class AdminChatMessageResponse(BaseModel):
+    """Operator-visible chat message row for moderation."""
+
+    source: str = "agent_session"
+    message_id: str
+    session_id: str
+    session_title: str = ""
+    role: str
+    content: str
+    created_at: str
+    linked_attempt_id: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+    user_id: Optional[int] = None
+    username: str = ""
+    display_name: str = ""
+    matched_terms: List[str] = Field(default_factory=list)
+
+
+class AdminChatMessagesResponse(BaseModel):
+    """Operator chat moderation list."""
+
+    messages: List[AdminChatMessageResponse]
+    total: int
+    scanned: int
+
+
 class StrategyMarketAdminItem(BaseModel):
     """Operator-managed strategy market item metadata."""
 
     id: str = Field(..., min_length=1, max_length=128)
-    kind: str = Field("built-in", pattern="^(built-in|paid)$")
+    kind: str = Field("built-in", pattern="^(built-in|paid|community)$")
     enabled: bool = True
     featured: bool = False
     price: str = Field("", max_length=64)
-    status: str = Field("published", pattern="^(draft|published|hidden|archived)$")
+    status: str = Field("published", pattern="^(draft|submitted|published|rejected|hidden|archived)$")
     note: str = Field("", max_length=500)
     updated_at: str = ""
+    name: str = ""
+    owner_user_id: Optional[int] = None
+    source_strategy_id: str = ""
 
 
 class StrategyMarketAdminResponse(BaseModel):
@@ -753,6 +782,7 @@ class StrategyLibraryItem(BaseModel):
     code: str = Field(..., min_length=1)
     createdAt: str
     updatedAt: str
+    shareStatus: str = "none"
 
 
 class StrategyLibraryResponse(BaseModel):
@@ -1351,7 +1381,7 @@ def _env_flag_enabled(name: str) -> bool:
     if raw:
         return raw.lower() in {"1", "true", "yes", "on"}
     try:
-        raw = _read_dotenv_values(ENV_PATH).get(name, "").strip()
+        raw = _read_env_values(ENV_PATH).get(name, "").strip()
     except Exception:
         raw = ""
     return raw.lower() in {"1", "true", "yes", "on"}
@@ -1940,17 +1970,50 @@ def _load_strategy_market_admin_items() -> list[StrategyMarketAdminItem]:
     return parsed
 
 
+def _public_strategy_admin_item(record: Any) -> StrategyMarketAdminItem:
+    return StrategyMarketAdminItem(
+        id=record.publicId,
+        kind="community",
+        enabled=record.reviewStatus == "published",
+        featured=False,
+        price="",
+        status=record.reviewStatus,
+        note=str(record.summary or "")[:500],
+        updated_at=record.updatedAt,
+        name=record.name,
+        owner_user_id=record.ownerUserId,
+        source_strategy_id=record.sourceStrategyId,
+    )
+
+
+def _load_strategy_market_admin_response_items() -> list[StrategyMarketAdminItem]:
+    items = _load_strategy_market_admin_items()
+    try:
+        public_items = [_public_strategy_admin_item(record) for record in _get_strategy_store().list_all_public_strategies()]
+    except RuntimeError:
+        public_items = []
+    return [*items, *public_items]
+
+
 def _save_strategy_market_admin_items(items: list[StrategyMarketAdminItem]) -> list[StrategyMarketAdminItem]:
     now = datetime.utcnow().isoformat()
     deduped: dict[str, StrategyMarketAdminItem] = {}
+    public_statuses: dict[str, str] = {}
     for item in items:
+        if item.kind == "community":
+            public_statuses[item.id] = "published" if item.enabled and item.status == "published" else item.status
+            continue
         data = item.model_dump()
         data["updated_at"] = item.updated_at or now
         deduped[item.id] = StrategyMarketAdminItem(**data)
     ordered = sorted(deduped.values(), key=lambda item: (item.kind, item.id))
     payload = {"items": [item.model_dump() for item in ordered]}
     STRATEGY_MARKET_ADMIN_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    return ordered
+    if public_statuses:
+        store = _get_strategy_store()
+        for public_id, review_status in public_statuses.items():
+            store.update_public_strategy_review_status(public_id, review_status)
+    return _load_strategy_market_admin_response_items()
 
 
 def _empty_admin_usage() -> dict[int | None, AdminUserUsageRow]:
@@ -2078,6 +2141,273 @@ def _admin_usage_by_user() -> dict[int | None, AdminUserUsageRow]:
     return _filesystem_admin_usage_by_user()
 
 
+def _split_moderation_terms(value: str | None) -> list[str]:
+    if not value:
+        return []
+    terms: list[str] = []
+    for term in re.split(r"[\n,，;；]+", value):
+        normalized = term.strip()
+        if normalized and normalized not in terms:
+            terms.append(normalized)
+    return terms
+
+
+def _matched_moderation_terms(content: str, terms: list[str]) -> list[str]:
+    lowered = content.lower()
+    return [term for term in terms if term.lower() in lowered]
+
+
+def _admin_chat_message_from_parts(
+    *,
+    message: Any,
+    session: Any,
+    users_by_id: dict[int, Any],
+    matched_terms: list[str],
+    source: str = "agent_session",
+) -> AdminChatMessageResponse:
+    user_id = session.owner_user_id
+    user = users_by_id.get(user_id) if user_id is not None else None
+    return AdminChatMessageResponse(
+        source=source,
+        message_id=message.message_id,
+        session_id=message.session_id,
+        session_title=session.title,
+        role=message.role,
+        content=message.content,
+        created_at=message.created_at,
+        linked_attempt_id=message.linked_attempt_id,
+        metadata=message.metadata if message.metadata else None,
+        user_id=user_id,
+        username=str(getattr(user, "username", "")) if user else ("operator" if user_id is None else f"user:{user_id}"),
+        display_name=str(getattr(user, "display_name", "")) if user else ("Operator / local" if user_id is None else "Deleted user"),
+        matched_terms=matched_terms,
+    )
+
+
+def _mysql_admin_chat_messages(
+    *,
+    limit: int,
+    query: str,
+    user_id: int | None,
+    terms: list[str],
+) -> tuple[list[AdminChatMessageResponse], int]:
+    from src.persistence import mysql_configured
+
+    if not mysql_configured():
+        return [], 0
+    from src.persistence.mysql import mysql_connection
+    from src.session.models import Message, Session
+
+    users_by_id = _dm_user_map()
+    rows: list[dict[str, Any]] = []
+    where: list[str] = []
+    params: list[Any] = []
+    if query:
+        where.append("m.content LIKE %s")
+        params.append(f"%{query}%")
+    if user_id is not None:
+        where.append("s.user_id = %s")
+        params.append(int(user_id))
+    sql = """
+        SELECT
+            m.message_id, m.session_id, m.role, m.content, m.created_at,
+            m.linked_attempt_id, m.metadata_json,
+            s.title AS session_title, s.status AS session_status,
+            s.created_at AS session_created_at, s.updated_at AS session_updated_at,
+            s.last_attempt_id, s.config_json, s.user_id
+        FROM session_messages m
+        JOIN sessions s ON s.session_id = m.session_id
+    """
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY m.id DESC LIMIT %s"
+    params.append(max(limit * 5 if terms else limit, limit))
+    try:
+        with mysql_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, tuple(params))
+                rows = cur.fetchall()
+    except Exception:
+        logger.info("Admin MySQL chat moderation rows are unavailable", exc_info=True)
+        return [], 0
+
+    responses: list[AdminChatMessageResponse] = []
+    for row in rows:
+        config = row.get("config_json") or {}
+        if isinstance(config, str):
+            try:
+                config = json.loads(config)
+            except json.JSONDecodeError:
+                config = {}
+        if row.get("user_id") is not None:
+            config = {**config, "user_id": row.get("user_id")}
+        metadata = row.get("metadata_json") or {}
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except json.JSONDecodeError:
+                metadata = {}
+        message = Message(
+            message_id=str(row.get("message_id") or ""),
+            session_id=str(row.get("session_id") or ""),
+            role=str(row.get("role") or ""),
+            content=str(row.get("content") or ""),
+            created_at=str(row.get("created_at") or ""),
+            linked_attempt_id=row.get("linked_attempt_id"),
+            metadata=metadata if isinstance(metadata, dict) else {},
+        )
+        session = Session(
+            session_id=str(row.get("session_id") or ""),
+            title=str(row.get("session_title") or ""),
+            status=row.get("session_status") or "active",
+            created_at=str(row.get("session_created_at") or ""),
+            updated_at=str(row.get("session_updated_at") or ""),
+            last_attempt_id=row.get("last_attempt_id"),
+            config=config if isinstance(config, dict) else {},
+        )
+        matched_terms = _matched_moderation_terms(message.content, terms)
+        if terms and not matched_terms:
+            continue
+        responses.append(
+            _admin_chat_message_from_parts(
+                message=message,
+                session=session,
+                users_by_id=users_by_id,
+                matched_terms=matched_terms,
+            )
+        )
+        if len(responses) >= limit:
+            break
+    return responses, len(rows)
+
+
+def _filesystem_admin_chat_messages(
+    *,
+    limit: int,
+    query: str,
+    user_id: int | None,
+    terms: list[str],
+) -> tuple[list[AdminChatMessageResponse], int]:
+    svc = _get_session_service()
+    if not svc:
+        return [], 0
+    users_by_id = _dm_user_map()
+    responses: list[AdminChatMessageResponse] = []
+    scanned = 0
+    for session in svc.list_sessions(limit=1000):
+        if user_id is not None and session.owner_user_id != user_id:
+            continue
+        for message in reversed(svc.get_messages(session.session_id, limit=10000)):
+            scanned += 1
+            if query and query not in message.content:
+                continue
+            matched_terms = _matched_moderation_terms(message.content, terms)
+            if terms and not matched_terms:
+                continue
+            responses.append(
+                _admin_chat_message_from_parts(
+                    message=message,
+                    session=session,
+                    users_by_id=users_by_id,
+                    matched_terms=matched_terms,
+                )
+            )
+    responses.sort(key=lambda row: row.created_at, reverse=True)
+    return responses[:limit], scanned
+
+
+def _admin_chat_messages(
+    *,
+    limit: int,
+    query: str,
+    user_id: int | None,
+    terms: list[str],
+) -> tuple[list[AdminChatMessageResponse], int]:
+    messages, scanned = _mysql_admin_chat_messages(limit=limit, query=query, user_id=user_id, terms=terms)
+    if not (messages or scanned):
+        messages, scanned = _filesystem_admin_chat_messages(limit=limit, query=query, user_id=user_id, terms=terms)
+    dm_messages, dm_scanned = _admin_direct_messages(limit=limit, query=query, user_id=user_id, terms=terms)
+    combined = [*messages, *dm_messages]
+    combined.sort(key=lambda row: row.created_at, reverse=True)
+    return combined[:limit], scanned + dm_scanned
+
+
+def _admin_direct_messages(
+    *,
+    limit: int,
+    query: str,
+    user_id: int | None,
+    terms: list[str],
+) -> tuple[list[AdminChatMessageResponse], int]:
+    users_by_id = _dm_user_map()
+    store = _get_direct_message_store()
+    threads_by_id = {thread.thread_id: thread for thread in store.list_all_threads()}
+    responses: list[AdminChatMessageResponse] = []
+    scanned = 0
+    scan_limit = limit * 5 if (terms or query or user_id is not None) else limit
+    for message in store.list_all_messages(limit=max(scan_limit, limit)):
+        scanned += 1
+        thread = threads_by_id.get(message.thread_id)
+        if user_id is not None:
+            participant_ids = set(thread.participant_user_ids if thread is not None else [])
+            if int(user_id) not in participant_ids:
+                continue
+        if query and query not in message.content:
+            continue
+        matched_terms = _matched_moderation_terms(message.content, terms)
+        if terms and not matched_terms:
+            continue
+        sender = users_by_id.get(int(message.sender_user_id))
+        role = "sender" if user_id is None or int(message.sender_user_id) == int(user_id) else "peer"
+        peer_names: list[str] = []
+        if thread is not None:
+            for participant_id in thread.participant_user_ids:
+                user = users_by_id.get(participant_id)
+                peer_names.append(str(getattr(user, "display_name", "")) or str(getattr(user, "username", "")) or f"user:{participant_id}")
+        session = type(
+            "AdminDirectMessageSession",
+            (),
+            {
+                "owner_user_id": int(message.sender_user_id),
+                "title": "私信: " + " / ".join(peer_names) if peer_names else "私信",
+            },
+        )()
+        wrapped = type(
+            "AdminDirectMessage",
+            (),
+            {
+                "message_id": message.message_id,
+                "session_id": message.thread_id,
+                "role": role,
+                "content": message.content,
+                "created_at": message.created_at,
+                "linked_attempt_id": None,
+                "metadata": {"thread_id": message.thread_id, "sender_user_id": message.sender_user_id},
+            },
+        )()
+        if sender is None and int(message.sender_user_id) not in users_by_id:
+            users_by_id[int(message.sender_user_id)] = type(
+                "DeletedDirectMessageUser",
+                (),
+                {
+                    "username": f"user:{message.sender_user_id}",
+                    "display_name": "Deleted user",
+                },
+            )()
+        responses.append(
+            _admin_chat_message_from_parts(
+                message=wrapped,
+                session=session,
+                users_by_id=users_by_id,
+                matched_terms=matched_terms,
+                source="direct_message",
+            )
+        )
+        if len(responses) >= limit:
+            break
+    return responses, scanned
+
+
 def _admin_summary(users: list[Any], usage_rows: list[AdminUserUsageRow]) -> AdminUsageSummary:
     return AdminUsageSummary(
         total_users=len(users),
@@ -2120,6 +2450,24 @@ async def get_admin_dashboard():
     }
 
 
+@app.get(
+    "/admin/chat-messages",
+    response_model=AdminChatMessagesResponse,
+    dependencies=[Depends(require_operator_auth)],
+)
+async def get_admin_chat_messages(
+    limit: int = Query(200, ge=1, le=1000),
+    q: str = Query("", max_length=200),
+    user_id: Optional[int] = Query(None),
+    sensitive_words: str = Query("", max_length=5000),
+):
+    """Return all recent chat messages visible to operators for moderation."""
+    query = q.strip()
+    terms = _split_moderation_terms(sensitive_words)
+    messages, scanned = _admin_chat_messages(limit=limit, query=query, user_id=user_id, terms=terms)
+    return {"messages": messages, "total": len(messages), "scanned": scanned}
+
+
 @app.patch("/admin/users/{user_id}", response_model=AuthUserResponse, dependencies=[Depends(require_operator_auth)])
 async def admin_update_user(user_id: int, payload: AdminUserUpdateRequest):
     """Update an application user as an operator."""
@@ -2159,7 +2507,7 @@ async def list_public_strategy_market(ctx: AuthContext = Depends(require_auth)):
 @app.get("/admin/strategy-market", response_model=StrategyMarketAdminResponse, dependencies=[Depends(require_operator_auth)])
 async def get_admin_strategy_market():
     """Return operator-managed strategy market config."""
-    return {"items": _load_strategy_market_admin_items()}
+    return {"items": _load_strategy_market_admin_response_items()}
 
 
 @app.put("/admin/strategy-market", response_model=StrategyMarketAdminResponse, dependencies=[Depends(require_operator_auth)])
@@ -3990,7 +4338,13 @@ async def run_strategy_backtest(
 async def list_strategy_library(ctx: AuthContext = Depends(require_auth)):
     """List persisted personal strategies."""
     store = _get_strategy_store()
-    return {"strategies": [item.to_dict() for item in store.list_strategies(user_id=ctx.user_id)]}
+    share_statuses = store.list_share_statuses(user_id=ctx.user_id)
+    strategies = []
+    for item in store.list_strategies(user_id=ctx.user_id):
+        data = item.to_dict()
+        data["shareStatus"] = share_statuses.get(item.id, "none")
+        strategies.append(data)
+    return {"strategies": strategies}
 
 
 @app.put("/strategies", response_model=StrategyLibraryResponse)
@@ -4028,7 +4382,7 @@ async def upsert_strategy(
 
 @app.post("/strategies/{strategy_id}/publish", response_model=PublicStrategyMarketItem)
 async def publish_strategy(strategy_id: str, ctx: AuthContext = Depends(require_auth)):
-    """Publish the current user's strategy as an immutable public market snapshot."""
+    """Submit the current user's strategy for operator review before public listing."""
     record = _strategy_or_404(strategy_id, user_id=ctx.user_id)
     if not str(record.description or record.strategyDescription or "").strip():
         raise HTTPException(status_code=400, detail="strategy description is required before publishing")

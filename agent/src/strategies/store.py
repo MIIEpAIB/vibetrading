@@ -270,18 +270,65 @@ class MySQLStrategyStore:
                     )
                 return cur.rowcount > 0
 
-    def list_public_strategies(self) -> list[PublicStrategyRecord]:
+    def list_public_strategies(self, *, review_status: str = "published") -> list[PublicStrategyRecord]:
         with self._lock, mysql_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     SELECT * FROM public_strategy_marketplace
-                    WHERE review_status = 'published'
+                    WHERE review_status = %s
                     ORDER BY published_at DESC, public_id
+                    """,
+                    (review_status,),
+                )
+                rows = cur.fetchall()
+        return [self._public_from_row(row) for row in rows]
+
+    def list_all_public_strategies(self) -> list[PublicStrategyRecord]:
+        with self._lock, mysql_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT * FROM public_strategy_marketplace
+                    ORDER BY updated_at DESC, public_id
                     """
                 )
                 rows = cur.fetchall()
         return [self._public_from_row(row) for row in rows]
+
+    def list_share_statuses(self, *, user_id: int) -> dict[str, str]:
+        with self._lock, mysql_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT source_strategy_id, review_status
+                    FROM public_strategy_marketplace
+                    WHERE owner_user_id = %s
+                    """,
+                    (self._scope_user_id(user_id),),
+                )
+                rows = cur.fetchall()
+        return {str(row["source_strategy_id"]): str(row["review_status"]) for row in rows}
+
+    def update_public_strategy_review_status(self, public_id: str, review_status: str) -> PublicStrategyRecord | None:
+        now = _now_iso()
+        with self._lock, self._transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE public_strategy_marketplace
+                    SET review_status = %s,
+                        published_at = CASE WHEN %s = 'published' THEN %s ELSE published_at END,
+                        updated_at = %s
+                    WHERE public_id = %s
+                    """,
+                    (review_status, review_status, now, now, public_id),
+                )
+                if cur.rowcount == 0:
+                    return None
+                cur.execute("SELECT * FROM public_strategy_marketplace WHERE public_id = %s", (public_id,))
+                row = cur.fetchone()
+        return self._public_from_row(row) if row else None
 
     def publish_strategy(
         self,
@@ -304,7 +351,7 @@ class MySQLStrategyStore:
             category=strategy.category,
             tags=list(dict.fromkeys([*strategy.tags, "community"]))[:8],
             codeSnapshot=strategy.code,
-            reviewStatus="published",
+            reviewStatus="submitted",
             publishedAt=now,
             updatedAt=now,
             backtestSummary=backtest_summary or {},

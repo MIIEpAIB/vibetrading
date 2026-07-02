@@ -34,6 +34,7 @@ function fallbackStrategy(): StrategyLibraryItem {
     code: "",
     createdAt: now,
     updatedAt: now,
+    shareStatus: "none",
   };
 }
 
@@ -57,6 +58,7 @@ export function normalizeOwnedStrategy(value: unknown, fallback = fallbackStrate
     code,
     createdAt: typeof value.createdAt === "string" ? value.createdAt : fallback.createdAt ?? now,
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : fallback.updatedAt ?? now,
+    shareStatus: typeof value.shareStatus === "string" && value.shareStatus.trim() ? value.shareStatus : fallback.shareStatus ?? "none",
   };
 }
 

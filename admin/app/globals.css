@@ -201,16 +201,25 @@ nav {
   gap: 6px;
 }
 
-nav a {
+nav a,
+.nav-button {
   border-radius: 8px;
   color: var(--muted);
   padding: 10px 12px;
   text-decoration: none;
 }
 
-nav a:hover {
+nav a:hover,
+.nav-button:hover {
   background: var(--soft);
   color: var(--primary);
+}
+
+.nav-button {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
 }
 
 main {
@@ -339,6 +348,42 @@ td input[type="checkbox"] {
   width: auto;
 }
 
+.moderation-controls {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) 150px minmax(260px, 1.4fr) auto;
+  align-items: end;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.terms-editor {
+  min-height: 74px;
+  resize: vertical;
+}
+
+.moderation-toggle {
+  min-height: 40px;
+  color: var(--text);
+}
+
+.audit-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.audit-summary span,
+.term-list span {
+  border: 1px solid #ffd7a8;
+  border-radius: 999px;
+  background: #fff8ec;
+  color: #8a4b00;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .table-wrap {
   overflow-x: auto;
 }
@@ -371,6 +416,33 @@ td span {
   font-size: 12px;
 }
 
+.chat-table {
+  min-width: 1180px;
+}
+
+.chat-table th:nth-child(6),
+.chat-table td:nth-child(6) {
+  width: 36%;
+}
+
+.message-cell {
+  max-width: 560px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.55;
+}
+
+.term-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.empty-cell {
+  color: var(--muted);
+  text-align: center;
+}
+
 tr:last-child td {
   border-bottom: 0;
 }
@@ -387,7 +459,8 @@ tr:last-child td {
 
   .metrics,
   .settings-grid,
-  .user-grid {
+  .user-grid,
+  .moderation-controls {
     grid-template-columns: 1fr;
   }
 }

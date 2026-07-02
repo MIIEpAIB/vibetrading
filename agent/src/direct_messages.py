@@ -89,6 +89,12 @@ class DirectMessageStore:
             reverse=True,
         )
 
+    def list_all_threads(self) -> list[DirectMessageThread]:
+        with self._lock:
+            data = self._read()
+            threads = [DirectMessageThread.from_dict(item) for item in data["threads"]]
+        return sorted(threads, key=lambda thread: thread.updated_at, reverse=True)
+
     def get_thread(self, thread_id: str) -> DirectMessageThread | None:
         with self._lock:
             data = self._read()
@@ -128,6 +134,12 @@ class DirectMessageStore:
                 if str(item.get("thread_id") or "") == thread_id
             ]
         return sorted(messages, key=lambda message: message.created_at)[-max(1, int(limit)):]
+
+    def list_all_messages(self, *, limit: int = 1000) -> list[DirectMessage]:
+        with self._lock:
+            data = self._read()
+            messages = [DirectMessage.from_dict(item) for item in data["messages"]]
+        return sorted(messages, key=lambda message: message.created_at, reverse=True)[:max(1, int(limit))]
 
     def send_message(self, thread_id: str, sender_user_id: int, content: str) -> DirectMessage:
         clean = content.strip()

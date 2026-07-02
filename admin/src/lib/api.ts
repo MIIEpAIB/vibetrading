@@ -49,6 +49,28 @@ export interface AdminDashboardResponse {
   usage: AdminUserUsageRow[];
 }
 
+export interface AdminChatMessage {
+  source: "agent_session" | "direct_message" | string;
+  message_id: string;
+  session_id: string;
+  session_title: string;
+  role: string;
+  content: string;
+  created_at: string;
+  linked_attempt_id?: string | null;
+  metadata?: JsonObject | null;
+  user_id?: number | null;
+  username: string;
+  display_name: string;
+  matched_terms: string[];
+}
+
+export interface AdminChatMessagesResponse {
+  messages: AdminChatMessage[];
+  total: number;
+  scanned: number;
+}
+
 export interface AdminUserUpdateRequest {
   display_name?: string;
   password?: string;
@@ -57,13 +79,16 @@ export interface AdminUserUpdateRequest {
 
 export interface StrategyMarketAdminItem {
   id: string;
-  kind: "built-in" | "paid" | string;
+  kind: "built-in" | "paid" | "community" | string;
   enabled: boolean;
   featured: boolean;
   price: string;
-  status: "draft" | "published" | "archived" | string;
+  status: "draft" | "submitted" | "published" | "rejected" | "hidden" | "archived" | string;
   note: string;
   updated_at: string;
+  name?: string;
+  owner_user_id?: number | null;
+  source_strategy_id?: string;
 }
 
 export interface StrategyMarketAdminResponse {
@@ -116,6 +141,14 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   getAdminDashboard: () => request<AdminDashboardResponse>("/admin/dashboard"),
+  getAdminChatMessages: (params?: { limit?: number; q?: string; userId?: number | null; sensitiveWords?: string }) => {
+    const search = new URLSearchParams();
+    search.set("limit", String(params?.limit ?? 200));
+    if (params?.q) search.set("q", params.q);
+    if (params?.userId != null) search.set("user_id", String(params.userId));
+    if (params?.sensitiveWords) search.set("sensitive_words", params.sensitiveWords);
+    return request<AdminChatMessagesResponse>(`/admin/chat-messages?${search.toString()}`);
+  },
   updateAdminUser: (userId: number, body: AdminUserUpdateRequest) =>
     request<AuthUser>(`/admin/users/${encodeURIComponent(String(userId))}`, {
       method: "PATCH",

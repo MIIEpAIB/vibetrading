@@ -506,13 +506,16 @@ export interface AdminUserUpdateRequest {
 
 export interface StrategyMarketAdminItem {
   id: string;
-  kind: "built-in" | "paid";
+  kind: "built-in" | "paid" | "community";
   enabled: boolean;
   featured: boolean;
   price: string;
-  status: "draft" | "published" | "hidden" | "archived";
+  status: "draft" | "submitted" | "published" | "rejected" | "hidden" | "archived";
   note: string;
   updated_at: string;
+  name?: string;
+  owner_user_id?: number | null;
+  source_strategy_id?: string;
 }
 
 export interface StrategyMarketAdminResponse {
@@ -1290,6 +1293,7 @@ export interface StrategyLibraryItem {
   code: string;
   createdAt: string;
   updatedAt: string;
+  shareStatus?: "none" | "submitted" | "published" | "rejected" | "hidden" | "archived" | string;
 }
 
 export interface StrategyLibraryResponse {

@@ -36,6 +36,7 @@ import { mergeOwnedStrategies, readOwnedStrategies, saveOwnedStrategies } from "
 type StrategyLanguage = "javascript" | "python" | "cpp" | "rust" | "pine";
 type StrategyStatus = "draft" | "testing" | "live" | "archived";
 type StrategyCategory = "trend" | "mean_reversion" | "grid" | "risk" | "portfolio" | "arbitrage" | "utility";
+type StrategyShareStatus = "none" | "submitted" | "published" | "rejected" | "hidden" | "archived" | string;
 
 interface StrategyItem {
   id: string;
@@ -49,6 +50,7 @@ interface StrategyItem {
   code: string;
   updatedAt: string;
   createdAt: string;
+  shareStatus?: StrategyShareStatus;
 }
 
 type StrategyPersistenceMode = "checking" | "remote" | "local";
@@ -137,6 +139,10 @@ function isStrategyCategory(value: unknown): value is StrategyCategory {
   return categoryOptions.some((option) => option.value === value);
 }
 
+function normalizeShareStatus(value: unknown): StrategyShareStatus {
+  return typeof value === "string" && value.trim() ? value : "none";
+}
+
 function formatDate(value: string, withTime = true) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "-";
@@ -174,6 +180,7 @@ function normalizeStrategy(value: unknown, fallback: StrategyItem): StrategyItem
     code: shouldMigrateClassicTurtle ? buildClassicTurtlePythonStrategyCode() : rawCode,
     createdAt: typeof value.createdAt === "string" ? value.createdAt : fallback.createdAt,
     updatedAt: shouldMigrateClassicTurtle ? now : typeof value.updatedAt === "string" ? value.updatedAt : now,
+    shareStatus: normalizeShareStatus(value.shareStatus ?? value.share_status),
   };
 }
 
@@ -191,6 +198,7 @@ function newStrategy(overrides: Partial<StrategyItem> = {}): StrategyItem {
     code: starterCode,
     createdAt: now,
     updatedAt: now,
+    shareStatus: "none",
     ...overrides,
   };
 }
@@ -438,8 +446,11 @@ export function StrategyLibrary() {
       delete: "删除",
       more: "更多",
       share: "分享",
-      publishing: "发布中",
-      published: "已发布到公共策略库",
+      publishing: "分享中",
+      pendingReview: "审核中",
+      rejectedShare: "分享失败",
+      published: "已分享",
+      submitted: "已提交审核",
       rent: "出租",
       run: "运行",
       paperRun: "模拟盘运行",
@@ -499,8 +510,11 @@ export function StrategyLibrary() {
       delete: "Delete",
       more: "More",
       share: "Share",
-      publishing: "Publishing",
-      published: "Published to public strategy market",
+      publishing: "Sharing",
+      pendingReview: "In review",
+      rejectedShare: "Share failed",
+      published: "Shared",
+      submitted: "Submitted for review",
       rent: "Rent",
       run: "Run",
       paperRun: "Run Paper",
@@ -542,6 +556,16 @@ export function StrategyLibrary() {
     return [...items].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }, [query, strategies]);
   const saveLabel = persistenceMode === "remote" ? copy.savedRemote : persistenceMode === "checking" ? copy.checking : copy.savedLocal;
+  const shareButtonLabel = (strategy: StrategyItem) => {
+    if (publishingId === strategy.id) return copy.publishing;
+    if (strategy.shareStatus === "submitted") return copy.pendingReview;
+    if (strategy.shareStatus === "rejected") return copy.rejectedShare;
+    if (strategy.shareStatus === "published") return copy.published;
+    return copy.share;
+  };
+  const shareButtonDisabled = (strategy: StrategyItem) => (
+    publishingId === strategy.id || strategy.shareStatus === "submitted" || strategy.shareStatus === "published"
+  );
 
   const updateStrategy = (id: string, patch: Partial<StrategyItem>) => {
     const updatedAt = new Date().toISOString();
@@ -725,8 +749,8 @@ export function StrategyLibrary() {
         await api.upsertStrategy(toApiStrategy(strategy));
       }
       await api.publishStrategy(strategy.id);
-      toast.success(copy.published);
-      navigate("/market");
+      updateStrategy(strategy.id, { shareStatus: "submitted" });
+      toast.success(copy.submitted);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : language === "zh-CN" ? "发布策略失败" : "Failed to publish strategy");
     } finally {
@@ -1131,11 +1155,11 @@ export function StrategyLibrary() {
           <button
             type="button"
             onClick={() => handleShare(moreMenu.strategy)}
-            disabled={publishingId === moreMenu.strategy.id}
+            disabled={shareButtonDisabled(moreMenu.strategy)}
             className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-xs font-semibold text-foreground hover:bg-muted"
           >
             <Share2 className="h-3.5 w-3.5" />
-            {publishingId === moreMenu.strategy.id ? copy.publishing : copy.share}
+            {shareButtonLabel(moreMenu.strategy)}
           </button>
           <button
             type="button"

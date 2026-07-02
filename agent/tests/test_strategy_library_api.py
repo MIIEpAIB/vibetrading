@@ -157,7 +157,7 @@ def test_strategy_record_maps_legacy_json_language_to_javascript() -> None:
 
 
 @pytest.mark.asyncio
-async def test_publish_strategy_creates_public_snapshot(monkeypatch) -> None:
+async def test_publish_strategy_submits_public_snapshot_for_review(monkeypatch) -> None:
     record = StrategyRecord.from_payload(
         {
             "id": "breakout",
@@ -195,7 +195,7 @@ async def test_publish_strategy_creates_public_snapshot(monkeypatch) -> None:
                     "category": strategy.category,
                     "tags": strategy.tags,
                     "codeSnapshot": strategy.code,
-                    "reviewStatus": "published",
+                    "reviewStatus": "submitted",
                     "publishedAt": "2026-06-22T10:32:00",
                     "updatedAt": "2026-06-22T10:32:00",
                     "backtestSummary": {},
@@ -209,13 +209,17 @@ async def test_publish_strategy_creates_public_snapshot(monkeypatch) -> None:
     result = await api_server.publish_strategy("breakout", SimpleNamespace(user_id=123))
 
     assert result["publicId"] == "pub_test"
+    assert result["reviewStatus"] == "submitted"
     assert result["codeSnapshot"] == record.code
     assert captured["user_id"] == 123
     assert captured["strategy"] is record
 
 
-def test_user_python_strategy_backtest_disabled_by_default(monkeypatch) -> None:
+def test_user_python_strategy_backtest_disabled_by_default(monkeypatch, tmp_path) -> None:
     monkeypatch.delenv("VIBE_TRADING_ALLOW_UNSANDBOXED_PYTHON_STRATEGIES", raising=False)
+    env_path = tmp_path / ".env"
+    env_path.write_text("", encoding="utf-8")
+    monkeypatch.setattr(api_server, "ENV_PATH", env_path)
     record = SimpleNamespace(
         code=(
             "class SignalEngine:\n"
