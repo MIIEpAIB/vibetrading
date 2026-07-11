@@ -207,7 +207,12 @@ def _mandate_is_expired(mandate: Mandate, now: datetime) -> bool:
     return now >= expires
 
 
-def _pin_mandate_prompt(broker: str, mandate: Mandate, now: datetime) -> str:
+def _pin_mandate_prompt(
+    broker: str,
+    mandate: Mandate,
+    now: datetime,
+    job_payload: Mapping[str, Any] | None = None,
+) -> str:
     """Build the autonomous-turn prompt with the full mandate pinned inline.
 
     The mandate text is embedded directly in the prompt this runner owns so it
@@ -229,6 +234,22 @@ def _pin_mandate_prompt(broker: str, mandate: Mandate, now: datetime) -> str:
     instruments = ", ".join(i.value for i in caps.allowed_instruments) or "(none)"
     asset_classes = ", ".join(a.value for a in universe.asset_classes) or "(none)"
     excluded = ", ".join(universe.exclude_symbols) or "(none)"
+    strategy_block = ""
+    payload = dict(job_payload or {})
+    strategy = payload.get("strategy")
+    if isinstance(strategy, Mapping):
+        strategy_block = (
+            "\n\n=== HOSTED STRATEGY SNAPSHOT (runner-managed deployment) ===\n"
+            f"- Deployment id: {payload.get('deployment_id', '(unknown)')}\n"
+            f"- Strategy id: {strategy.get('strategy_id') or strategy.get('id') or '(unknown)'}\n"
+            f"- Name: {strategy.get('name') or '(unnamed)'}\n"
+            f"- Language: {strategy.get('language') or '(unknown)'}\n"
+            f"- Version: {strategy.get('version') or strategy.get('source_updated_at') or '(unknown)'}\n"
+            "Run this hosted strategy snapshot. Treat the code/rules below as "
+            "the strategy source of truth, while still obeying every mandate "
+            "and kill-switch limit above.\n\n"
+            f"{strategy.get('code') or strategy.get('description') or ''}"
+        )
     return (
         "You are running an AUTONOMOUS live-trading tick under a bounded "
         "mandate. Trade freely INSIDE the limits below; you must NEVER place an "
@@ -251,6 +272,7 @@ def _pin_mandate_prompt(broker: str, mandate: Mandate, now: datetime) -> str:
         f"- Excluded symbols (hard denylist): {excluded}\n\n"
         "Assess the current opportunity set, then act within the mandate. If no "
         "action is warranted this tick, hold and explain why."
+        f"{strategy_block}"
     )
 
 
@@ -404,7 +426,7 @@ class LiveRunner:
         """
         return self.broker
 
-    async def run_once(self) -> dict[str, Any]:
+    async def run_once(self, job_payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
         """Run ONE fail-closed tick in fixed order; return the outcome dict.
 
         Ordering (each step short-circuits the tick on failure):
@@ -438,7 +460,7 @@ class LiveRunner:
         if reconcile_outcome is not None:
             return reconcile_outcome
 
-        return await self._invoke_and_audit(mandate, now)
+        return await self._invoke_and_audit(mandate, now, job_payload=job_payload)
 
     def _run_reconcile(self) -> dict[str, Any] | None:
         """Reconcile broker truth before trading; abort on unsafe/error.
@@ -485,7 +507,13 @@ class LiveRunner:
             ).to_dict()
         return None
 
-    async def _invoke_and_audit(self, mandate: Mandate, now: datetime) -> dict[str, Any]:
+    async def _invoke_and_audit(
+        self,
+        mandate: Mandate,
+        now: datetime,
+        *,
+        job_payload: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Invoke the agent with the pinned mandate, then audit the outcome.
 
         Args:
@@ -495,7 +523,7 @@ class LiveRunner:
         Returns:
             The tick result dict.
         """
-        prompt = _pin_mandate_prompt(self.broker, mandate, now)
+        prompt = _pin_mandate_prompt(self.broker, mandate, now, job_payload=job_payload)
         try:
             result = await self._agent_caller(self._session_id, prompt)
         except Exception as exc:
@@ -743,7 +771,7 @@ class LiveRunner:
             logger.exception("job store load failed for %s; recomputing", self.broker)
             persisted = []
         if persisted:
-            return persisted
+            return [job for job in persisted if self._job_belongs_to_runner(job)]
 
         synthesized = self._jobs_from_triggers(now)
         if synthesized:
@@ -752,6 +780,15 @@ class LiveRunner:
             except Exception:  # noqa: BLE001 — persistence is best-effort at start
                 logger.exception("job store save failed for %s", self.broker)
         return synthesized
+
+    def _job_belongs_to_runner(self, job: _Job) -> bool:
+        """Return whether a persisted job belongs to this broker runner."""
+        payload = getattr(job, "payload", None)
+        if isinstance(payload, Mapping):
+            broker = str(payload.get("broker") or "").strip().lower()
+            if broker:
+                return broker == self.broker
+        return str(getattr(job, "id", "")).startswith(f"{self.broker}-")
 
     def _jobs_from_triggers(self, now: datetime) -> list[Job]:
         """Convert the injected triggers (R3) into schedulable watch jobs (R1).
@@ -790,6 +827,18 @@ class LiveRunner:
                 )
             )
         return built
+
+    def add_job(self, job: _Job) -> None:
+        """Register one job on the injected scheduler."""
+        if self._scheduler is None:
+            raise RuntimeError("add_job requires an injected scheduler")
+        self._scheduler.add_job(job)
+
+    def remove_job(self, job_id: str) -> bool:
+        """Remove one job from the injected scheduler."""
+        if self._scheduler is None:
+            return False
+        return bool(self._scheduler.remove_job(job_id))
 
     def stop_loop(self) -> None:
         """Stop the scheduler if one was injected (idempotent)."""

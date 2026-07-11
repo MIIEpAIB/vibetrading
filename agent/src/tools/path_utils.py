@@ -89,17 +89,29 @@ def _default_file_roots() -> list[Path]:
 
 def _default_run_roots() -> list[Path]:
     """Return default roots for generated backtest/tool run directories."""
-    from src.swarm.store import swarm_runs_root
-
     cwd = Path.cwd().resolve()
     home = Path.home().resolve()
     agent_root = _agent_root()
+    swarm_runs_root = agent_root / ".swarm" / "runs"
     return [
         agent_root / "runs",
-        swarm_runs_root(),
+        swarm_runs_root,
         cwd / "runs",
         home / ".vibe-trading" / "shadow_runs",
     ]
+
+
+def _configured_run_roots() -> list[Path]:
+    """Return run roots configured through the environment."""
+    raw = os.getenv(_ALLOWED_RUN_ROOTS_ENV, "")
+    roots: list[Path] = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        _rejects_unc(item)
+        roots.append(Path(item).expanduser().resolve())
+    return roots
 
 
 def _allowed_file_roots() -> list[Path]:
@@ -114,17 +126,8 @@ def _allowed_file_roots() -> list[Path]:
 
 def _allowed_run_roots() -> list[Path]:
     """Return all roots allowed for run_dir-based tools."""
-    raw = os.getenv(_ALLOWED_RUN_ROOTS_ENV, "")
-    configured: list[Path] = []
-    for item in raw.split(","):
-        item = item.strip()
-        if not item:
-            continue
-        _rejects_unc(item)
-        configured.append(Path(item).expanduser().resolve())
-
     roots: list[Path] = []
-    for root in [*_default_run_roots(), *configured]:
+    for root in [*_configured_run_roots(), *_default_run_roots()]:
         resolved = root.resolve()
         if resolved not in roots:
             roots.append(resolved)
@@ -224,6 +227,10 @@ def safe_run_dir(p: str) -> Path:
     """
     _rejects_unc(p)
     resolved = Path(p).expanduser().resolve()
+
+    for root in _configured_run_roots():
+        if resolved.is_relative_to(root):
+            return resolved
 
     for root in _allowed_run_roots():
         if resolved.is_relative_to(root):

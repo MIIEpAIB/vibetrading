@@ -992,6 +992,29 @@ class CryptoLiveConfigureResponse(BaseModel):
     connection: Optional[Dict[str, Any]] = None
 
 
+class LiveDeploymentCreateRequest(BaseModel):
+    """Create a hosted live strategy deployment from a saved strategy."""
+
+    strategy_id: str = Field(..., min_length=1, max_length=128)
+    broker: str = Field(..., min_length=1, max_length=64)
+    interval_seconds: int = Field(60, ge=5, le=86_400)
+    session_id: Optional[str] = None
+    limits: Dict[str, Any] = Field(default_factory=dict)
+
+
+class LiveDeploymentActionResponse(BaseModel):
+    """Hosted live deployment action response."""
+
+    deployment: Dict[str, Any]
+    runner: Dict[str, Any] = Field(default_factory=dict)
+
+
+class LiveDeploymentListResponse(BaseModel):
+    """Hosted live deployment list response."""
+
+    deployments: List[Dict[str, Any]]
+
+
 class BrokerAuthState(BaseModel):
     """Per-broker authorization snapshot for ``GET /live/status``."""
 
@@ -6008,7 +6031,7 @@ def _build_live_runner(broker: str) -> Any:
     async def _on_fire(_job: Any) -> None:
         runner = runner_holder.get("runner")
         if runner is not None:
-            await runner.run_once()
+            await runner.run_once(getattr(_job, "payload", None))
 
     scheduler = Scheduler(_on_fire)
 

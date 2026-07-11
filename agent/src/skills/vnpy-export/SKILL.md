@@ -25,7 +25,8 @@ run a Vibe-Trading strategy inside vnpy's CTA backtester or live trading engine.
 4. Determine asset class from `config.json` → choose correct CtaTemplate convention (see below)
 5. Translate signal logic to CtaTemplate using the reference tables
 6. `write_file("artifacts/vnpy_strategy/<StrategyName>Strategy.py")` — save the output
-7. Return the class in a code block with setup instructions
+7. Call `prepare_vnpy_backtest(run_dir=...)` to generate `run_vnpy_backtest.py` and `vnpy_bridge.json`
+8. Return the class in a code block with setup instructions
 
 ## Workflow: Generate from Description
 
@@ -291,6 +292,25 @@ engine.run_backtesting()
 df = engine.calculate_result()
 engine.calculate_statistics()
 engine.show_chart()
+```
+
+Vibe-Trading also provides a local helper tool:
+
+```json
+{"tool": "prepare_vnpy_backtest", "run_dir": "<run_dir>"}
+```
+
+It does not execute vnpy or place orders. It reads `config.json`, finds the exported
+`artifacts/vnpy_strategy/*Strategy.py`, normalizes the first symbol to vn.py `vt_symbol`
+format, and writes:
+
+- `artifacts/vnpy_strategy/run_vnpy_backtest.py`
+- `artifacts/vnpy_strategy/vnpy_bridge.json`
+
+Install the optional backend in the target vn.py environment with:
+
+```bash
+pip install "vibe-trading-ai[vnpy]"
 ```
 
 ---
