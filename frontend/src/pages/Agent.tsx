@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, useMemo, useCallback, type FormEvent } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Send, Loader2, ArrowDown, Square, Download, Plus, Paperclip, X, Users, Target, ChevronDown, Pencil, Check, Play, OctagonX, Activity, Ban, CheckCircle2, Landmark, Bot, BrainCircuit, Gauge } from "lucide-react";
+import { Send, Loader2, ArrowDown, Square, Download, Plus, Paperclip, X, Users, Target, ChevronDown, Pencil, Check, Play, OctagonX, Activity, Ban, CheckCircle2, Landmark, Bot, BrainCircuit, Gauge, BookmarkPlus } from "lucide-react";
 import { toast } from "sonner";
 import { useAgentStore } from "@/stores/agent";
 import { useSSE } from "@/hooks/useSSE";
-import { ApiError, AUTH_REQUIRED_MESSAGE, api, isAuthRequiredError, type GoalSnapshot, type LLMSettings, type MandateProposal, type MandateCommitted, type LiveAction, type LiveHalted, type LiveStatus } from "@/lib/api";
+import { ApiError, AUTH_REQUIRED_MESSAGE, api, isAuthRequiredError, type GoalSnapshot, type LLMSettings, type MandateProposal, type MandateCommitted, type LiveAction, type LiveHalted, type LiveStatus, type SaveSessionStrategyRequest } from "@/lib/api";
 import { isReportWorthyRun } from "@/lib/runReports";
 import type { AgentMessage, ToolCallEntry } from "@/types/agent";
 import { AgentAvatar } from "@/components/chat/AgentAvatar";
@@ -208,7 +208,7 @@ function goalContinuePrompt(snapshot: GoalSnapshot): string {
 
 /* ---------- Component ---------- */
 export function Agent() {
-  const { t } = useTranslation();
+  const { t, language } = useTranslation();
   const [input, setInput] = useState("");
   const [searchParams, setSearchParams] = useSearchParams();
   const listRef = useRef<HTMLDivElement>(null);
@@ -255,6 +255,9 @@ export function Agent() {
   const [liveStatus, setLiveStatus] = useState<LiveStatus | null>(null);
   const [llmSettings, setLlmSettings] = useState<LLMSettings | null>(null);
   const [reasoningActive, setReasoningActive] = useState(false);
+  const [strategyDraft, setStrategyDraft] = useState<SaveSessionStrategyRequest | null>(null);
+  const [draftingStrategy, setDraftingStrategy] = useState(false);
+  const [savingSessionStrategy, setSavingSessionStrategy] = useState(false);
   /* The status endpoint is not wired on every backend; a 404/501 hides the panel
    * and removes status from the kill-switch visibility condition. */
   const [liveStatusUnavailable, setLiveStatusUnavailable] = useState(false);
@@ -1054,6 +1057,46 @@ export function Agent() {
     URL.revokeObjectURL(url);
   };
 
+  const handleDraftSessionStrategy = useCallback(async () => {
+    if (!sessionId || draftingStrategy || status === "streaming") return;
+    setDraftingStrategy(true);
+    try {
+      const draft = await api.draftSessionStrategy(sessionId);
+      setStrategyDraft({
+        name: draft.name,
+        description: draft.description || "",
+        strategyDescription: draft.strategyDescription || "",
+        language: draft.language || "python",
+        category: draft.category || "trend",
+        tags: draft.tags || ["agent"],
+        code: draft.code,
+        message_id: draft.message_id || draft.source_message_id,
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : language === "zh-CN" ? "没有找到完整策略代码" : "No complete strategy code found");
+    } finally {
+      setDraftingStrategy(false);
+    }
+  }, [draftingStrategy, language, sessionId, status]);
+
+  const updateStrategyDraft = useCallback((patch: Partial<SaveSessionStrategyRequest>) => {
+    setStrategyDraft((current) => current ? { ...current, ...patch } : current);
+  }, []);
+
+  const handleSaveSessionStrategy = useCallback(async () => {
+    if (!sessionId || !strategyDraft || savingSessionStrategy) return;
+    setSavingSessionStrategy(true);
+    try {
+      const saved = await api.saveSessionStrategy(sessionId, strategyDraft);
+      setStrategyDraft(null);
+      toast.success(language === "zh-CN" ? `已保存策略：${saved.name}` : `Saved strategy: ${saved.name}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : language === "zh-CN" ? "保存策略失败" : "Failed to save strategy");
+    } finally {
+      setSavingSessionStrategy(false);
+    }
+  }, [language, savingSessionStrategy, sessionId, strategyDraft]);
+
   const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1254,7 +1297,11 @@ export function Agent() {
             }
             return (
               <div key={row.key} data-msg-idx={msgIdx}>
-                <MessageBubble msg={g.msg} onRetry={g.msg.type === "error" ? handleRetry : undefined} />
+                <MessageBubble
+                  msg={g.msg}
+                  sessionId={sessionId}
+                  onRetry={g.msg.type === "error" ? handleRetry : undefined}
+                />
               </div>
             );
           })}
@@ -1317,6 +1364,101 @@ export function Agent() {
         )}
         <ConversationTimeline messages={messages} containerRef={listRef} />
       </div>
+
+      {strategyDraft && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-6 backdrop-blur-sm">
+          <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-white/10 bg-[#0b0f0c] shadow-2xl shadow-black/50">
+            <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+              <div>
+                <h2 className="text-sm font-semibold text-white">{language === "zh-CN" ? "保存策略草稿" : "Save Strategy Draft"}</h2>
+                <p className="mt-0.5 text-xs text-zinc-500">{language === "zh-CN" ? "确认名称、说明和代码后保存到个人策略库" : "Review the draft before saving it to your strategy library"}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setStrategyDraft(null)}
+                className="rounded-md p-1.5 text-zinc-500 transition hover:bg-white/[0.08] hover:text-white"
+                title={language === "zh-CN" ? "关闭" : "Close"}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="grid gap-3 overflow-y-auto px-4 py-4">
+              <label className="grid gap-1.5">
+                <span className="text-xs font-medium text-zinc-400">{language === "zh-CN" ? "名称" : "Name"}</span>
+                <input
+                  value={strategyDraft.name}
+                  onChange={(event) => updateStrategyDraft({ name: event.target.value })}
+                  className="rounded-md border border-white/10 bg-white/[0.045] px-3 py-2 text-sm text-zinc-100 outline-none focus:ring-2 focus:ring-orange-400/35"
+                />
+              </label>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="grid gap-1.5">
+                  <span className="text-xs font-medium text-zinc-400">{language === "zh-CN" ? "分类" : "Category"}</span>
+                  <input
+                    value={strategyDraft.category || ""}
+                    onChange={(event) => updateStrategyDraft({ category: event.target.value })}
+                    className="rounded-md border border-white/10 bg-white/[0.045] px-3 py-2 text-sm text-zinc-100 outline-none focus:ring-2 focus:ring-orange-400/35"
+                  />
+                </label>
+                <label className="grid gap-1.5">
+                  <span className="text-xs font-medium text-zinc-400">{language === "zh-CN" ? "标签" : "Tags"}</span>
+                  <input
+                    value={(strategyDraft.tags || []).join(", ")}
+                    onChange={(event) => updateStrategyDraft({ tags: event.target.value.split(",").map((tag) => tag.trim()).filter(Boolean) })}
+                    className="rounded-md border border-white/10 bg-white/[0.045] px-3 py-2 text-sm text-zinc-100 outline-none focus:ring-2 focus:ring-orange-400/35"
+                  />
+                </label>
+              </div>
+              <label className="grid gap-1.5">
+                <span className="text-xs font-medium text-zinc-400">{language === "zh-CN" ? "简介" : "Description"}</span>
+                <textarea
+                  value={strategyDraft.description || ""}
+                  onChange={(event) => updateStrategyDraft({ description: event.target.value })}
+                  rows={2}
+                  className="resize-none rounded-md border border-white/10 bg-white/[0.045] px-3 py-2 text-sm text-zinc-100 outline-none focus:ring-2 focus:ring-orange-400/35"
+                />
+              </label>
+              <label className="grid gap-1.5">
+                <span className="text-xs font-medium text-zinc-400">{language === "zh-CN" ? "策略说明" : "Strategy Notes"}</span>
+                <textarea
+                  value={strategyDraft.strategyDescription || ""}
+                  onChange={(event) => updateStrategyDraft({ strategyDescription: event.target.value })}
+                  rows={5}
+                  className="resize-y rounded-md border border-white/10 bg-white/[0.045] px-3 py-2 text-sm text-zinc-100 outline-none focus:ring-2 focus:ring-orange-400/35"
+                />
+              </label>
+              <label className="grid gap-1.5">
+                <span className="text-xs font-medium text-zinc-400">{language === "zh-CN" ? "代码" : "Code"}</span>
+                <textarea
+                  value={strategyDraft.code}
+                  onChange={(event) => updateStrategyDraft({ code: event.target.value })}
+                  rows={12}
+                  spellCheck={false}
+                  className="resize-y rounded-md border border-white/10 bg-black/35 px-3 py-2 font-mono text-xs leading-relaxed text-zinc-100 outline-none focus:ring-2 focus:ring-orange-400/35"
+                />
+              </label>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-white/10 px-4 py-3">
+              <button
+                type="button"
+                onClick={() => setStrategyDraft(null)}
+                className="rounded-md border border-white/10 px-3 py-2 text-sm font-medium text-zinc-300 transition hover:bg-white/[0.08] hover:text-white"
+              >
+                {language === "zh-CN" ? "取消" : "Cancel"}
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveSessionStrategy}
+                disabled={savingSessionStrategy || !strategyDraft.name.trim() || !strategyDraft.code.trim()}
+                className="inline-flex items-center gap-2 rounded-md bg-orange-500 px-3 py-2 text-sm font-semibold text-white transition hover:bg-orange-400 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {savingSessionStrategy ? <Loader2 className="h-4 w-4 animate-spin" /> : <BookmarkPlus className="h-4 w-4" />}
+                {language === "zh-CN" ? "保存到策略库" : "Save to Library"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <form onSubmit={handleSubmit} className="relative z-10 border-t border-white/10 bg-[#060806]/90 px-4 py-4 backdrop-blur-xl sm:px-6">
         <div className="mx-auto w-full max-w-5xl space-y-3">
@@ -1678,6 +1820,17 @@ export function Agent() {
               className="max-h-32 flex-1 resize-none overflow-y-auto rounded-lg border border-white/10 bg-white/[0.045] px-4 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 transition-shadow focus:outline-none focus:ring-2 focus:ring-orange-400/35"
               disabled={status === "streaming"}
             />
+            {messages.length > 0 && (
+              <button
+                type="button"
+                onClick={handleDraftSessionStrategy}
+                disabled={!sessionId || status === "streaming" || draftingStrategy}
+                className="rounded-lg border border-white/10 bg-white/[0.045] px-3 py-2.5 text-zinc-400 transition-colors hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                title={language === "zh-CN" ? "整理为策略" : "Draft strategy"}
+              >
+                {draftingStrategy ? <Loader2 className="h-4 w-4 animate-spin" /> : <BookmarkPlus className="h-4 w-4" />}
+              </button>
+            )}
             {messages.length > 0 && (
               <button
                 type="button"

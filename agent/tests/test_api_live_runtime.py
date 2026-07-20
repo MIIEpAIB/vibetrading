@@ -28,6 +28,7 @@ def _client(tmp_path: Path, monkeypatch) -> TestClient:
     # under tmp_path. get_runtime_root() == Path.home() / ".vibe-trading".
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path), raising=False)
     monkeypatch.setattr(api_server, "_runner_tasks", {}, raising=False)
+    monkeypatch.setattr(api_server, "_runner_objects", {}, raising=False)
     monkeypatch.setattr(api_server, "_runner_factory", None, raising=False)
     return TestClient(api_server.app, client=("127.0.0.1", 50000))
 
@@ -237,6 +238,96 @@ def test_runner_stop_cancels_running_task(tmp_path: Path, monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json() == {"broker": "robinhood", "stopped": True, "was_running": True}
     assert cancelled["value"] is True
+
+
+# --------------------------------------------------------------------------- #
+# Hosted live strategy deployments — FMZ-style托管策略任务
+# --------------------------------------------------------------------------- #
+
+
+def _strategy_store_with_one_record():
+    record = SimpleNamespace(
+        id="dual-ma",
+        name="Dual MA",
+        description="Moving average strategy",
+        strategyDescription="",
+        language="python",
+        category="trend",
+        tags=["trend"],
+        code="class SignalEngine:\n    pass\n",
+        updatedAt="2026-07-01T00:00:00",
+    )
+
+    class _Store:
+        def list_strategies(self, user_id=None):
+            return [record]
+
+    return _Store()
+
+
+def test_live_deployment_start_persists_hosted_strategy_job(tmp_path: Path, monkeypatch) -> None:
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setattr(api_server, "_get_strategy_store", _strategy_store_with_one_record)
+    monkeypatch.setattr(
+        api_server, "_active_mandate_state", lambda broker: _valid_mandate_state(broker)
+    )
+    monkeypatch.setattr(api_server, "_runner_factory", lambda broker: SimpleNamespace(broker=broker))
+
+    async def _noop_drive(runner) -> None:
+        return None
+
+    monkeypatch.setattr(api_server, "_drive_runner", _noop_drive)
+
+    created = client.post(
+        "/live/deployments",
+        json={"strategy_id": "dual-ma", "broker": "robinhood", "interval_seconds": 30},
+    )
+    assert created.status_code == 200
+    deployment_id = created.json()["deployment"]["deployment_id"]
+
+    started = client.post(f"/live/deployments/{deployment_id}/start")
+
+    assert started.status_code == 200
+    body = started.json()
+    assert body["deployment"]["status"] == "running"
+    assert body["runner"]["started"] is True
+
+    jobs_path = tmp_path / ".vibe-trading" / "live" / "runtime" / "jobs.json"
+    jobs = json.loads(jobs_path.read_text(encoding="utf-8"))["jobs"]
+    hosted = [job for job in jobs if job["id"] == f"live-deploy-{deployment_id}"]
+    assert len(hosted) == 1
+    assert hosted[0]["schedule"] == "interval:30000"
+    assert hosted[0]["payload"]["broker"] == "robinhood"
+    assert hosted[0]["payload"]["strategy"]["strategy_id"] == "dual-ma"
+    assert "SignalEngine" in hosted[0]["payload"]["strategy"]["code"]
+
+
+def test_live_deployment_pause_removes_hosted_strategy_job(tmp_path: Path, monkeypatch) -> None:
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setattr(api_server, "_get_strategy_store", _strategy_store_with_one_record)
+    monkeypatch.setattr(
+        api_server, "_active_mandate_state", lambda broker: _valid_mandate_state(broker)
+    )
+    monkeypatch.setattr(api_server, "_runner_factory", lambda broker: SimpleNamespace(broker=broker))
+
+    async def _noop_drive(runner) -> None:
+        return None
+
+    monkeypatch.setattr(api_server, "_drive_runner", _noop_drive)
+
+    deployment_id = client.post(
+        "/live/deployments",
+        json={"strategy_id": "dual-ma", "broker": "robinhood", "interval_seconds": 30},
+    ).json()["deployment"]["deployment_id"]
+    assert client.post(f"/live/deployments/{deployment_id}/start").status_code == 200
+
+    paused = client.post(f"/live/deployments/{deployment_id}/pause")
+
+    assert paused.status_code == 200
+    assert paused.json()["deployment"]["status"] == "paused"
+    jobs_path = tmp_path / ".vibe-trading" / "live" / "runtime" / "jobs.json"
+    jobs = json.loads(jobs_path.read_text(encoding="utf-8"))["jobs"]
+    assert all(job["id"] != f"live-deploy-{deployment_id}" for job in jobs)
 
 
 # --------------------------------------------------------------------------- #

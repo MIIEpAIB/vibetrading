@@ -220,6 +220,30 @@ def test_pin_mandate_prompt_includes_full_mandate() -> None:
     assert BROKER in prompt
 
 
+def test_pin_mandate_prompt_includes_hosted_strategy_snapshot() -> None:
+    mandate = _make_mandate(expires_at=_future_expiry())
+    prompt = _pin_mandate_prompt(
+        BROKER,
+        mandate,
+        _FIXED_NOW,
+        {
+            "deployment_id": "live_abc",
+            "strategy": {
+                "strategy_id": "dual-ma",
+                "name": "Dual MA",
+                "language": "python",
+                "version": "dual-ma:v1",
+                "code": "class SignalEngine:\n    pass\n",
+            },
+        },
+    )
+
+    assert "HOSTED STRATEGY SNAPSHOT" in prompt
+    assert "live_abc" in prompt
+    assert "dual-ma" in prompt
+    assert "class SignalEngine" in prompt
+
+
 # --------------------------------------------------------------------------- #
 # run_once control-flow tests
 # --------------------------------------------------------------------------- #

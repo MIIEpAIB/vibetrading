@@ -24,10 +24,12 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Security, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 from rich.console import Console
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from src.direct_messages import DirectMessageStore
 from src.goal.context import default_goal_criteria
@@ -270,6 +272,26 @@ class CryptoMarketsResponse(BaseModel):
     symbols: List[str]
     aggregate: CryptoMarketAggregateResponse
     rows: List[CryptoMarketRowResponse]
+
+
+class CryptoSymbolOptionResponse(BaseModel):
+    """Tradable crypto pair option for a concrete exchange/product type."""
+
+    symbol: str
+    display: str
+    base: str
+    quote: str
+    market_type: str
+
+
+class CryptoSymbolsResponse(BaseModel):
+    """Exchange/product-specific tradable crypto pair list."""
+
+    status: str
+    source: str
+    exchange: str
+    product_type: str
+    symbols: List[CryptoSymbolOptionResponse]
 
 
 class CryptoKlineBarResponse(BaseModel):
@@ -656,6 +678,25 @@ class SessionResponse(BaseModel):
 class SendMessageRequest(BaseModel):
     """Send chat message: natural-language strategy description."""
     content: str = Field(..., description="Natural language strategy description", min_length=1, max_length=5000)
+
+
+class SaveSessionStrategyRequest(BaseModel):
+    """User-confirmed request to save an agent-generated strategy candidate."""
+
+    name: str = Field(..., min_length=1, max_length=500)
+    description: str = Field("", max_length=5000)
+    strategyDescription: str = Field("", max_length=20000)
+    language: str = Field("python", max_length=32)
+    category: str = Field("trend", max_length=64)
+    tags: List[str] = Field(default_factory=list)
+    code: str = Field(..., min_length=1, max_length=500000)
+    message_id: Optional[str] = Field(None, max_length=128)
+
+
+class SessionStrategyDraftResponse(SaveSessionStrategyRequest):
+    """Draft strategy candidate extracted from a chat session."""
+
+    source_message_id: Optional[str] = Field(None, max_length=128)
 
 
 class MessageResponse(BaseModel):
@@ -1159,6 +1200,37 @@ _SPA_HTML_PATH_REGEX: tuple[re.Pattern[str], ...] = (
     # ``/runs/{id}/pine`` (API only) and ``/runs`` (collection endpoint).
     re.compile(r"^/runs/[^/]+/?$"),
 )
+
+
+class SPAStaticFiles(StaticFiles):
+    """Serve index.html for browser refreshes on client-side routes."""
+
+    async def get_response(self, path: str, scope: Dict[str, Any]):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code != status.HTTP_404_NOT_FOUND:
+                raise
+            return await super().get_response("index.html", scope)
+
+
+def _has_frontend_static_mount(target_app: FastAPI) -> bool:
+    return any(getattr(route, "name", None) == "frontend" for route in target_app.routes)
+
+
+def _mount_frontend_static(target_app: FastAPI, frontend_dist: Path = _FRONTEND_DIST) -> bool:
+    """Mount the built SPA if available.
+
+    Production sometimes imports ``api_server:app`` directly with uvicorn
+    instead of going through ``serve_main``. Mounting at module initialization
+    keeps those entrypoints from returning FastAPI's JSON 404 at ``/``.
+    """
+    if _has_frontend_static_mount(target_app):
+        return True
+    if not (frontend_dist / "index.html").exists():
+        return False
+    target_app.mount("/", SPAStaticFiles(directory=str(frontend_dist), html=True), name="frontend")
+    return True
 
 
 def _is_spa_html_route(path: str) -> bool:
@@ -3334,6 +3406,22 @@ async def get_crypto_markets(
     return get_market_dashboard(limit=limit)
 
 
+@app.get(
+    "/crypto/symbols",
+    response_model=CryptoSymbolsResponse,
+    dependencies=[Depends(require_local_or_auth)],
+)
+async def get_crypto_symbols(
+    exchange: str = Query("binance", pattern="^(okx|binance)$"),
+    product_type: str = Query("spot", pattern="^(spot|usdm_futures)$"),
+    limit: int = Query(200, ge=1, le=1000),
+):
+    """Return tradable pairs for one exchange/product type."""
+    from src.crypto_market import get_exchange_symbols
+
+    return get_exchange_symbols(exchange=exchange, product_type=product_type, limit=limit)
+
+
 def _shadow_user_id(ctx: AuthContext) -> str:
     """Resolve the isolated virtual-account key for the current caller."""
     if ctx.user_id is not None:
@@ -4078,6 +4166,88 @@ def _strategy_or_404(strategy_id: str, *, user_id: int):
     raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} not found")
 
 
+def _strategy_slug(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", (value or "").strip().lower()).strip("-")
+    return (slug or "agent-strategy")[:80]
+
+
+def _unique_strategy_id(store: Any, base_name: str, *, user_id: int) -> str:
+    existing = {str(item.id) for item in store.list_strategies(user_id=int(user_id))}
+    base = _strategy_slug(base_name)
+    if base not in existing:
+        return base
+    for _ in range(100):
+        candidate = f"{base}-{uuid.uuid4().hex[:6]}"
+        if candidate not in existing:
+            return candidate
+    return f"{base}-{uuid.uuid4().hex[:12]}"
+
+
+def _validate_agent_strategy_candidate(payload: SaveSessionStrategyRequest) -> None:
+    code = payload.code.strip()
+    language = payload.language.strip().lower()
+    if not code:
+        raise HTTPException(status_code=400, detail="strategy code is required")
+    if language == "python":
+        _validate_strategy_python_syntax(code)
+        deny_patterns = [
+            r"\bimport\s+os\b",
+            r"\bfrom\s+os\s+import\b",
+            r"\bimport\s+subprocess\b",
+            r"\bfrom\s+subprocess\s+import\b",
+            r"\bos\.system\s*\(",
+            r"\bsubprocess\.",
+            r"\beval\s*\(",
+            r"\bexec\s*\(",
+            r"\bopen\s*\(",
+            r"\b__import__\s*\(",
+        ]
+        for pattern in deny_patterns:
+            if re.search(pattern, code):
+                raise HTTPException(status_code=400, detail="strategy code contains blocked unsafe operations")
+        if "class SignalEngine" not in code and not re.search(r"\bdef\s+generate_signals\s*\(", code):
+            raise HTTPException(status_code=400, detail="Python strategy must define class SignalEngine or def generate_signals(data)")
+    elif language == "javascript":
+        if not code:
+            raise HTTPException(status_code=400, detail="strategy code is required")
+    else:
+        raise HTTPException(status_code=400, detail="agent strategy saving currently supports python or javascript")
+
+
+def _infer_agent_strategy_name(content: str) -> str:
+    heading = re.search(r"^#{1,3}\s+(.+)$", content, flags=re.MULTILINE)
+    if heading:
+        return heading.group(1).strip()[:80]
+    named = re.search(r"(?:strategy|策略)[:：]\s*([^\n]+)", content, flags=re.IGNORECASE)
+    if named:
+        return named.group(1).strip()[:80]
+    return "Agent Strategy"
+
+
+def _extract_agent_strategy_candidate(content: str) -> Optional[dict[str, Any]]:
+    fence_pattern = re.compile(r"```(\w+)?\s*\n([\s\S]*?)```", flags=re.MULTILINE)
+    for fence in fence_pattern.finditer(content):
+        language = (fence.group(1) or "").strip().lower()
+        code = (fence.group(2) or "").strip()
+        if not code:
+            continue
+        is_python = language in {"python", "py"} or (not language and "class SignalEngine" in code)
+        if not is_python:
+            continue
+        if "class SignalEngine" not in code and not re.search(r"\bdef\s+generate_signals\s*\(", code):
+            continue
+        return {
+            "name": _infer_agent_strategy_name(content),
+            "description": "Agent-generated strategy candidate.",
+            "strategyDescription": content.replace(fence.group(0), "").strip()[:10000],
+            "language": "python",
+            "category": "trend",
+            "tags": ["agent"],
+            "code": code,
+        }
+    return None
+
+
 def _normalize_backtest_symbol(symbol: str) -> str:
     normalized = str(symbol or "").replace("/", "-").replace("_", "-").upper().strip()
     if not re.fullmatch(r"[A-Z0-9]+-USDT", normalized):
@@ -4574,6 +4744,78 @@ async def get_session(session_id: str, ctx: AuthContext = Depends(require_auth))
         updated_at=session.updated_at,
         last_attempt_id=session.last_attempt_id,
     )
+
+
+@app.get("/sessions/{session_id}/strategies/draft", response_model=SessionStrategyDraftResponse)
+async def draft_session_strategy(session_id: str, ctx: AuthContext = Depends(require_auth)):
+    """Extract the latest complete strategy candidate from a chat session."""
+    _validate_path_param(session_id, "session_id")
+    svc, _session = _require_user_session(session_id, ctx)
+    messages = svc.get_messages(session_id, limit=1000)
+    for message in reversed(messages):
+        if message.role != "assistant" or not message.content.strip():
+            continue
+        candidate = _extract_agent_strategy_candidate(message.content)
+        if not candidate:
+            continue
+        return SessionStrategyDraftResponse(
+            **candidate,
+            message_id=message.message_id,
+            source_message_id=message.message_id,
+        )
+    raise HTTPException(
+        status_code=404,
+        detail="No complete Python strategy candidate found in this session. Ask the agent to output the final strategy as a Python code block with class SignalEngine or def generate_signals(data).",
+    )
+
+
+@app.post(
+    "/sessions/{session_id}/strategies",
+    response_model=StrategyLibraryItem,
+    status_code=status.HTTP_201_CREATED,
+)
+async def save_session_strategy(
+    session_id: str,
+    req: SaveSessionStrategyRequest,
+    ctx: AuthContext = Depends(require_auth),
+):
+    """Save a user-confirmed agent-generated strategy candidate to the personal strategy library."""
+    _validate_path_param(session_id, "session_id")
+    _require_user_session(session_id, ctx)
+    _validate_agent_strategy_candidate(req)
+
+    from src.strategies import StrategyRecord
+
+    user_id = int(ctx.user_id) if ctx.user_id is not None else 0
+    store = _get_strategy_store()
+    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    strategy_id = _unique_strategy_id(store, req.name, user_id=user_id)
+    source_lines = [
+        req.strategyDescription.strip(),
+        "",
+        "Source: agent-generated candidate saved by explicit user action.",
+        f"Session: {session_id}",
+    ]
+    if req.message_id:
+        source_lines.append(f"Message: {req.message_id}")
+    payload = {
+        "id": strategy_id,
+        "name": req.name.strip(),
+        "description": req.description.strip(),
+        "strategyDescription": "\n".join(line for line in source_lines if line is not None).strip(),
+        "language": req.language.strip().lower(),
+        "category": req.category.strip() or "trend",
+        "status": "draft",
+        "tags": [str(tag).strip() for tag in req.tags if str(tag).strip()][:8],
+        "code": req.code.strip(),
+        "createdAt": now,
+        "updatedAt": now,
+    }
+    try:
+        record = StrategyRecord.from_payload(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return store.upsert_strategy(record, user_id=user_id).to_dict()
 
 
 @app.post(
@@ -5903,6 +6145,7 @@ async def live_authorize_endpoint(payload: LiveAuthorizeRequest):
 # ``run_loop`` may be sync (long-blocking) or async; both are supported.
 
 _runner_tasks: Dict[str, "asyncio.Task[Any]"] = {}
+_runner_objects: Dict[str, Any] = {}
 _runner_factory: Optional[Any] = None
 
 
@@ -6065,27 +6308,131 @@ async def _drive_runner(runner: Any) -> None:
         await asyncio.get_running_loop().run_in_executor(None, lambda: result)
 
 
-@app.post("/live/runner/start", dependencies=[Depends(require_operator_auth)])
-async def start_runner_endpoint(payload: LiveRunnerControlRequest):
-    """Start the persistent live runner for a broker (SPEC §7.5).
+def _live_deployments_path() -> Path:
+    from src.live.paths import live_root
 
-    Refuses to start unless a committed, unexpired mandate exists and the kill
-    switch is clear — the runner trades autonomously, so it must not start into a
-    dead/halted channel. Idempotent: a request for an already-running broker
-    returns ``already_running`` without spawning a second task.
-    """
+    return live_root() / "deployments.json"
+
+
+def _load_live_deployments() -> list[dict[str, Any]]:
+    path = _live_deployments_path()
+    if not path.exists():
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        logger.warning("failed to read live deployments store", exc_info=True)
+        return []
+    items = raw.get("deployments") if isinstance(raw, dict) else raw
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _save_live_deployments(deployments: list[dict[str, Any]]) -> None:
+    path = _live_deployments_path()
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    payload = json.dumps({"deployments": deployments}, ensure_ascii=False, indent=2)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(payload, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _find_live_deployment(deployment_id: str, *, user_id: int | None = None) -> dict[str, Any] | None:
+    for item in _load_live_deployments():
+        if str(item.get("deployment_id")) != deployment_id:
+            continue
+        if user_id is not None and int(item.get("user_id", 0)) != int(user_id):
+            continue
+        return item
+    return None
+
+
+def _replace_live_deployment(updated: dict[str, Any]) -> dict[str, Any]:
+    deployments = _load_live_deployments()
+    found = False
+    for index, item in enumerate(deployments):
+        if str(item.get("deployment_id")) == str(updated.get("deployment_id")):
+            deployments[index] = updated
+            found = True
+            break
+    if not found:
+        deployments.append(updated)
+    _save_live_deployments(deployments)
+    return updated
+
+
+def _live_strategy_snapshot(record: Any) -> dict[str, Any]:
+    return {
+        "strategy_id": str(record.id),
+        "name": str(record.name),
+        "description": str(getattr(record, "description", "") or getattr(record, "strategyDescription", "") or ""),
+        "language": str(getattr(record, "language", "python") or "python"),
+        "category": str(getattr(record, "category", "") or ""),
+        "tags": list(getattr(record, "tags", []) or []),
+        "code": str(getattr(record, "code", "") or ""),
+        "source_updated_at": str(getattr(record, "updatedAt", "") or ""),
+        "version": f"{record.id}:{getattr(record, 'updatedAt', '')}",
+    }
+
+
+def _live_job_for_deployment(deployment: dict[str, Any]):
+    from src.live.runtime.scheduler import Job
+
+    interval_ms = int(deployment.get("interval_seconds") or 60) * 1000
+    return Job(
+        id=f"live-deploy-{deployment['deployment_id']}",
+        next_run_at=int(time.time() * 1000) + interval_ms,
+        schedule=f"interval:{interval_ms}",
+        payload={
+            "broker": deployment["broker"],
+            "deployment_id": deployment["deployment_id"],
+            "trigger": "hosted_strategy",
+            "strategy": deployment.get("strategy_snapshot") or {},
+            "limits": deployment.get("limits") or {},
+        },
+    )
+
+
+def _upsert_live_job(job: Any) -> None:
+    from src.live.runtime.jobstore import JobStore
+
+    store = JobStore()
+    try:
+        jobs = store.load()
+    except Exception:
+        logger.warning("live job store unavailable; replacing with hosted job set", exc_info=True)
+        jobs = []
+    jobs = [item for item in jobs if item.id != job.id]
+    jobs.append(job)
+    store.save(jobs)
+
+
+def _remove_live_job(job_id: str) -> bool:
+    from src.live.runtime.jobstore import JobStore
+
+    store = JobStore()
+    try:
+        jobs = store.load()
+    except Exception:
+        logger.warning("live job store unavailable; cannot remove %s", job_id, exc_info=True)
+        return False
+    kept = [item for item in jobs if item.id != job_id]
+    if len(kept) == len(jobs):
+        return False
+    store.save(kept)
+    return True
+
+
+async def _ensure_live_runner_started(broker: str, *, session_id: str | None = None) -> dict[str, Any]:
     from src.live.halt import halt_flag_set
-
-    broker = payload.broker.strip().lower()
-    if not broker:
-        raise HTTPException(status_code=400, detail="broker must not be blank")
     from src.trading.service import broker_supports_live_runner
 
+    broker = broker.strip().lower()
+    if not broker:
+        raise HTTPException(status_code=400, detail="broker must not be blank")
     if not broker_supports_live_runner(broker):
-        raise HTTPException(
-            status_code=400,
-            detail=f"live runner is not supported for {broker}",
-        )
+        raise HTTPException(status_code=400, detail=f"live runner is not supported for {broker}")
 
     existing = _runner_tasks.get(broker)
     if existing is not None and not existing.done():
@@ -6108,16 +6455,111 @@ async def start_runner_endpoint(payload: LiveRunnerControlRequest):
 
     task = asyncio.ensure_future(_drive_runner(runner))
     _runner_tasks[broker] = task
-    task.add_done_callback(
-        lambda t, b=broker: _runner_tasks.pop(b, None) if _runner_tasks.get(b) is t else None
-    )
+    _runner_objects[broker] = runner
 
-    _emit_live_event(
-        payload.session_id,
-        "live.action",
-        {"kind": "runner_started", "broker": broker},
-    )
+    def _clear_runner(t: Any, b: str = broker) -> None:
+        if _runner_tasks.get(b) is t:
+            _runner_tasks.pop(b, None)
+            _runner_objects.pop(b, None)
+
+    task.add_done_callback(_clear_runner)
+    _emit_live_event(session_id, "live.action", {"kind": "runner_started", "broker": broker})
     return {"broker": broker, "started": True, "already_running": False}
+
+
+@app.post("/live/deployments", response_model=LiveDeploymentActionResponse, dependencies=[Depends(require_operator_auth)])
+async def create_live_deployment(payload: LiveDeploymentCreateRequest, ctx: AuthContext = Depends(require_auth)):
+    """Create a hosted live strategy deployment without starting it."""
+    broker = payload.broker.strip().lower()
+    if not broker:
+        raise HTTPException(status_code=400, detail="broker must not be blank")
+    user_id = _paper_user_id(ctx)
+    record = _strategy_or_404(payload.strategy_id, user_id=user_id)
+    if not str(getattr(record, "code", "") or "").strip():
+        raise HTTPException(status_code=400, detail="strategy code is required for live deployment")
+    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    deployment = {
+        "deployment_id": f"live_{uuid.uuid4().hex[:12]}",
+        "user_id": user_id,
+        "status": "draft",
+        "broker": broker,
+        "strategy_id": str(record.id),
+        "strategy_snapshot": _live_strategy_snapshot(record),
+        "interval_seconds": int(payload.interval_seconds),
+        "limits": dict(payload.limits or {}),
+        "session_id": payload.session_id or "",
+        "created_at": now,
+        "updated_at": now,
+        "started_at": None,
+        "paused_at": None,
+        "archived_at": None,
+    }
+    _replace_live_deployment(deployment)
+    return {"deployment": deployment, "runner": {}}
+
+
+@app.get("/live/deployments", response_model=LiveDeploymentListResponse, dependencies=[Depends(require_operator_auth)])
+async def list_live_deployments(ctx: AuthContext = Depends(require_auth)):
+    """List hosted live strategy deployments for the caller."""
+    user_id = _paper_user_id(ctx)
+    return {
+        "deployments": [
+            item for item in _load_live_deployments() if int(item.get("user_id", 0)) == user_id
+        ]
+    }
+
+
+@app.post("/live/deployments/{deployment_id}/start", response_model=LiveDeploymentActionResponse, dependencies=[Depends(require_operator_auth)])
+async def start_live_deployment(deployment_id: str, ctx: AuthContext = Depends(require_auth)):
+    """Start a hosted strategy by registering its durable runner job."""
+    deployment = _find_live_deployment(deployment_id, user_id=_paper_user_id(ctx))
+    if deployment is None:
+        raise HTTPException(status_code=404, detail="live deployment not found")
+    if deployment.get("status") == "archived":
+        raise HTTPException(status_code=400, detail="archived live deployments cannot be started")
+
+    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    deployment = {**deployment, "status": "running", "updated_at": now, "started_at": deployment.get("started_at") or now, "paused_at": None}
+    runner_state = await _ensure_live_runner_started(str(deployment["broker"]), session_id=deployment.get("session_id") or None)
+    job = _live_job_for_deployment(deployment)
+    _upsert_live_job(job)
+    runner_obj = _runner_objects.get(str(deployment["broker"]))
+    if runner_obj is not None and hasattr(runner_obj, "add_job"):
+        runner_obj.add_job(job)
+    _replace_live_deployment(deployment)
+    return {"deployment": deployment, "runner": runner_state}
+
+
+@app.post("/live/deployments/{deployment_id}/pause", response_model=LiveDeploymentActionResponse, dependencies=[Depends(require_operator_auth)])
+async def pause_live_deployment(deployment_id: str, ctx: AuthContext = Depends(require_auth)):
+    """Pause a hosted strategy by removing its durable runner job."""
+    deployment = _find_live_deployment(deployment_id, user_id=_paper_user_id(ctx))
+    if deployment is None:
+        raise HTTPException(status_code=404, detail="live deployment not found")
+    if deployment.get("status") != "running":
+        raise HTTPException(status_code=400, detail="only running live deployments can be paused")
+
+    job_id = f"live-deploy-{deployment_id}"
+    removed = _remove_live_job(job_id)
+    runner_obj = _runner_objects.get(str(deployment["broker"]))
+    if runner_obj is not None and hasattr(runner_obj, "remove_job"):
+        removed = bool(runner_obj.remove_job(job_id)) or removed
+    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    deployment = {**deployment, "status": "paused", "updated_at": now, "paused_at": now}
+    _replace_live_deployment(deployment)
+    return {"deployment": deployment, "runner": {"broker": deployment["broker"], "job_removed": removed}}
+
+
+@app.post("/live/runner/start", dependencies=[Depends(require_operator_auth)])
+async def start_runner_endpoint(payload: LiveRunnerControlRequest):
+    """Start the persistent live runner for a broker (SPEC §7.5).
+
+    Refuses to start unless a committed, unexpired mandate exists and the kill
+    switch is clear — the runner trades autonomously, so it must not start into a
+    dead/halted channel. Idempotent: a request for an already-running broker
+    returns ``already_running`` without spawning a second task.
+    """
+    return await _ensure_live_runner_started(payload.broker, session_id=payload.session_id)
 
 
 @app.post("/live/runner/stop", dependencies=[Depends(require_operator_auth)])
@@ -6140,6 +6582,7 @@ async def stop_runner_endpoint(payload: LiveRunnerControlRequest):
         )
 
     task = _runner_tasks.pop(broker, None)
+    _runner_objects.pop(broker, None)
     if task is None or task.done():
         return {"broker": broker, "stopped": False, "was_running": False}
 
@@ -6158,6 +6601,7 @@ async def stop_runner_endpoint(payload: LiveRunnerControlRequest):
 
 from src.api.alpha_routes import register_alpha_routes  # noqa: E402
 register_alpha_routes(app)
+_mount_frontend_static(app)
 
 
 # ============================================================================
@@ -6169,19 +6613,6 @@ def serve_main(argv: list[str] | None = None) -> int:
     import argparse
     import subprocess
     import uvicorn
-    from fastapi.staticfiles import StaticFiles
-    from starlette.exceptions import HTTPException as StarletteHTTPException
-
-    class SPAStaticFiles(StaticFiles):
-        """Serve index.html for browser refreshes on client-side routes."""
-
-        async def get_response(self, path: str, scope: Dict[str, Any]):
-            try:
-                return await super().get_response(path, scope)
-            except StarletteHTTPException as exc:
-                if exc.status_code != status.HTTP_404_NOT_FOUND:
-                    raise
-                return await super().get_response("index.html", scope)
 
     parser = argparse.ArgumentParser(description="Vibe-Trading Server")
     parser.add_argument("--port", type=int, default=8000, help="Listen port (default 8000)")
@@ -6208,8 +6639,7 @@ def serve_main(argv: list[str] | None = None) -> int:
         print("[dev] Frontend: http://localhost:5173")
         print(f"[dev] API: http://localhost:{args.port}")
     elif frontend_dist.exists():
-        if not any(route.path == "/" for route in app.routes):
-            app.mount("/", SPAStaticFiles(directory=str(frontend_dist), html=True), name="frontend")
+        _mount_frontend_static(app, frontend_dist)
         print(f"[prod] Frontend served from {frontend_dist}")
     else:
         print(f"[warn] No frontend build found at {frontend_dist}")

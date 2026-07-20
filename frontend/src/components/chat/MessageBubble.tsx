@@ -1,8 +1,10 @@
 import { memo, useState, useCallback } from "react";
-import { User, XCircle, RefreshCw, Copy, Check } from "lucide-react";
+import { User, XCircle, RefreshCw, Copy, Check, BookmarkPlus, Loader2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
+import { toast } from "sonner";
+import { api } from "@/lib/api";
 import { formatTimestamp } from "@/lib/formatters";
 import type { AgentMessage } from "@/types/agent";
 import { AgentAvatar } from "./AgentAvatar";
@@ -48,11 +50,75 @@ function getRetryHint(content: string, t: Translate): string {
 interface Props {
   msg: AgentMessage;
   onRetry?: (msg: AgentMessage) => void;
+  sessionId?: string | null;
 }
 
-export const MessageBubble = memo(function MessageBubble({ msg, onRetry }: Props) {
-  const { t } = useTranslation();
+interface StrategyCandidate {
+  name: string;
+  description: string;
+  strategyDescription: string;
+  language: "python" | "javascript";
+  category: string;
+  tags: string[];
+  code: string;
+}
+
+function inferStrategyName(content: string): string {
+  const heading = content.match(/^#{1,3}\s+(.+)$/m)?.[1]?.trim();
+  if (heading) return heading.slice(0, 80);
+  const named = content.match(/(?:strategy|策略)[:：]\s*([^\n]+)/i)?.[1]?.trim();
+  if (named) return named.slice(0, 80);
+  return "Agent Strategy";
+}
+
+function extractStrategyCandidate(content: string): StrategyCandidate | null {
+  const fencePattern = /```(\w+)?\s*\n([\s\S]*?)```/g;
+  const fences = [...content.matchAll(fencePattern)];
+  for (const fence of fences) {
+    const language = (fence[1] || "").trim().toLowerCase();
+    const code = (fence[2] || "").trim();
+    if (!code) continue;
+    if (language === "python" || language === "py" || (!language && code.includes("class SignalEngine"))) {
+      if (!code.includes("class SignalEngine") && !/\bdef\s+generate_signals\s*\(/.test(code)) continue;
+      return {
+        name: inferStrategyName(content),
+        description: "Agent-generated strategy candidate.",
+        strategyDescription: content.replace(fence[0], "").trim().slice(0, 10000),
+        language: "python",
+        category: "trend",
+        tags: ["agent"],
+        code,
+      };
+    }
+  }
+  return null;
+}
+
+export const MessageBubble = memo(function MessageBubble({ msg, onRetry, sessionId }: Props) {
+  const { t, language } = useTranslation();
   const ts = msg.timestamp ? formatTimestamp(msg.timestamp) : null;
+  const [savingStrategy, setSavingStrategy] = useState(false);
+  const [savedStrategyId, setSavedStrategyId] = useState<string | null>(null);
+  const strategyCandidate = msg.type === "answer" ? extractStrategyCandidate(msg.content) : null;
+  const saveLabel = language === "zh-CN" ? "保存到个人策略" : "Save to Strategies";
+  const savedLabel = language === "zh-CN" ? "已保存" : "Saved";
+
+  const saveStrategy = useCallback(async () => {
+    if (!sessionId || !strategyCandidate) return;
+    setSavingStrategy(true);
+    try {
+      const saved = await api.saveSessionStrategy(sessionId, {
+        ...strategyCandidate,
+        message_id: msg.id,
+      });
+      setSavedStrategyId(saved.id);
+      toast.success(language === "zh-CN" ? `已保存策略：${saved.name}` : `Saved strategy: ${saved.name}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : language === "zh-CN" ? "保存策略失败" : "Failed to save strategy");
+    } finally {
+      setSavingStrategy(false);
+    }
+  }, [language, msg.id, sessionId, strategyCandidate]);
 
   if (msg.type === "user") {
     return (
@@ -77,6 +143,19 @@ export const MessageBubble = memo(function MessageBubble({ msg, onRetry }: Props
           <div className="prose prose-sm dark:prose-invert max-w-none leading-relaxed prose-p:text-zinc-200 prose-li:text-zinc-200 prose-strong:text-white prose-a:text-orange-300 prose-code:text-emerald-200 prose-pre:border prose-pre:border-white/10 prose-pre:bg-black/35 prose-table:border prose-table:border-white/10 prose-th:border-white/10 prose-th:bg-white/[0.06] prose-th:px-3 prose-th:py-1.5 prose-th:text-left prose-th:text-xs prose-th:font-medium prose-td:border-white/10 prose-td:px-3 prose-td:py-1.5 prose-td:text-xs prose-hr:hidden">
             <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}>{msg.content}</ReactMarkdown>
           </div>
+          {strategyCandidate && sessionId && (
+            <div className="mt-3 flex justify-end">
+              <button
+                type="button"
+                onClick={saveStrategy}
+                disabled={savingStrategy || Boolean(savedStrategyId)}
+                className="inline-flex items-center gap-2 rounded-md border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-zinc-200 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {savingStrategy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <BookmarkPlus className="h-3.5 w-3.5" />}
+                {savedStrategyId ? savedLabel : saveLabel}
+              </button>
+            </div>
+          )}
           {ts && <span className="mt-1 text-[9px] text-zinc-600 opacity-0 transition-opacity group-hover:opacity-100">{ts}</span>}
         </div>
       </div>

@@ -11,6 +11,7 @@ correct API response.
 from __future__ import annotations
 
 import pytest
+from fastapi import FastAPI
 
 
 class TestSpaHtmlRouteMatcher:
@@ -48,3 +49,22 @@ class TestSpaHtmlRouteMatcher:
         from api_server import _is_spa_html_route
 
         assert _is_spa_html_route(path) is False, path
+
+
+def test_frontend_static_mount_serves_root_for_direct_app_import(tmp_path) -> None:
+    from api_server import _mount_frontend_static
+
+    frontend_dist = tmp_path / "dist"
+    frontend_dist.mkdir()
+    (frontend_dist / "index.html").write_text("<!doctype html><title>SPA</title>", encoding="utf-8")
+
+    app = FastAPI()
+
+    @app.get("/health")
+    def health():
+        return {"status": "healthy"}
+
+    assert _mount_frontend_static(app, frontend_dist) is True
+    route_names = [getattr(route, "name", None) for route in app.routes]
+    assert "frontend" in route_names
+    assert route_names.index("health") < route_names.index("frontend")

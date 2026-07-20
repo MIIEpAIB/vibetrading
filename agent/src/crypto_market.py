@@ -174,6 +174,28 @@ def get_market_dashboard(limit: int = 13) -> dict[str, Any]:
     }
 
 
+def get_exchange_symbols(exchange: str = "binance", product_type: str = "spot", limit: int = 200) -> dict[str, Any]:
+    clean_exchange = (exchange or "binance").strip().lower()
+    clean_product = (product_type or "spot").strip().lower()
+    clean_limit = max(1, min(int(limit), 1000))
+    source = "ccxt"
+    symbols: list[dict[str, str]] = []
+    try:
+        markets = _exchange_for_symbols(clean_exchange, clean_product).load_markets()
+        symbols = _symbols_from_markets(markets.values(), clean_product, clean_limit)
+        if not symbols:
+            raise ValueError("exchange returned no matching symbols")
+    except Exception as exc:  # noqa: BLE001 - UI should still have safe choices
+        source = f"unavailable: {type(exc).__name__}"
+    return {
+        "status": "ok",
+        "source": source,
+        "exchange": clean_exchange,
+        "product_type": clean_product,
+        "symbols": symbols,
+    }
+
+
 def get_klines(symbol: str = "BTC/USDT", timeframe: str = "1h", limit: int = 180) -> dict[str, Any]:
     clean_symbol = normalize_symbol(symbol)
     clean_timeframe = normalize_timeframe(timeframe)
@@ -228,6 +250,71 @@ def _exchange():
             "options": {"defaultType": "spot"},
         }
     )
+
+
+def _exchange_for_symbols(exchange_id: str, product_type: str):
+    try:
+        import ccxt  # type: ignore
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("ccxt is not installed") from exc
+
+    exchange_cls = getattr(ccxt, exchange_id, None)
+    if exchange_cls is None:
+        raise ValueError(f"unsupported exchange: {exchange_id}")
+    default_type = "future" if product_type == "usdm_futures" and exchange_id == "binance" else "swap" if product_type == "usdm_futures" else "spot"
+    return exchange_cls(
+        {
+            "enableRateLimit": True,
+            "timeout": int(float(os.getenv("CRYPTO_DASHBOARD_TIMEOUT_S", "15")) * 1000),
+            "options": {"defaultType": default_type},
+        }
+    )
+
+
+def _symbols_from_markets(markets: Iterable[Mapping[str, Any]], product_type: str, limit: int) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    seen: set[str] = set()
+    preferred_quotes = {"USDT", "USDC", "USD"}
+    for market in markets:
+        if not market.get("active", True):
+            continue
+        quote = str(market.get("quote") or "").upper()
+        if quote not in preferred_quotes:
+            continue
+        is_swap = bool(market.get("swap"))
+        is_future = bool(market.get("future"))
+        is_spot = bool(market.get("spot"))
+        if product_type == "spot" and not is_spot:
+            continue
+        if product_type == "usdm_futures" and not (is_swap or is_future):
+            continue
+        symbol = str(market.get("symbol") or "").strip()
+        if not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        rows.append(_symbol_option(symbol, product_type, market))
+    rows.sort(key=lambda item: (_symbol_rank(item["display"]), item["display"]))
+    return rows[:limit]
+
+
+def _symbol_option(symbol: str, product_type: str, market: Mapping[str, Any] | None = None) -> dict[str, str]:
+    display = symbol.strip().upper()
+    base = str((market or {}).get("base") or display.split("/", 1)[0]).upper()
+    quote_raw = str((market or {}).get("quote") or (display.split("/", 1)[1].split(":", 1)[0] if "/" in display else "USDT"))
+    quote = quote_raw.upper()
+    return {
+        "symbol": display.replace("/", "-").split(":", 1)[0],
+        "display": display,
+        "base": base,
+        "quote": quote,
+        "market_type": product_type,
+    }
+
+
+def _symbol_rank(symbol: str) -> int:
+    base = symbol.split("/", 1)[0].upper()
+    priority = ["BTC", "ETH", "BNB", "SOL", "XRP", "DOGE", "ADA", "TRX", "AVAX", "LINK", "TON", "DOT"]
+    return priority.index(base) if base in priority else len(priority)
 
 
 def _row_from_ticker(rank: int, symbol: str, ticker: Mapping[str, Any]) -> CryptoMarketRow:

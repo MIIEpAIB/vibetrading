@@ -788,7 +788,12 @@ class LiveRunner:
             broker = str(payload.get("broker") or "").strip().lower()
             if broker:
                 return broker == self.broker
-        return str(getattr(job, "id", "")).startswith(f"{self.broker}-")
+        job_id = str(getattr(job, "id", ""))
+        if job_id.startswith("live-deploy-"):
+            return False
+        if job_id.startswith(f"{self.broker}-"):
+            return True
+        return not payload
 
     def _jobs_from_triggers(self, now: datetime) -> list[Job]:
         """Convert the injected triggers (R3) into schedulable watch jobs (R1).

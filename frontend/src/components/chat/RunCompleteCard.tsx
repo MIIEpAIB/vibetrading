@@ -1,8 +1,8 @@
 import { memo, useEffect, useState, useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { BarChart3, Code2, FileText, Loader2, WalletCards } from "lucide-react";
+import { BarChart3, BookmarkPlus, Code2, FileText, Loader2, WalletCards } from "lucide-react";
 import { toast } from "sonner";
-import { api } from "@/lib/api";
+import { api, type RunData, type StrategyLibraryItem } from "@/lib/api";
 import { buildShadowImportDraft, saveShadowImportDraft } from "@/lib/shadowImport";
 import { AgentAvatar } from "./AgentAvatar";
 import { MetricsCard } from "./MetricsCard";
@@ -15,13 +15,60 @@ interface Props {
   msg: AgentMessage;
 }
 
+function strategySlug(value: string): string {
+  return (value || "agent-run-strategy")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 72) || "agent-run-strategy";
+}
+
+function strategyName(runId: string, runData: RunData | null): string {
+  const prompt = runData?.prompt?.trim();
+  if (!prompt) return `Agent run ${runId.slice(0, 8)}`;
+  return prompt.split(/\n+/)[0].replace(/\s+/g, " ").slice(0, 80);
+}
+
+function strategyNotes(runId: string, runData: RunData | null): string {
+  const lines = [
+    runData?.prompt?.trim() || "",
+    "",
+    "Source: agent backtest report imported by explicit user action.",
+    `Run: ${runId}`,
+  ];
+  if (runData?.status) lines.push(`Status: ${runData.status}`);
+  if (runData?.run_stage) lines.push(`Stage: ${runData.run_stage}`);
+  return lines.filter((line, index) => index === 1 || line.trim()).join("\n").trim();
+}
+
+function buildStrategyFromRun(runId: string, runData: RunData | null, code: string): StrategyLibraryItem {
+  const now = new Date().toISOString();
+  const name = strategyName(runId, runData);
+  return {
+    id: `${strategySlug(name)}-${runId.slice(0, 8)}`,
+    name,
+    description: "Imported from an agent backtest report.",
+    strategyDescription: strategyNotes(runId, runData),
+    language: "python",
+    category: "trend",
+    status: "draft",
+    tags: ["agent", "backtest"],
+    code,
+    createdAt: now,
+    updatedAt: now,
+    shareStatus: "none",
+  };
+}
+
 export const RunCompleteCard = memo(function RunCompleteCard({ msg }: Props) {
-  const { t } = useTranslation();
+  const { t, language } = useTranslation();
   const navigate = useNavigate();
   const [curve, setCurve] = useState(msg.equityCurve);
   const [pineCode, setPineCode] = useState<string | null>(null);
   const [pineLoading, setPineLoading] = useState(false);
   const [importLoading, setImportLoading] = useState(false);
+  const [libraryImportLoading, setLibraryImportLoading] = useState(false);
+  const [libraryImportedId, setLibraryImportedId] = useState<string | null>(null);
   const [showPine, setShowPine] = useState(false);
   const [pineChecked, setPineChecked] = useState(false);
   const [pineExists, setPineExists] = useState(false);
@@ -89,6 +136,30 @@ export const RunCompleteCard = memo(function RunCompleteCard({ msg }: Props) {
     }
   }, [msg.metrics, msg.runId, msg.shadowId, navigate, t]);
 
+  const handleLibraryImport = useCallback(async () => {
+    if (!msg.runId || libraryImportLoading) return;
+    setLibraryImportLoading(true);
+    try {
+      const [runData, codeFiles] = await Promise.all([
+        api.getRun(msg.runId).catch(() => null),
+        api.getRunCode(msg.runId),
+      ]);
+      const code = codeFiles["signal_engine.py"] || Object.values(codeFiles)[0] || "";
+      if (!code.trim()) {
+        toast.error(language === "zh-CN" ? "这个报告没有可导入的策略代码" : "This report has no importable strategy code");
+        return;
+      }
+      const strategy = buildStrategyFromRun(msg.runId, runData, code);
+      const saved = await api.upsertStrategy(strategy);
+      setLibraryImportedId(saved.id);
+      toast.success(language === "zh-CN" ? `已导入策略库：${saved.name}` : `Imported to strategy library: ${saved.name}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : language === "zh-CN" ? "导入策略库失败" : "Failed to import to strategy library");
+    } finally {
+      setLibraryImportLoading(false);
+    }
+  }, [language, libraryImportLoading, msg.runId]);
+
   return (
     <div className="flex gap-3">
       <AgentAvatar />
@@ -108,6 +179,18 @@ export const RunCompleteCard = memo(function RunCompleteCard({ msg }: Props) {
               <BarChart3 className="h-3.5 w-3.5" />
               {t("chat.fullReport")} →
             </Link>
+          )}
+          {msg.runId && (
+            <button
+              type="button"
+              onClick={handleLibraryImport}
+              disabled={libraryImportLoading || Boolean(libraryImportedId)}
+              className="text-sm text-orange-600 dark:text-orange-400 hover:underline inline-flex items-center gap-1.5 font-medium disabled:opacity-50"
+              title={language === "zh-CN" ? "导入到我的策略库" : "Import to my strategy library"}
+            >
+              {libraryImportLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <BookmarkPlus className="h-3.5 w-3.5" />}
+              {libraryImportedId ? (language === "zh-CN" ? "已导入策略库" : "Imported to Library") : (language === "zh-CN" ? "导入策略库" : "Import to Library")}
+            </button>
           )}
           {pineExists && (
             <button

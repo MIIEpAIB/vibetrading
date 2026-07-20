@@ -142,6 +142,13 @@ export const api = {
   deleteSession: (sid: string) => request<{ status: string }>(`/sessions/${sid}`, { method: "DELETE" }),
   renameSession: (sid: string, title: string) => request<{ status: string }>(`/sessions/${sid}`, { method: "PATCH", body: JSON.stringify({ title }) }),
   sendMessage: (sid: string, content: string) => request<{ message_id: string; attempt_id: string }>(`/sessions/${sid}/messages`, { method: "POST", body: JSON.stringify({ content }) }),
+  draftSessionStrategy: (sid: string) =>
+    request<SessionStrategyDraftResponse>(`/sessions/${encodeURIComponent(sid)}/strategies/draft`),
+  saveSessionStrategy: (sid: string, body: SaveSessionStrategyRequest) =>
+    request<StrategyLibraryItem>(`/sessions/${encodeURIComponent(sid)}/strategies`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   cancelSession: (sid: string) => request<{ status: string }>(`/sessions/${sid}/cancel`, { method: "POST" }),
   getSessionMessages: (sid: string) => request<MessageItem[]>(`/sessions/${sid}/messages`),
   createGoal: (sid: string, body: CreateGoalRequest) =>
@@ -325,6 +332,21 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ broker }),
     }, operatorAuthHeaders),
+  createLiveDeployment: (body: CreateLiveDeploymentRequest) =>
+    request<LiveDeploymentActionResponse>("/live/deployments", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }, operatorAuthHeaders),
+  listLiveDeployments: () =>
+    request<LiveDeploymentListResponse>("/live/deployments", undefined, operatorAuthHeaders),
+  startLiveDeployment: (deploymentId: string) =>
+    request<LiveDeploymentActionResponse>(`/live/deployments/${encodeURIComponent(deploymentId)}/start`, {
+      method: "POST",
+    }, operatorAuthHeaders),
+  pauseLiveDeployment: (deploymentId: string) =>
+    request<LiveDeploymentActionResponse>(`/live/deployments/${encodeURIComponent(deploymentId)}/pause`, {
+      method: "POST",
+    }, operatorAuthHeaders),
   // Start/stop the persistent runner (SPEC §7.5). Privileged surface actions, not agent tools.
   startLiveRunner: (broker: string) =>
     request<LiveRunnerResponse>("/live/runner/start", {
@@ -338,6 +360,10 @@ export const api = {
     }, operatorAuthHeaders),
   getCryptoMarkets: (limit = 13) =>
     request<CryptoMarketsResponse>(`/crypto/markets?limit=${encodeURIComponent(String(limit))}`),
+  getCryptoSymbols: (exchange: "okx" | "binance", productType: "spot" | "usdm_futures", limit = 500) => {
+    const q = new URLSearchParams({ exchange, product_type: productType, limit: String(limit) });
+    return request<CryptoSymbolsResponse>(`/crypto/symbols?${q.toString()}`);
+  },
   getCryptoKlines: (symbol: string, timeframe = "1h", limit = 180) => {
     const q = new URLSearchParams({ symbol, timeframe, limit: String(limit) });
     return request<CryptoKlinesResponse>(`/crypto/klines?${q.toString()}`);
@@ -570,6 +596,22 @@ export interface CryptoMarketsResponse {
   symbols: string[];
   aggregate: CryptoMarketAggregate;
   rows: CryptoMarketRow[];
+}
+
+export interface CryptoSymbolOption {
+  symbol: string;
+  display: string;
+  base: string;
+  quote: string;
+  market_type: string;
+}
+
+export interface CryptoSymbolsResponse {
+  status: string;
+  source: string;
+  exchange: "okx" | "binance";
+  product_type: "spot" | "usdm_futures";
+  symbols: CryptoSymbolOption[];
 }
 
 export interface CryptoStorageStatus {
@@ -876,6 +918,21 @@ export interface ExchangeApiKeyBinding {
 
 export interface ExchangeApiKeyBindingListResponse {
   bindings: ExchangeApiKeyBinding[];
+}
+
+export interface SaveSessionStrategyRequest {
+  name: string;
+  description?: string;
+  strategyDescription?: string;
+  language?: "python" | "javascript";
+  category?: string;
+  tags?: string[];
+  code: string;
+  message_id?: string;
+}
+
+export interface SessionStrategyDraftResponse extends SaveSessionStrategyRequest {
+  source_message_id?: string;
 }
 
 export interface CreateExchangeApiKeyBindingRequest {
@@ -1609,6 +1666,47 @@ export interface LiveBrokerStatus {
 export interface LiveStatus {
   brokers: LiveBrokerStatus[];
   global_halted: boolean;
+}
+
+export interface CreateLiveDeploymentRequest {
+  strategy_id: string;
+  broker: string;
+  interval_seconds: number;
+  session_id?: string;
+  limits?: Record<string, unknown>;
+}
+
+export interface LiveDeployment {
+  deployment_id: string;
+  user_id?: number;
+  status: "draft" | "running" | "paused" | "archived" | string;
+  broker: string;
+  strategy_id: string;
+  strategy_snapshot?: {
+    strategy_id?: string;
+    name?: string;
+    language?: string;
+    category?: string;
+    version?: string;
+    source_updated_at?: string;
+  };
+  interval_seconds?: number;
+  limits?: Record<string, unknown>;
+  session_id?: string;
+  created_at?: string;
+  updated_at?: string;
+  started_at?: string | null;
+  paused_at?: string | null;
+  archived_at?: string | null;
+}
+
+export interface LiveDeploymentActionResponse {
+  deployment: LiveDeployment;
+  runner?: Record<string, unknown>;
+}
+
+export interface LiveDeploymentListResponse {
+  deployments: LiveDeployment[];
 }
 
 /** Response of `POST /live/runner/start|stop`. */
