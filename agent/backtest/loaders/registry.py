@@ -31,6 +31,7 @@ _registered = False
 # Keep in sync with ``_loader_modules`` below — the regression test
 # ``test_valid_sources_covers_all_registered_loaders`` enforces full coverage.
 VALID_SOURCES: set[str] = {
+    "quantaxis",
     "tushare",
     "okx",
     "yfinance",
@@ -64,6 +65,7 @@ def _ensure_registered() -> None:
     _registered = True
 
     _loader_modules = [
+        "backtest.loaders.quantaxis_loader",
         "backtest.loaders.tushare",
         "backtest.loaders.okx",
         "backtest.loaders.yfinance_loader",
@@ -85,11 +87,11 @@ def _ensure_registered() -> None:
 # ---------------------------------------------------------------------------
 
 FALLBACK_CHAINS: dict[str, list[str]] = {
-    "a_share":   ["tushare", "mootdx", "akshare"],
+    "a_share":   ["quantaxis", "tushare", "mootdx", "akshare"],
     "us_equity": ["yfinance", "akshare"],
     "hk_equity": ["yfinance", "futu", "akshare"],
-    "crypto":    ["okx", "ccxt", "yfinance"],
-    "futures":   ["tushare", "akshare"],
+    "crypto":    ["okx", "ccxt", "quantaxis", "yfinance"],
+    "futures":   ["quantaxis", "tushare", "akshare"],
     "fund":      ["tushare", "akshare"],
     "macro":     ["akshare", "tushare"],
     "forex":     ["akshare", "yfinance"],

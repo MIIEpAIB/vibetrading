@@ -204,6 +204,7 @@ def test_registry_lists_mootdx_in_a_share_chain() -> None:
     assert "mootdx" in LOADER_REGISTRY
     chain = FALLBACK_CHAINS["a_share"]
     assert "mootdx" in chain
-    # Order: tushare (auth) > mootdx (TCP, no auth) > akshare (HTTP scrape).
+    # Order: quantaxis local store > tushare (auth) > mootdx (TCP, no auth) > akshare (HTTP scrape).
     assert chain.index("mootdx") < chain.index("akshare")
+    assert chain.index("quantaxis") < chain.index("tushare")
     assert chain.index("tushare") < chain.index("mootdx")

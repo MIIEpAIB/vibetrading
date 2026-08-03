@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_MAX_ROWS = 250
 
 _SOURCE_PATTERNS = [
-    (re.compile(r"^\d{6}\.(SZ|SH|BJ)$", re.I), "tushare"),
+    (re.compile(r"^\d{6}\.(SZ|SH|BJ)$", re.I), "quantaxis"),
     (re.compile(r"^[A-Z]+\.US$", re.I), "yfinance"),
     (re.compile(r"^\d{3,5}\.HK$", re.I), "yfinance"),
     (re.compile(r"^[A-Z]+-USDT$", re.I), "okx"),
@@ -27,7 +27,7 @@ def detect_source(code: str) -> str:
     for pattern, source in _SOURCE_PATTERNS:
         if pattern.match(code):
             return source
-    return "tushare"
+    return "quantaxis"
 
 
 def get_loader(source: str):
