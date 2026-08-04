@@ -148,7 +148,22 @@ function toChartTime(timestamp: number): UTCTimestamp {
   return Math.floor(timestamp / 1000) as UTCTimestamp;
 }
 
-function buildFallbackBars(symbol: string, limit = 180): CryptoKlineBar[] {
+function alignBarsToReferencePrice(bars: CryptoKlineBar[], referencePrice?: number): CryptoKlineBar[] {
+  if (!bars.length || !Number.isFinite(referencePrice) || !referencePrice || referencePrice <= 0) return bars;
+  const last = bars[bars.length - 1]?.close;
+  if (!Number.isFinite(last) || last <= 0) return bars;
+  const factor = referencePrice / last;
+  if (!Number.isFinite(factor) || factor <= 0 || Math.abs(factor - 1) < 0.000001) return bars;
+  return bars.map((bar) => ({
+    ...bar,
+    open: bar.open * factor,
+    high: bar.high * factor,
+    low: bar.low * factor,
+    close: bar.close * factor,
+  }));
+}
+
+function buildFallbackBars(symbol: string, referencePrice?: number, limit = 180): CryptoKlineBar[] {
   const row = FALLBACK_ROWS.find((item) => item.symbol === symbol) ?? FALLBACK_ROWS[0];
   const now = Date.now();
   
@@ -192,7 +207,7 @@ function buildFallbackBars(symbol: string, limit = 180): CryptoKlineBar[] {
     });
   }
   
-  return bars;
+  return alignBarsToReferencePrice(bars, referencePrice ?? row.price);
 }
 
 
@@ -399,10 +414,15 @@ export function Home() {
     setKlineLoading(true);
     api.getCryptoKlines(selectedSymbol, timeframe, 180)
       .then((payload) => {
-        if (!cancelled) setBars(payload.bars);
+        if (!cancelled) {
+          const nextBars = payload.source.trim().toLowerCase().startsWith("fallback")
+            ? alignBarsToReferencePrice(payload.bars, selectedRow?.price)
+            : payload.bars;
+          setBars(nextBars);
+        }
       })
       .catch(() => {
-        if (!cancelled) setBars(buildFallbackBars(selectedSymbol));
+        if (!cancelled) setBars(buildFallbackBars(selectedSymbol, selectedRow?.price));
       })
       .finally(() => {
         if (!cancelled) setKlineLoading(false);
@@ -410,7 +430,7 @@ export function Home() {
     return () => {
       cancelled = true;
     };
-  }, [selectedSymbol, timeframe]);
+  }, [selectedRow?.price, selectedSymbol, timeframe]);
 
   const filteredRows = useMemo(() => {
     const clean = query.trim().toLowerCase();

@@ -8,7 +8,6 @@ import {
   MessageSquare,
   ShoppingBag,
   Sparkles,
-  Star,
   TrendingUp,
   Users,
   type LucideIcon,
@@ -17,7 +16,7 @@ import { LanguageToggle } from "@/components/layout/LanguageToggle";
 import { useAuthStore } from "@/stores/auth";
 import { cn } from "@/lib/utils";
 
-type PublicPageId = "market" | "masters" | "library" | "community" | "api-docs";
+type PublicPageId = "market" | "library" | "community" | "api-docs";
 
 interface PublicPageConfig {
   id: PublicPageId;
@@ -49,25 +48,6 @@ const PUBLIC_PAGES: PublicPageConfig[] = [
       { title: "BTC 趋势跟随组合", desc: "均线、波动率过滤、分批止盈与最大回撤保护。", meta: "适合新手 · 现货优先", icon: TrendingUp },
       { title: "ETH 震荡网格模板", desc: "网格间距、仓位上限、极端行情暂停规则完整。", meta: "影子盘推荐", icon: Compass },
       { title: "多币种动量轮动", desc: "BTC/ETH/SOL/BNB 横截面排序，周频再平衡。", meta: "进阶策略", icon: Sparkles },
-    ],
-  },
-  {
-    id: "masters",
-    path: "/masters",
-    label: "围观大神",
-    title: "围观大神",
-    subtitle: "观察高质量交易者如何拆解行情、验证策略、控制风险和复盘决策。",
-    icon: Star,
-    accent: "from-amber-500 to-sky-500",
-    stats: [
-      { label: "公开组合", value: "36" },
-      { label: "本周复盘", value: "91" },
-      { label: "风险样例", value: "24" },
-    ],
-    highlights: [
-      { title: "趋势派：只做高胜率突破", desc: "从入场等待、假突破过滤到移动止损的完整流程。", meta: "公开复盘", icon: TrendingUp },
-      { title: "网格派：先活下来再盈利", desc: "展示仓位梯度、价格带失效和暂停规则。", meta: "风险教学", icon: Compass },
-      { title: "量化派：先证伪再上线", desc: "从 Alpha 假设、样本外验证到影子盘观察清单。", meta: "量化实践", icon: Code2 },
     ],
   },
   {

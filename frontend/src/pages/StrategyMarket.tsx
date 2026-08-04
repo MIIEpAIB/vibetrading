@@ -192,57 +192,54 @@ function MarketCard({
   );
 
   return (
-    <article className="flex min-h-[13rem] flex-col rounded-lg border bg-card p-4">
-      <div className="flex items-start justify-between gap-3">
+    <article className="rounded-md border bg-card px-4 py-3">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_12rem_15rem] lg:items-center">
         <div className="min-w-0">
-          <h3 className="text-base font-semibold leading-6 text-foreground">
-            <Link to={`/strategy/${encodeURIComponent(getStrategyRouteId(item.id))}`} className="transition hover:text-primary">
-              {item.name}
-            </Link>
-          </h3>
-          <p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground">{item.summary}</p>
-        </div>
-        <div className="flex shrink-0 flex-col items-end gap-2">
-          {price}
-          {ownTag}
-        </div>
-      </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="min-w-0 text-base font-semibold leading-6 text-foreground">
+              <Link to={`/strategy/${encodeURIComponent(getStrategyRouteId(item.id))}`} className="transition hover:text-primary">
+                {item.name}
+              </Link>
+            </h3>
+            {price}
+            {ownTag}
+          </div>
+          <p className="mt-1 line-clamp-2 text-sm leading-6 text-muted-foreground">{item.summary}</p>
 
-      <div className="mt-4 flex flex-wrap gap-1.5">
-        {item.tags.map((tag) => (
-          <span key={tag} className="rounded border bg-background px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-            {tag}
-          </span>
-        ))}
-      </div>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {item.tags.map((tag) => (
+              <span key={tag} className="rounded border bg-background px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                {tag}
+              </span>
+            ))}
+          </div>
 
-      {(item.description || item.usage?.length || item.riskNotes?.length) && (
-        <div className="mt-3 space-y-2 rounded-md border bg-background px-3 py-2 text-xs leading-5 text-muted-foreground">
-          {item.description && <p>{item.description}</p>}
+          {item.id === "professional-grid-trading" && (
+            <p className="mt-2 text-xs leading-5 text-muted-foreground">
+              {language === "zh-CN"
+                ? "内置区间网格、仓位层级、波动暂停、止损清仓和模拟盘信号。"
+                : "Includes range grid, tiered sizing, volatility pause, stop-loss flattening, and paper signal output."}
+            </p>
+          )}
+        </div>
+
+        <div className="min-w-0 space-y-1 text-xs leading-5 text-muted-foreground">
+          {item.description && <p className="line-clamp-2">{item.description}</p>}
           {item.usage?.length ? (
-            <div>
-              <div className="font-semibold text-foreground">{language === "zh-CN" ? "使用方式" : "Usage"}</div>
-              <p>{item.usage.join(" · ")}</p>
-            </div>
+            <p className="line-clamp-2">
+              <span className="font-semibold text-foreground">{language === "zh-CN" ? "使用方式" : "Usage"}: </span>
+              {item.usage.join(" · ")}
+            </p>
           ) : null}
           {item.riskNotes?.length ? (
-            <div>
-              <div className="font-semibold text-foreground">{language === "zh-CN" ? "风控要点" : "Risk notes"}</div>
-              <p>{item.riskNotes.join(" · ")}</p>
-            </div>
+            <p className="line-clamp-2">
+              <span className="font-semibold text-foreground">{language === "zh-CN" ? "风控要点" : "Risk"}: </span>
+              {item.riskNotes.join(" · ")}
+            </p>
           ) : null}
         </div>
-      )}
 
-      {item.id === "professional-grid-trading" && (
-        <div className="mt-3 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs leading-5 text-muted-foreground">
-          {language === "zh-CN"
-            ? "内置区间网格、仓位层级、波动暂停、止损清仓和模拟盘信号。"
-            : "Includes range grid, tiered sizing, volatility pause, stop-loss flattening, and paper signal output."}
-        </div>
-      )}
-
-      <div className="mt-auto grid grid-cols-2 gap-2 pt-4">
+        <div className="grid grid-cols-2 gap-2 lg:justify-self-end">
         <button
           type="button"
           onClick={onSecondaryAction}
@@ -260,6 +257,7 @@ function MarketCard({
           {kind === "built-in" ? <Star className="h-4 w-4 shrink-0" /> : kind === "community" ? <Library className="h-4 w-4 shrink-0" /> : <ShoppingBag className="h-4 w-4 shrink-0" />}
           <span className="truncate">{actionLabel}</span>
         </button>
+        </div>
       </div>
     </article>
   );
@@ -299,7 +297,7 @@ function MarketSectionBlock({
           </div>
           <p className="text-sm leading-6 text-muted-foreground">{headerDescription}</p>
         </div>
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="mt-4 space-y-2">
           {section.items.map((item) => {
             const ownedRecord = ownedStrategies.find((strategy) => strategy.id === item.id || strategy.id === `owned_${item.id}`);
             const ownedTag = ownedRecord ? getMarketOwnershipTag(ownedRecord.tags ?? []) : null;
@@ -309,7 +307,7 @@ function MarketSectionBlock({
               <MarketCard
                 key={item.id}
                 item={item}
-                  kind={section.kind}
+                kind={section.kind}
                 ownedLabel={ownedLabel}
                 actionLabel={
                   isOwned

@@ -1,19 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import {
   Activity,
-  AlertTriangle,
   Bot,
   ChevronDown,
   ClipboardList,
+  Crosshair,
+  Grid2x2,
+  Layers3,
+  Maximize2,
+  MousePointer2,
+  PencilLine,
   Play,
   RefreshCw,
   RotateCcw,
+  Ruler,
   Search,
   Shield,
-  Sparkles,
   Square,
+  Type,
   Wallet,
   X,
   type LucideIcon,
@@ -23,10 +29,12 @@ import {
   ColorType,
   createChart,
   HistogramSeries,
+  LineSeries,
   type CandlestickData,
   type IChartApi,
   type ISeriesApi,
   type HistogramData,
+  type LineData,
   type UTCTimestamp,
 } from "lightweight-charts";
 import {
@@ -148,7 +156,6 @@ const COPY = {
     pnlPercent: "P/L %",
     runLog: "Run log",
     shadowOrder: "Shadow order",
-    warning: "Virtual orders only. Live crypto trading still requires a committed mandate, connector checks, confirm-mode, expiry, and kill switch.",
     markets: "Markets",
     search: "Search",
     chart: "Chart",
@@ -217,8 +224,6 @@ const COPY = {
     source: "Source",
     noOrders: "No orders yet.",
     cancel: "Cancel",
-    liveReview: "Live readiness review",
-    strategyCockpit: "Strategy cockpit",
     validationQuantity: "Amount must be positive.",
     validationLimitPrice: "Limit price must be positive.",
     validationMarketPrice: "Market price must be positive.",
@@ -310,7 +315,6 @@ const COPY = {
     pnlPercent: "盈亏率",
     runLog: "运行日志",
     shadowOrder: "影子订单",
-    warning: "这里仅产生虚拟订单。加密实盘仍必须经过授权、连接器检查、先确认模式、自动过期和熔断规则。",
     markets: "币种",
     search: "搜索",
     chart: "K线",
@@ -379,8 +383,6 @@ const COPY = {
     source: "来源",
     noOrders: "暂无订单。",
     cancel: "撤单",
-    liveReview: "实盘就绪审查",
-    strategyCockpit: "策略驾驶舱",
     validationQuantity: "数量/金额必须大于 0。",
     validationLimitPrice: "委托价格必须大于 0。",
     validationMarketPrice: "行情价格必须大于 0。",
@@ -803,26 +805,53 @@ function intervalMs(timeframe: Timeframe): number {
   return 60 * 60_000;
 }
 
-function buildFallbackBars(symbol: ShadowSymbol, timeframe: Timeframe, limit = 180): CryptoKlineBar[] {
+function makeDeterministicRandom(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state * 1664525 + 1013904223) >>> 0;
+    return state / 0x100000000;
+  };
+}
+
+function buildFallbackBars(symbol: ShadowSymbol, timeframe: Timeframe, referencePrice?: number, limit = 180): CryptoKlineBar[] {
   const start = DEFAULT_MARKET_PRICES[symbol];
   const meta = MARKET_META[symbol];
   const step = intervalMs(timeframe);
   const now = Date.now();
-  const seed = meta.base.split("").reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  const seed = meta.base.split("").reduce((sum, char) => sum * 31 + char.charCodeAt(0), timeframe.length * 97);
+  const random = makeDeterministicRandom(seed);
   let close = start * (1 - meta.change / 100);
+  let trend = (random() - 0.5) * 0.0015;
+  let volatility = 0.003 + random() * 0.0025;
+  let volumeBaseline = meta.volume / 24;
   const bars: CryptoKlineBar[] = [];
 
   for (let index = 0; index < limit; index += 1) {
     const timestamp = now - (limit - index - 1) * step;
     const open = close;
-    const move = Math.sin((index + seed) * 0.23) * 0.004 + Math.cos((index + seed) * 0.07) * 0.002;
-    close = Math.max(open * (1 + move), 0.000001);
-    const high = Math.max(open, close) * (1 + 0.002 + Math.abs(Math.sin(index + seed)) * 0.002);
-    const low = Math.min(open, close) * (1 - 0.002 - Math.abs(Math.cos(index + seed)) * 0.002);
-    const volume = (meta.volume / 24) * (0.7 + Math.abs(Math.sin(index * 0.31 + seed)) * 0.7);
+
+    if (index % (18 + Math.floor(random() * 18)) === 0) {
+      trend = trend * 0.35 + (random() - 0.5) * 0.003;
+    }
+    volatility = Math.min(0.012, Math.max(0.0015, volatility * 0.88 + random() * 0.0022));
+
+    const shock = random() < 0.055 ? (random() - 0.5) * volatility * 8 : 0;
+    const bodyMove = trend + (random() - 0.5) * volatility + shock;
+    close = Math.max(open * (1 + bodyMove), 0.000001);
+
+    const bodyRange = Math.abs(close - open) / open;
+    const wickScale = volatility * (0.35 + random() * 1.25) + bodyRange * 0.5;
+    const high = Math.max(open, close) * (1 + wickScale * (0.45 + random()));
+    const low = Math.min(open, close) * (1 - wickScale * (0.45 + random()));
+
+    const participation = 0.65 + random() * 0.7 + Math.min(1.4, Math.abs(bodyMove) / Math.max(volatility, 0.000001)) * 0.28;
+    const spike = random() < 0.075 ? 1.4 + random() * 1.8 : 1;
+    volumeBaseline = volumeBaseline * (0.82 + random() * 0.36);
+    const volume = Math.max(1, volumeBaseline * participation * spike);
+
     bars.push({ time: new Date(timestamp).toISOString(), timestamp, symbol: toApiSymbol(symbol), open, high, low, close, volume });
   }
-  return bars;
+  return alignBarsToReferencePrice(bars, referencePrice ?? start);
 }
 
 function marketStats(bars: CryptoKlineBar[], fallbackPrice: number, fallbackChange: number) {
@@ -963,8 +992,44 @@ function buildOrderBook(price: number, symbol: ShadowSymbol): { asks: BookLevel[
   return { asks: asks.reverse(), bids };
 }
 
+function calculateMovingAverage(bars: CryptoKlineBar[], period: number): LineData<UTCTimestamp>[] {
+  if (period <= 1) {
+    return bars
+      .slice()
+      .sort((a, b) => a.timestamp - b.timestamp)
+      .map((bar) => ({ time: toChartTime(bar.timestamp), value: bar.close }));
+  }
+
+  const orderedBars = [...bars].sort((a, b) => a.timestamp - b.timestamp);
+  const result: LineData<UTCTimestamp>[] = [];
+  const window: number[] = [];
+  let sum = 0;
+
+  for (const bar of orderedBars) {
+    window.push(bar.close);
+    sum += bar.close;
+    if (window.length > period) {
+      sum -= window.shift() ?? 0;
+    }
+    if (window.length === period) {
+      result.push({ time: toChartTime(bar.timestamp), value: sum / period });
+    }
+  }
+
+  return result;
+}
+
+function formatCompactNumber(value: number): string {
+  if (!Number.isFinite(value) || value === 0) return "0";
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)}B`;
+  if (abs >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
+  if (abs >= 1_000) return `${(value / 1_000).toFixed(2)}K`;
+  if (abs >= 1) return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  return value.toPrecision(4);
+}
+
 export function ShadowTrading() {
-  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { language } = useTranslation();
   const c = language === "zh-CN" ? COPY.zh : COPY.en;
@@ -1005,20 +1070,16 @@ export function ShadowTrading() {
   const orders = useMemo(() => account?.orders ?? [], [account]);
   const pendingOrders = useMemo(() => orders.filter((order) => order.status === "PENDING" || order.status === "PARTIALLY_FILLED"), [orders]);
   const filledOrders = useMemo(() => orders.filter((order) => order.status === "FILLED"), [orders]);
-  const rejectedOrders = useMemo(() => orders.filter((order) => order.status === "REJECTED"), [orders]);
   const availableUsdt = wallets.find((wallet) => wallet.asset_name === "USDT")?.balance ?? 0;
   const frozenUsdt = wallets.find((wallet) => wallet.asset_name === "USDT")?.frozen ?? 0;
   const selectedBaseAsset = baseAsset(symbol);
   const selectedBaseBalance = wallets.find((wallet) => wallet.asset_name === selectedBaseAsset)?.balance ?? 0;
   const selectedLiveRow = liveMarketRows[symbol];
+  const klineFallbackReferencePrice = selectedLiveRow?.price ?? livePrices[symbol];
   const rawMarketPrice = livePrices[symbol] ?? account?.market_prices[symbol] ?? DEFAULT_MARKET_PRICES[symbol];
-  const alignedBars = useMemo(
-    () => alignBarsToReferencePrice(bars, rawMarketPrice),
-    [bars, rawMarketPrice],
-  );
   const chartStats = useMemo(
-    () => marketStats(alignedBars, rawMarketPrice, MARKET_META[symbol].change),
-    [alignedBars, rawMarketPrice, symbol],
+    () => marketStats(bars, rawMarketPrice, MARKET_META[symbol].change),
+    [bars, rawMarketPrice, symbol],
   );
 
   useEffect(() => {
@@ -1152,6 +1213,7 @@ export function ShadowTrading() {
       change,
     };
   }, [chartStats, selectedLiveRow]);
+  const latestBar = bars.length ? bars[bars.length - 1] : undefined;
   const displayPrice = stats.last || rawMarketPrice;
   const orderPrice = orderMode === "LIMIT" ? Number(limitPrice) : displayPrice;
   const ticketAmount = resolveTicketAmount(quantity, quantityUnit, orderPrice);
@@ -1277,10 +1339,10 @@ export function ShadowTrading() {
     setKlineLoading(true);
     api.getCryptoKlines(toApiSymbol(symbol), timeframe, 180)
       .then((payload) => {
-        if (!cancelled) setBars(payload.bars.length ? payload.bars : buildFallbackBars(symbol, timeframe));
+        if (!cancelled) setBars(payload.bars.length ? payload.bars : buildFallbackBars(symbol, timeframe, klineFallbackReferencePrice));
       })
       .catch(() => {
-        if (!cancelled) setBars(buildFallbackBars(symbol, timeframe));
+        if (!cancelled) setBars(buildFallbackBars(symbol, timeframe, klineFallbackReferencePrice));
       })
       .finally(() => {
         if (!cancelled) setKlineLoading(false);
@@ -1288,7 +1350,7 @@ export function ShadowTrading() {
     return () => {
       cancelled = true;
     };
-  }, [symbol, timeframe]);
+  }, [klineFallbackReferencePrice, symbol, timeframe]);
 
   useEffect(() => {
     if (!displayPrice) return;
@@ -1535,27 +1597,6 @@ export function ShadowTrading() {
     }
   };
 
-  const askLiveReadiness = () => {
-    const prompt = language === "zh-CN"
-      ? [
-        "请审查我的影子模拟盘是否已具备加密实盘试点条件。",
-        `当前虚拟交易对：${symbol}。`,
-        `已成交订单：${filledOrders.length}；挂单：${pendingOrders.length}；被拒订单：${rejectedOrders.length}。`,
-        `影子成本模型：taker 手续费 ${(TAKER_FEE_RATE * 100).toFixed(2)}%，滑点 ${(SLIPPAGE_RATE * 100).toFixed(2)}%。`,
-        "判断是否适合进入 OKX/Binance 现货保守试点。若适合，请给出授权草案：先确认模式、交易对数量、单笔上限、每日亏损上限、过期时间和熔断规则。若不适合，请列出缺失的影子证据。不要下单。",
-      ].join("\n")
-      : [
-        "Review my shadow-trading account for crypto live-readiness.",
-        `Current virtual symbol focus: ${symbol}.`,
-        `Filled orders: ${filledOrders.length}; pending orders: ${pendingOrders.length}; rejected orders: ${rejectedOrders.length}.`,
-        `Estimated shadow cost model: taker fee ${(TAKER_FEE_RATE * 100).toFixed(2)}%, slippage ${(SLIPPAGE_RATE * 100).toFixed(2)}%.`,
-        "Decide whether this is ready for an OKX/Binance spot pilot. If yes, propose a conservative mandate with confirm-mode first, max symbols, max order size, max daily loss, expiry, and kill-switch rules. If not, list the missing shadow evidence. Do not place orders.",
-      ].join("\n");
-    const promptKey = `shadow_live_review_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-    window.sessionStorage.setItem(promptKey, prompt);
-    navigate(`/agent?promptKey=${encodeURIComponent(promptKey)}&auto=1`);
-  };
-
   return (
     <main className="min-h-full bg-[#07090c] text-zinc-100">
       <div className="mx-auto flex max-w-[1800px] flex-col gap-3 p-3">
@@ -1612,8 +1653,6 @@ export function ShadowTrading() {
           <Metric icon={Activity} label={c.feeModel} value={`${((TAKER_FEE_RATE + SLIPPAGE_RATE) * 100).toFixed(2)}%`} />
         </section>
 
-        <SafetyBar copy={c} onReview={askLiveReadiness} />
-
         <section className="grid gap-3 xl:grid-cols-[250px_minmax(0,1fr)_280px_360px] xl:items-start">
           <MarketList
             copy={c}
@@ -1624,30 +1663,16 @@ export function ShadowTrading() {
             onSelect={setSymbol}
           />
 
-          <section className="min-w-0 rounded border border-zinc-800 bg-[#0d1015]">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 px-3 py-2">
-              <div className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
-                {c.chart}
-                {klineLoading ? <RefreshCw className="h-3.5 w-3.5 animate-spin text-zinc-500" /> : null}
-              </div>
-              <div className="flex rounded border border-zinc-800 bg-[#07090c] p-1">
-                {TIMEFRAMES.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => setTimeframe(item.id)}
-                    className={cn(
-                      "h-7 rounded px-2.5 text-xs font-medium transition",
-                      timeframe === item.id ? "bg-zinc-700 text-white" : "text-zinc-500 hover:text-zinc-100",
-                    )}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <KlinePanel symbol={symbol} bars={alignedBars} height={560} />
-          </section>
+          <ChartWorkspace
+            copy={c}
+            symbol={symbol}
+            bars={bars}
+            latestBar={latestBar}
+            stats={stats}
+            loading={klineLoading}
+            timeframe={timeframe}
+            onTimeframeChange={setTimeframe}
+          />
 
           <aside className="xl:-mt-2">
             <OrderBookPanel
@@ -1830,34 +1855,6 @@ function Metric({ icon: Icon, label, value }: { icon: LucideIcon; label: string;
   );
 }
 
-function SafetyBar({ copy, onReview }: { copy: ShadowCopy; onReview: () => void }) {
-  return (
-    <div className="flex flex-col gap-3 rounded border border-amber-500/25 bg-amber-500/10 p-3 text-xs text-amber-100/80 sm:flex-row sm:items-center sm:justify-between">
-      <div className="flex gap-2 leading-5">
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
-        <span>{copy.warning}</span>
-      </div>
-      <div className="flex shrink-0 flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={onReview}
-          className="inline-flex h-8 items-center gap-2 rounded bg-orange-500 px-3 text-xs font-medium text-white transition hover:bg-orange-400"
-        >
-          <Sparkles className="h-3.5 w-3.5" />
-          {copy.liveReview}
-        </button>
-        <Link
-          to="/cockpit"
-          className="inline-flex h-8 items-center gap-2 rounded border border-zinc-700 bg-[#0d1015] px-3 text-xs font-medium text-zinc-300 transition hover:bg-zinc-800"
-        >
-          <Shield className="h-3.5 w-3.5" />
-          {copy.strategyCockpit}
-        </Link>
-      </div>
-    </div>
-  );
-}
-
 function MarketList({
   copy,
   rows,
@@ -1918,11 +1915,170 @@ function MarketList({
   );
 }
 
-function KlinePanel({ symbol, bars, height }: { symbol: ShadowSymbol; bars: CryptoKlineBar[]; height: number }) {
+function ChartWorkspace({
+  copy,
+  symbol,
+  bars,
+  latestBar,
+  stats,
+  loading,
+  timeframe,
+  onTimeframeChange,
+}: {
+  copy: ShadowCopy;
+  symbol: ShadowSymbol;
+  bars: CryptoKlineBar[];
+  latestBar?: CryptoKlineBar;
+  stats: { last: number; open: number; high: number; low: number; volume: number; change: number };
+  loading: boolean;
+  timeframe: Timeframe;
+  onTimeframeChange: (value: Timeframe) => void;
+}) {
+  const [showMovingAverages, setShowMovingAverages] = useState(true);
+  const [compactMode, setCompactMode] = useState(false);
+  const [expandedMode, setExpandedMode] = useState(false);
+  const changeTone = stats.change >= 0 ? "text-emerald-400" : "text-red-400";
+  const panelHeight = expandedMode ? 640 : 560;
+
+  return (
+    <section className="min-w-0 overflow-hidden rounded border border-zinc-800 bg-[#0d1015]">
+      <div className="flex flex-col gap-3 border-b border-zinc-800 px-4 py-3 xl:flex-row xl:items-center xl:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-semibold text-zinc-100">{symbol.replace("_", "/")}</span>
+            <span className={cn("font-mono text-sm font-semibold", changeTone)}>{formatMoney(stats.last)}</span>
+            <span className={cn("text-xs font-medium", changeTone)}>{formatPercent(stats.change)}</span>
+            <span className="text-xs text-zinc-500">{copy.chart}</span>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-zinc-500">
+            <span>O {formatMoney(stats.open)}</span>
+            <span>H {formatMoney(stats.high)}</span>
+            <span>L {formatMoney(stats.low)}</span>
+            <span>C {formatMoney(stats.last)}</span>
+            <span>V {formatCompactNumber(stats.volume)}</span>
+            {latestBar && <span>{new Date(latestBar.timestamp).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</span>}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex rounded border border-zinc-800 bg-[#07090c] p-1">
+            {TIMEFRAMES.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => onTimeframeChange(item.id)}
+                className={cn(
+                  "h-7 rounded px-2.5 text-xs font-medium transition",
+                  timeframe === item.id ? "bg-zinc-700 text-white" : "text-zinc-500 hover:text-zinc-100",
+                )}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowMovingAverages((value) => !value)}
+            className={cn(
+              "inline-flex h-8 items-center gap-1.5 rounded border px-3 text-xs font-medium transition",
+              showMovingAverages ? "border-sky-500/30 bg-sky-500/10 text-sky-300" : "border-zinc-700 bg-[#07090c] text-zinc-500",
+            )}
+          >
+            <Layers3 className="h-3.5 w-3.5" />
+            MA
+          </button>
+          <button
+            type="button"
+            onClick={() => setCompactMode((value) => !value)}
+            className={cn(
+              "inline-flex h-8 items-center gap-1.5 rounded border px-3 text-xs font-medium transition",
+              compactMode ? "border-sky-500/30 bg-sky-500/10 text-sky-300" : "border-zinc-700 bg-[#07090c] text-zinc-500",
+            )}
+          >
+            <Grid2x2 className="h-3.5 w-3.5" />
+            Grid
+          </button>
+          <button
+            type="button"
+            onClick={() => setExpandedMode((value) => !value)}
+            className={cn(
+              "inline-flex h-8 items-center gap-1.5 rounded border px-3 text-xs font-medium transition",
+              expandedMode ? "border-sky-500/30 bg-sky-500/10 text-sky-300" : "border-zinc-700 bg-[#07090c] text-zinc-500",
+            )}
+          >
+            <Maximize2 className="h-3.5 w-3.5" />
+            Fit
+          </button>
+          <span className="inline-flex h-8 items-center rounded border border-zinc-800 bg-[#07090c] px-3 text-xs text-zinc-500">
+            {loading ? "syncing" : "live"}
+          </span>
+        </div>
+      </div>
+
+      <div className={cn("grid bg-[#0b0f14]", compactMode ? "xl:grid-cols-[44px_minmax(0,1fr)]" : "xl:grid-cols-[44px_minmax(0,1fr)_210px]")}>
+        <div className="hidden flex-col items-stretch gap-1 border-r border-zinc-800 bg-[#090d12] px-1 py-2 xl:flex">
+          {[
+            ["Move", MousePointer2],
+            ["Crosshair", Crosshair],
+            ["Line", PencilLine],
+            ["Measure", Ruler],
+            ["Text", Type],
+          ].map(([label, Icon], index) => (
+            <button
+              key={label as string}
+              type="button"
+              className={cn(
+                "flex h-8 items-center justify-center rounded border transition",
+                index === 0 ? "border-sky-500/30 bg-sky-500/10 text-sky-300" : "border-transparent text-zinc-500 hover:border-zinc-700 hover:bg-zinc-900 hover:text-zinc-200",
+              )}
+              aria-label={label as string}
+              title={label as string}
+            >
+              <Icon className="h-4 w-4" />
+            </button>
+          ))}
+        </div>
+
+        <div className="min-w-0 border-r border-zinc-800">
+          <KlinePanel symbol={symbol} bars={bars} height={panelHeight} showMovingAverages={showMovingAverages} />
+        </div>
+
+        {!compactMode && (
+          <div className="hidden flex-col border-l border-zinc-800 bg-[#090d12] xl:flex">
+            <div className="border-b border-zinc-800 px-3 py-2 text-xs font-semibold text-zinc-100">Market overview</div>
+            <div className="grid gap-2 p-3">
+              <ChartStat label="24h change" value={formatPercent(stats.change)} tone={stats.change >= 0 ? "green" : "red"} />
+              <ChartStat label="24h high" value={formatMoney(stats.high)} />
+              <ChartStat label="24h low" value={formatMoney(stats.low)} />
+              <ChartStat label="24h volume" value={formatCompactNumber(stats.volume)} />
+              <ChartStat label="Open" value={formatMoney(stats.open)} />
+              <ChartStat label="Close" value={formatMoney(stats.last)} />
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function KlinePanel({
+  symbol,
+  bars,
+  height,
+  showMovingAverages,
+}: {
+  symbol: ShadowSymbol;
+  bars: CryptoKlineBar[];
+  height: number;
+  showMovingAverages: boolean;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const ma7SeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const ma25SeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const ma99SeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
 
   useEffect(() => {
     if (!ref.current) return;
@@ -1932,42 +2088,53 @@ function KlinePanel({ symbol, bars, height }: { symbol: ShadowSymbol; bars: Cryp
         height,
         layout: {
           background: { type: ColorType.Solid, color: "transparent" },
-          textColor: "#a1a1aa",
+          textColor: "#94a3b8",
           fontSize: 11,
         },
         grid: {
-          vertLines: { color: "rgba(63,63,70,0.18)" },
-          horzLines: { color: "rgba(63,63,70,0.28)" },
+          vertLines: { color: "rgba(63,63,70,0.12)" },
+          horzLines: { color: "rgba(63,63,70,0.22)" },
         },
         rightPriceScale: {
-          borderColor: "#27272a",
+          borderColor: "#1f2937",
           scaleMargins: { top: 0.06, bottom: 0.28 },
         },
         timeScale: {
-          borderColor: "#27272a",
+          borderColor: "#1f2937",
           timeVisible: true,
           secondsVisible: false,
           rightOffset: 8,
-          barSpacing: 7,
+          barSpacing: 8,
         },
         crosshair: {
           mode: 0,
-          vertLine: { color: "rgba(251,146,60,0.5)", width: 1, style: 3, labelBackgroundColor: "#f97316" },
-          horzLine: { color: "rgba(251,146,60,0.5)", width: 1, style: 3, labelBackgroundColor: "#f97316" },
+          vertLine: { color: "rgba(59,130,246,0.45)", width: 1, style: 3, labelBackgroundColor: "#2563eb" },
+          horzLine: { color: "rgba(59,130,246,0.45)", width: 1, style: 3, labelBackgroundColor: "#2563eb" },
         },
         localization: {
           priceFormatter: (price: number) => formatMoney(price),
         },
+        handleScroll: {
+          mouseWheel: true,
+          pressedMouseMove: true,
+          horzTouchDrag: true,
+          vertTouchDrag: true,
+        },
+        handleScale: {
+          axisPressedMouseMove: true,
+          mouseWheel: true,
+          pinch: true,
+        },
       });
 
       const candleSeries = chart.addSeries(CandlestickSeries, {
-        upColor: "#10b981",
+        upColor: "#22c55e",
         downColor: "#ef4444",
-        borderUpColor: "#10b981",
+        borderUpColor: "#22c55e",
         borderDownColor: "#ef4444",
-        wickUpColor: "#34d399",
-        wickDownColor: "#f87171",
-        priceLineColor: "#f97316",
+        wickUpColor: "#86efac",
+        wickDownColor: "#fca5a5",
+        priceLineColor: "#38bdf8",
         lastValueVisible: true,
         priceLineVisible: true,
       });
@@ -1975,6 +2142,25 @@ function KlinePanel({ symbol, bars, height }: { symbol: ShadowSymbol; bars: Cryp
       const volumeSeries = chart.addSeries(HistogramSeries, {
         priceFormat: { type: "volume" },
         priceScaleId: "volume",
+        lastValueVisible: false,
+        priceLineVisible: false,
+      });
+
+      const ma7Series = chart.addSeries(LineSeries, {
+        color: "#38bdf8",
+        lineWidth: 1,
+        lastValueVisible: false,
+        priceLineVisible: false,
+      });
+      const ma25Series = chart.addSeries(LineSeries, {
+        color: "#f59e0b",
+        lineWidth: 1,
+        lastValueVisible: false,
+        priceLineVisible: false,
+      });
+      const ma99Series = chart.addSeries(LineSeries, {
+        color: "#a855f7",
+        lineWidth: 1,
         lastValueVisible: false,
         priceLineVisible: false,
       });
@@ -1987,24 +2173,36 @@ function KlinePanel({ symbol, bars, height }: { symbol: ShadowSymbol; bars: Cryp
       chartRef.current = chart;
       candleSeriesRef.current = candleSeries;
       volumeSeriesRef.current = volumeSeries;
+      ma7SeriesRef.current = ma7Series;
+      ma25SeriesRef.current = ma25Series;
+      ma99SeriesRef.current = ma99Series;
 
       return () => {
         chart.remove();
         chartRef.current = null;
         candleSeriesRef.current = null;
         volumeSeriesRef.current = null;
+        ma7SeriesRef.current = null;
+        ma25SeriesRef.current = null;
+        ma99SeriesRef.current = null;
       };
     } catch {
       chartRef.current = null;
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
+      ma7SeriesRef.current = null;
+      ma25SeriesRef.current = null;
+      ma99SeriesRef.current = null;
     }
   }, [height]);
 
   useEffect(() => {
     const candleSeries = candleSeriesRef.current;
     const volumeSeries = volumeSeriesRef.current;
-    if (!candleSeries || !volumeSeries) return;
+    const ma7Series = ma7SeriesRef.current;
+    const ma25Series = ma25SeriesRef.current;
+    const ma99Series = ma99SeriesRef.current;
+    if (!candleSeries || !volumeSeries || !ma7Series || !ma25Series || !ma99Series) return;
 
     const orderedBars = [...bars].sort((a, b) => a.timestamp - b.timestamp);
     const candles: CandlestickData[] = orderedBars.map((bar) => ({
@@ -2022,16 +2220,30 @@ function KlinePanel({ symbol, bars, height }: { symbol: ShadowSymbol; bars: Cryp
 
     candleSeries.setData(candles);
     volumeSeries.setData(volumes);
+    ma7Series.setData(showMovingAverages ? calculateMovingAverage(orderedBars, 7) : []);
+    ma25Series.setData(showMovingAverages ? calculateMovingAverage(orderedBars, 25) : []);
+    ma99Series.setData(showMovingAverages ? calculateMovingAverage(orderedBars, 99) : []);
     chartRef.current?.timeScale().fitContent();
-  }, [bars]);
+  }, [bars, showMovingAverages]);
 
   return (
     <div
       ref={ref}
-      className="w-full overflow-hidden bg-[#0d1015]"
+      className="w-full overflow-hidden bg-[#0c1117]"
       style={{ height }}
       aria-label={`${symbol.replace("_", "/")} candlestick chart`}
     />
+  );
+}
+
+function ChartStat({ label, value, tone = "neutral" }: { label: string; value: string; tone?: "green" | "red" | "neutral" }) {
+  return (
+    <div className="rounded border border-zinc-800 bg-[#0b0f14] px-3 py-2">
+      <div className="text-[11px] text-zinc-500">{label}</div>
+      <div className={cn("mt-1 font-mono text-sm font-semibold", tone === "green" && "text-emerald-400", tone === "red" && "text-red-400", tone === "neutral" && "text-zinc-100")}>
+        {value}
+      </div>
+    </div>
   );
 }
 

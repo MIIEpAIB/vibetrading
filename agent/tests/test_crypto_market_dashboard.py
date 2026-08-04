@@ -41,6 +41,11 @@ class _WorkingExchange:
 
 def test_market_dashboard_fallback_returns_top_13(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(crypto_market, "_exchange", lambda: _FailingExchange())
+    monkeypatch.setattr(
+        crypto_market,
+        "_coingecko_market_rows",
+        lambda symbols: (_ for _ in ()).throw(RuntimeError("network blocked")),
+    )
 
     payload = crypto_market.get_market_dashboard()
 
@@ -50,6 +55,34 @@ def test_market_dashboard_fallback_returns_top_13(monkeypatch: pytest.MonkeyPatc
     assert payload["rows"][0]["symbol"] == "BTC/USDT"
     assert payload["rows"][1]["symbol"] == "ETH/USDT"
     assert payload["aggregate"]["market_cap"] > 0
+
+
+def test_market_dashboard_uses_coingecko_before_static_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(crypto_market, "_exchange", lambda: _FailingExchange())
+
+    def coingecko_rows(symbols):
+        return [
+            crypto_market._market_row(
+                rank=index,
+                symbol=symbol,
+                price=42_000 + index,
+                change_24h=0.5,
+                high_24h=43_000 + index,
+                low_24h=41_000 + index,
+                volume_24h=1_000 + index,
+                quote_volume_24h=42_000_000 + index,
+                market_cap=840_000_000 + index,
+            )
+            for index, symbol in enumerate(symbols, start=1)
+        ]
+
+    monkeypatch.setattr(crypto_market, "_coingecko_market_rows", coingecko_rows)
+
+    payload = crypto_market.get_market_dashboard()
+
+    assert payload["source"].startswith("coingecko")
+    assert payload["rows"][0]["price"] == 42001
+    assert payload["rows"][0]["market_cap"] == 840000001
 
 
 def test_klines_fallback_degrades_storage_without_failing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -78,12 +111,27 @@ def test_klines_fallback_degrades_storage_without_failing(monkeypatch: pytest.Mo
         assert bar["volume"] > 0
 
 
+def test_klines_fallback_last_price_is_consistent_across_timeframes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(crypto_market, "_exchange", lambda: _FailingExchange())
+    monkeypatch.setattr(crypto_market, "_read_redis", lambda key: (None, "disabled"))
+    monkeypatch.setattr(crypto_market, "_write_redis", lambda *args: "disabled")
+    monkeypatch.setattr(crypto_market, "_write_timescale", lambda *args: "disabled")
+    monkeypatch.setattr(crypto_market.time, "time", lambda: 1_800_000_000.0)
+
+    closes = [
+        crypto_market.get_klines("BTC/USDT", timeframe, 24)["bars"][-1]["close"]
+        for timeframe in ("15m", "1h", "4h", "1d")
+    ]
+
+    assert len(set(closes)) == 1
+
+
 def test_crypto_kline_redis_key_is_versioned(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CRYPTO_KLINE_CACHE_VERSION", raising=False)
-    assert crypto_market._redis_key("BTC/USDT", "1h", 180) == "crypto:klines:v2:BTCUSDT:1h:180"
+    assert crypto_market._redis_key("BTC/USDT", "1h", 180) == "crypto:klines:v3:BTCUSDT:1h:180"
 
-    monkeypatch.setenv("CRYPTO_KLINE_CACHE_VERSION", "v3")
-    assert crypto_market._redis_key("ETH/USDT", "4h", 20) == "crypto:klines:v3:ETHUSDT:4h:20"
+    monkeypatch.setenv("CRYPTO_KLINE_CACHE_VERSION", "v4")
+    assert crypto_market._redis_key("ETH/USDT", "4h", 20) == "crypto:klines:v4:ETHUSDT:4h:20"
 
 
 def test_crypto_api_returns_rows_and_hides_credentials(

@@ -2,9 +2,10 @@
 
 This adapter lets Vibe-Trading reuse a local QUANTAXIS installation as a
 market-data source without coupling the rest of the backtest stack to
-QUANTAXIS data structures. It imports QUANTAXIS lazily and normalizes returned
-DataStruct/DataFrame payloads to the repository loader contract:
-``Dict[str, pd.DataFrame]`` with a DatetimeIndex and OHLCV columns.
+QUANTAXIS data structures. It prefers QUANTAXIS' Mongo collections directly so
+Vibe-Trading does not need to import the full QUANTAXIS package just to read
+locally collected bars. The package-level QUANTAXIS fetchers remain a fallback
+for deployments that rely on QUANTAXIS' own query helpers.
 """
 
 from __future__ import annotations
@@ -23,8 +24,10 @@ from backtest.loaders.registry import register
 logger = logging.getLogger(__name__)
 
 _DEFAULT_QUANTAXIS_PATH = "/opt/QUANTAXIS"
+_DEFAULT_MONGO_URI = "mongodb://root:root@127.0.0.1:27017/quantaxis?authSource=admin"
 _INTRADAY_INTERVALS = {"1m", "5m", "15m", "30m", "1H"}
 _DAILY_INTERVALS = {"1D"}
+_MONGO_TIMEOUT_MS = 2000
 
 
 def _ensure_quantaxis_path() -> None:
@@ -61,6 +64,23 @@ def _is_probable_index(code: str) -> bool:
 def _is_probable_future(code: str) -> bool:
     token = _qa_symbol(code)
     return any(ch.isalpha() for ch in token) and any(ch.isdigit() for ch in token) and not _is_crypto(token)
+
+
+def _mongo_uri() -> str:
+    """Return the QUANTAXIS Mongo URI used by the local deployment."""
+    return (
+        os.getenv("QUANTAXIS_MONGOURI")
+        or os.getenv("MONGOURI")
+        or os.getenv("MONGODB_URI")
+        or os.getenv("MONGO_URI")
+        or _DEFAULT_MONGO_URI
+    )
+
+
+def _mongo_database_name(uri: str) -> str:
+    """Extract the database name from a Mongo URI, defaulting to quantaxis."""
+    path = uri.split("?", 1)[0].rsplit("/", 1)[-1]
+    return path or "quantaxis"
 
 
 def _normalize_payload(payload: Any, requested_code: str) -> Optional[pd.DataFrame]:
@@ -122,7 +142,14 @@ class DataLoader:
     requires_auth = False
 
     def is_available(self) -> bool:
-        """Available when QUANTAXIS can be imported from env or /opt/QUANTAXIS."""
+        """Available when the local QUANTAXIS Mongo store or package is usable."""
+        try:
+            client = self._mongo_client()
+            client.admin.command("ping")
+            return True
+        except Exception:
+            pass
+
         try:
             _ensure_quantaxis_path()
             import QUANTAXIS  # noqa: F401
@@ -173,6 +200,13 @@ class DataLoader:
         end_date: str,
         interval: str,
     ) -> Optional[pd.DataFrame]:
+        try:
+            frame = self._fetch_one_from_mongo(code, start_date, end_date, interval)
+            if frame is not None and not frame.empty:
+                return frame
+        except Exception as exc:
+            logger.debug("quantaxis mongo path unavailable for %s: %s", code, exc)
+
         _ensure_quantaxis_path()
         from QUANTAXIS.QAFetch import QAQuery_Advance as qa
 
@@ -180,6 +214,56 @@ class DataLoader:
         if interval in _INTRADAY_INTERVALS:
             return self._fetch_intraday(qa, qa_code, code, start_date, end_date, interval)
         return self._fetch_daily(qa, qa_code, code, start_date, end_date)
+
+    @staticmethod
+    def _mongo_client() -> Any:
+        from pymongo import MongoClient
+
+        return MongoClient(
+            _mongo_uri(),
+            serverSelectionTimeoutMS=_MONGO_TIMEOUT_MS,
+            connectTimeoutMS=_MONGO_TIMEOUT_MS,
+            socketTimeoutMS=_MONGO_TIMEOUT_MS,
+        )
+
+    def _fetch_one_from_mongo(
+        self,
+        code: str,
+        start_date: str,
+        end_date: str,
+        interval: str,
+    ) -> Optional[pd.DataFrame]:
+        """Read OHLCV directly from QUANTAXIS Mongo collections."""
+        qa_code = _qa_symbol(code)
+        uri = _mongo_uri()
+        client = self._mongo_client()
+        db = client[_mongo_database_name(uri)]
+
+        collections = self._mongo_collections(code, interval)
+        if not collections:
+            return None
+
+        for collection_name in collections:
+            coll = db[collection_name]
+            query: dict[str, Any] = {"code": qa_code}
+            time_field = "datetime" if interval in _INTRADAY_INTERVALS else "date"
+            query[time_field] = {"$gte": start_date, "$lte": end_date}
+
+            docs = list(coll.find(query, {"_id": 0}).sort(time_field, 1))
+            frame = _normalize_payload(pd.DataFrame(docs), code)
+            if frame is not None and not frame.empty:
+                return frame
+        return None
+
+    @staticmethod
+    def _mongo_collections(code: str, interval: str) -> list[str]:
+        if _is_crypto(code):
+            return ["cryptocurrency_min"] if interval in _INTRADAY_INTERVALS else ["cryptocurrency_day"]
+        if _is_probable_future(code):
+            return ["future_min"] if interval in _INTRADAY_INTERVALS else ["future_day"]
+        if interval in _INTRADAY_INTERVALS:
+            return ["stock_min", "index_min"]
+        return ["stock_day", "index_day"]
 
     @staticmethod
     def _fetch_daily(

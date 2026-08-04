@@ -1036,6 +1036,7 @@ def get_market_data(
     Supported sources:
     - "yfinance": HK/US equities (free, e.g. AAPL.US, 700.HK)
     - "okx": cryptocurrency (free, e.g. BTC-USDT, ETH-USDT)
+    - "quantaxis": local QUANTAXIS Mongo OHLCV (e.g. 000001.SZ, RB2510)
     - "tushare": China A-shares (requires TUSHARE_TOKEN, e.g. 000001.SZ)
     - "akshare": A-shares, US, HK, futures, forex (free, e.g. 000001.SZ, AAPL.US)
     - "ccxt": crypto from 100+ exchanges (free, e.g. BTC/USDT)
@@ -1045,7 +1046,7 @@ def get_market_data(
         codes: List of symbols (e.g. ["AAPL.US", "BTC-USDT", "000001.SZ"]).
         start_date: Start date (YYYY-MM-DD).
         end_date: End date (YYYY-MM-DD).
-        source: Data source ("auto", "yfinance", "okx", "tushare", "akshare", "ccxt").
+        source: Data source ("auto", "quantaxis", "yfinance", "okx", "tushare", "akshare", "ccxt").
         interval: Bar size (1m/5m/15m/30m/1H/4H/1D, default "1D").
         max_rows: Per-symbol row cap (default 250) so the response stays
             within the MCP token budget. A symbol exceeding it returns an

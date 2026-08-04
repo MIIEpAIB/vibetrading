@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
@@ -117,6 +118,41 @@ def test_fetch_intraday_maps_interval_to_quantaxis_frequency(monkeypatch: pytest
 
     assert "000001.SZ" in out
     assert calls == [("stock_min", "000001", "60min")]
+
+
+def test_fetch_prefers_local_quantaxis_mongo(monkeypatch: pytest.MonkeyPatch) -> None:
+    docs = [
+        {
+            "date": "2025-01-02",
+            "code": "000001",
+            "open": 10.0,
+            "high": 10.5,
+            "low": 9.8,
+            "close": 10.2,
+            "vol": 1000,
+        }
+    ]
+    cursor = MagicMock()
+    cursor.sort.return_value = docs
+    collection = MagicMock()
+    collection.find.return_value = cursor
+    database = {"stock_day": collection}
+    client = MagicMock()
+    client.__getitem__.return_value = database
+    monkeypatch.setattr(DataLoader, "_mongo_client", staticmethod(lambda: client))
+    monkeypatch.setitem(sys.modules, "QUANTAXIS", None)
+
+    out = DataLoader().fetch(["000001.SZ"], "2025-01-01", "2025-01-10")
+
+    assert "000001.SZ" in out
+    assert out["000001.SZ"].iloc[0]["volume"] == pytest.approx(1000)
+    collection.find.assert_called_once_with(
+        {
+            "code": "000001",
+            "date": {"$gte": "2025-01-01", "$lte": "2025-01-10"},
+        },
+        {"_id": 0},
+    )
 
 
 def test_registry_lists_quantaxis_as_a_share_first_choice() -> None:

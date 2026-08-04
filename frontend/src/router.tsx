@@ -31,9 +31,6 @@ const StrategyEdit = lazy(() =>
 const StrategyShare = lazy(() =>
   import("@/pages/StrategyShare").then((m) => ({ default: m.StrategyShare })),
 );
-const StrategyCockpit = lazy(() =>
-  import("@/pages/StrategyCockpit").then((m) => ({ default: m.StrategyCockpit })),
-);
 const ShadowTrading = lazy(() =>
   import("@/pages/ShadowTrading").then((m) => ({ default: m.ShadowTrading })),
 );
@@ -100,7 +97,6 @@ export const router = createBrowserRouter([
       { path: "/", element: wrap(PublicPage) },
       { path: "/market", element: wrap(StrategyMarket) },
       { path: "/strategy/:strategyId", element: wrap(StrategyShare) },
-      { path: "/masters", element: wrap(PublicPage) },
       { path: "/library", element: wrap(PublicPage) },
       { path: "/community", element: wrap(PublicPage) },
       { path: "/api-docs", element: wrap(PublicPage) },
@@ -114,7 +110,6 @@ export const router = createBrowserRouter([
         element: <Layout />,
         children: [
           { path: "/dashboard", element: wrap(Home) },
-          { path: "/cockpit", element: wrap(StrategyCockpit) },
           { path: "/agent", element: wrap(Agent) },
           { path: "/strategies", element: wrap(StrategyLibrary) },
           { path: "/m/add-strategy", element: wrap(StrategyEdit) },

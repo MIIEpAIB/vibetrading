@@ -13,6 +13,8 @@ import math
 import os
 import random
 import time
+import urllib.parse
+import urllib.request
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping
@@ -63,6 +65,22 @@ _SYMBOL_ICON_COLORS: Mapping[str, tuple[str, str]] = {
     "LINK": ("#2a5ada", "#ffffff"),
     "TON": ("#0098ea", "#ffffff"),
     "DOT": ("#e6007a", "#ffffff"),
+}
+
+_COINGECKO_IDS: Mapping[str, str] = {
+    "BTC/USDT": "bitcoin",
+    "ETH/USDT": "ethereum",
+    "BNB/USDT": "binancecoin",
+    "SOL/USDT": "solana",
+    "XRP/USDT": "ripple",
+    "DOGE/USDT": "dogecoin",
+    "ADA/USDT": "cardano",
+    "TRX/USDT": "tron",
+    "AVAX/USDT": "avalanche-2",
+    "SHIB/USDT": "shiba-inu",
+    "LINK/USDT": "chainlink",
+    "TON/USDT": "the-open-network",
+    "DOT/USDT": "polkadot",
 }
 
 _FALLBACK_PRICES: Mapping[str, float] = {
@@ -160,8 +178,12 @@ def get_market_dashboard(limit: int = 13) -> dict[str, Any]:
         tickers = _exchange().fetch_tickers(symbols)
         rows = [_row_from_ticker(index, symbol, tickers.get(symbol) or {}) for index, symbol in enumerate(symbols, start=1)]
     except Exception as exc:  # noqa: BLE001 - route must degrade when network/provider unavailable
-        source = f"fallback: {type(exc).__name__}"
-        rows = [_fallback_row(index, symbol) for index, symbol in enumerate(symbols, start=1)]
+        try:
+            rows = _coingecko_market_rows(symbols)
+            source = f"coingecko: ccxt {type(exc).__name__}"
+        except Exception as fallback_exc:  # noqa: BLE001 - final static fallback keeps UI usable
+            source = f"fallback: {type(exc).__name__}; coingecko {type(fallback_exc).__name__}"
+            rows = [_fallback_row(index, symbol) for index, symbol in enumerate(symbols, start=1)]
 
     aggregate = _aggregate_rows(rows)
     return {
@@ -339,6 +361,56 @@ def _row_from_ticker(rank: int, symbol: str, ticker: Mapping[str, Any]) -> Crypt
     )
 
 
+def _coingecko_market_rows(symbols: list[str]) -> list[CryptoMarketRow]:
+    ids = [_COINGECKO_IDS[symbol] for symbol in symbols]
+    params = urllib.parse.urlencode(
+        {
+            "vs_currency": "usd",
+            "ids": ",".join(ids),
+            "order": "market_cap_desc",
+            "per_page": len(ids),
+            "page": 1,
+            "sparkline": "false",
+            "price_change_percentage": "24h",
+        }
+    )
+    url = f"https://api.coingecko.com/api/v3/coins/markets?{params}"
+    timeout = float(os.getenv("CRYPTO_DASHBOARD_TIMEOUT_S", "15"))
+    request = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "Vibe-Trading/crypto-market"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed public HTTPS endpoint
+        payload = json.loads(response.read().decode("utf-8"))
+    if not isinstance(payload, list) or not payload:
+        raise ValueError("coingecko returned no market rows")
+
+    by_id = {str(item.get("id")): item for item in payload if isinstance(item, Mapping)}
+    rows: list[CryptoMarketRow] = []
+    for rank, symbol in enumerate(symbols, start=1):
+        item = by_id.get(_COINGECKO_IDS[symbol])
+        if not item:
+            raise ValueError(f"coingecko missing {symbol}")
+        price = _float(item.get("current_price"))
+        if price is None or price <= 0:
+            raise ValueError(f"coingecko returned invalid price for {symbol}")
+        change = _float(item.get("price_change_percentage_24h")) or 0.0
+        high = _float(item.get("high_24h")) or price * (1 + abs(change) / 100 + 0.006)
+        low = _float(item.get("low_24h")) or price * max(0.000001, 1 - abs(change) / 100 - 0.006)
+        quote_volume = _float(item.get("total_volume")) or _fallback_volume(rank, symbol) * price
+        rows.append(
+            _market_row(
+                rank=rank,
+                symbol=symbol,
+                price=price,
+                change_24h=change,
+                high_24h=high,
+                low_24h=low,
+                volume_24h=quote_volume / price,
+                quote_volume_24h=quote_volume,
+                market_cap=_float(item.get("market_cap")),
+            )
+        )
+    return rows
+
+
 def _fallback_row(rank: int, symbol: str) -> CryptoMarketRow:
     price, change = _fallback_realtime_price(rank, symbol)
     volume = _fallback_volume(rank, symbol)
@@ -369,9 +441,10 @@ def _market_row(
     low_24h: float,
     volume_24h: float,
     quote_volume_24h: float,
+    market_cap: float | None = None,
 ) -> CryptoMarketRow:
     base = symbol.split("/", 1)[0]
-    market_cap = quote_volume_24h * (18 + rank * 1.7)
+    row_market_cap = market_cap if market_cap is not None and math.isfinite(market_cap) and market_cap > 0 else quote_volume_24h * (18 + rank * 1.7)
     open_interest = quote_volume_24h * (0.18 + rank * 0.006)
     liquidation = quote_volume_24h * (0.003 + rank * 0.00015)
     funding = _fallback_funding(rank, symbol)
@@ -389,7 +462,7 @@ def _market_row(
         low_24h=round(max(low_24h, 0.0), 10),
         volume_24h=round(volume_24h, 4),
         quote_volume_24h=round(quote_volume_24h, 4),
-        market_cap=round(market_cap, 4),
+        market_cap=round(row_market_cap, 4),
         funding_rate=round(funding, 5),
         open_interest=round(open_interest, 4),
         liquidation_24h=round(liquidation, 4),
@@ -443,6 +516,7 @@ def _fallback_bars(symbol: str, timeframe: str, limit: int) -> list[CryptoKlineB
     aligned_now = now - (now % step)
     base_price = _FALLBACK_PRICES[symbol]
     rank = TOP_SYMBOLS.index(symbol) + 1
+    reference_price, _ = _fallback_realtime_price(rank, symbol)
     rng = _deterministic_rng("klines", symbol, timeframe, limit, aligned_now)
     bars: list[CryptoKlineBar] = []
     prev_close = round(base_price * (1 + rng.uniform(-0.006, 0.006)), 10)
@@ -487,7 +561,32 @@ def _fallback_bars(symbol: str, timeframe: str, limit: int) -> list[CryptoKlineB
             )
         )
         prev_close = close
-    return bars
+    return _anchor_bars_to_close(bars, reference_price)
+
+
+def _anchor_bars_to_close(bars: list[CryptoKlineBar], reference_price: float) -> list[CryptoKlineBar]:
+    """Scale fallback bars so every timeframe ends at the same current price."""
+    if not bars or not math.isfinite(reference_price) or reference_price <= 0:
+        return bars
+    last_close = bars[-1].close
+    if not math.isfinite(last_close) or last_close <= 0:
+        return bars
+    factor = reference_price / last_close
+    if not math.isfinite(factor) or factor <= 0:
+        return bars
+    return [
+        CryptoKlineBar(
+            time=bar.time,
+            timestamp=bar.timestamp,
+            symbol=bar.symbol,
+            open=round(bar.open * factor, 10),
+            high=round(bar.high * factor, 10),
+            low=round(bar.low * factor, 10),
+            close=round(bar.close * factor, 10),
+            volume=bar.volume,
+        )
+        for bar in bars
+    ]
 
 
 def _read_redis(key: str) -> tuple[dict[str, Any] | None, str]:
@@ -632,7 +731,7 @@ def _timescale_dsn() -> str:
 
 def _redis_key(symbol: str, timeframe: str, limit: int) -> str:
     compact = symbol.replace("/", "")
-    version = os.getenv("CRYPTO_KLINE_CACHE_VERSION", "v2").strip() or "v2"
+    version = os.getenv("CRYPTO_KLINE_CACHE_VERSION", "v3").strip() or "v3"
     return f"crypto:klines:{version}:{compact}:{timeframe}:{limit}"
 
 
