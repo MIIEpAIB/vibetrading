@@ -14,21 +14,19 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
-import { api, type PublicStrategyMarketItem, type StrategyLibraryItem, type StrategyMarketAdminItem } from "@/lib/api";
+import { api, type StrategyLibraryItem, type StrategyMarketAdminItem } from "@/lib/api";
 import { PAPER_EXECUTION_OPTIONS, executionOptionValue, paperExecutionPayload } from "@/lib/paperExecution";
 import { useTranslation } from "@/i18n/I18nProvider";
 import {
-  builtInStrategyCatalog,
   createMarketOwnedStrategy,
   defaultPaperLimitsForMarketStrategy,
   getMarketOwnershipTag,
   getStrategyRouteId,
   type MarketBacktestSummary,
-  paidStrategyCatalog,
   type MarketOwnership,
   type StrategyCatalogItem,
 } from "@/lib/strategyMarketplace";
-import { mergeOwnedStrategies, readOwnedStrategies, saveOwnedStrategies, upsertOwnedStrategy } from "@/lib/strategyStorage";
+import { upsertOwnedStrategy } from "@/lib/strategyStorage";
 
 type MarketSection = {
   titleZh: string;
@@ -45,22 +43,22 @@ type BacktestSelection = {
   summary: MarketBacktestSummary;
 };
 
-function applyMarketAdminConfig(items: StrategyCatalogItem[], config: StrategyMarketAdminItem[]) {
-  const byId = new Map(config.map((item) => [item.id, item]));
-  return items
-    .filter((item) => {
-      const override = byId.get(item.id);
-      return !override || (override.enabled && override.status === "published");
-    })
-    .map((item) => {
-      const override = byId.get(item.id);
-      if (!override) return item;
-      return {
-        ...item,
-        price: override.price || item.price,
-        tags: override.featured && !item.tags.includes("featured") ? ["featured", ...item.tags] : item.tags,
-      };
-    });
+function catalogItemToStrategy(item: StrategyMarketAdminItem): StrategyCatalogItem {
+  return {
+    id: item.id,
+    name: item.name || item.id,
+    summary: item.summary || item.description || item.note || item.name || item.id,
+    description: item.description,
+    strategyDescription: item.strategy_description,
+    usage: [],
+    riskNotes: item.risk_warnings,
+    language: item.language,
+    codeSnapshot: item.code_snapshot,
+    tags: item.tags ?? [],
+    category: normalizeCategory(item.category ?? ""),
+    kind: item.kind === "paid" ? "paid" : item.kind === "community" ? "community" : "built-in",
+    price: item.price || undefined,
+  };
 }
 
 const MARKET_COPY = {
@@ -132,24 +130,6 @@ function normalizeCategory(value: string): StrategyCatalogItem["category"] {
   return strategyCategories.includes(value as StrategyCatalogItem["category"])
     ? value as StrategyCatalogItem["category"]
     : "utility";
-}
-
-function publicStrategyToCatalogItem(item: PublicStrategyMarketItem): StrategyCatalogItem {
-  return {
-    id: item.publicId,
-    publicId: item.publicId,
-    name: item.name,
-    summary: item.summary || item.description || item.name,
-    description: item.description,
-    strategyDescription: item.strategyDescription,
-    usage: [],
-    riskNotes: item.riskWarnings,
-    language: item.language,
-    codeSnapshot: item.codeSnapshot,
-    tags: Array.from(new Set([...(item.tags ?? []), "community"])).slice(0, 8),
-    category: normalizeCategory(item.category),
-    kind: "community",
-  };
 }
 
 function formatOwnershipLabel(language: "en-US" | "zh-CN", ownership: MarketOwnership | null) {
@@ -357,7 +337,7 @@ function MarketSectionBlock({
 }
 
 function useOwnedMarketStrategies() {
-  const [ownedStrategies, setOwnedStrategies] = useState(() => readOwnedStrategies());
+  const [ownedStrategies, setOwnedStrategies] = useState<StrategyLibraryItem[]>([]);
   return { ownedStrategies, setOwnedStrategies };
 }
 
@@ -369,8 +349,7 @@ export function StrategyMarket() {
   const [backtestSelection, setBacktestSelection] = useState<BacktestSelection | null>(null);
   const [backtestingId, setBacktestingId] = useState<string | null>(null);
   const [deployingId, setDeployingId] = useState<string | null>(null);
-  const [marketConfig, setMarketConfig] = useState<StrategyMarketAdminItem[]>([]);
-  const [communityStrategies, setCommunityStrategies] = useState<StrategyCatalogItem[]>([]);
+  const [marketCatalog, setMarketCatalog] = useState<StrategyCatalogItem[]>([]);
   const [paperExecution, setPaperExecution] = useState("shadow");
 
   useEffect(() => {
@@ -379,9 +358,7 @@ export function StrategyMarket() {
       .then((payload) => {
         if (cancelled) return;
         const remote = payload.strategies.filter((item): item is StrategyLibraryItem => Boolean(item && item.id && item.name && item.code));
-        const hydrated = mergeOwnedStrategies(remote, readOwnedStrategies());
-        setOwnedStrategies(hydrated);
-        saveOwnedStrategies(hydrated);
+        setOwnedStrategies(remote);
       })
       .catch(() => undefined);
     return () => {
@@ -393,19 +370,13 @@ export function StrategyMarket() {
     let cancelled = false;
     api.getStrategyMarketCatalogConfig()
       .then((payload) => {
-        if (!cancelled) setMarketConfig(payload.items ?? []);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    api.listPublicStrategies()
-      .then((payload) => {
-        if (!cancelled) setCommunityStrategies((payload.strategies ?? []).map(publicStrategyToCatalogItem));
+        if (!cancelled) {
+          setMarketCatalog(
+            (payload.items ?? [])
+              .filter((item) => item.enabled && item.status === "published" && !item.deleted)
+              .map(catalogItemToStrategy),
+          );
+        }
       })
       .catch(() => undefined);
     return () => {
@@ -422,7 +393,7 @@ export function StrategyMarket() {
         descriptionEn: copy.builtIn.description,
         icon: Library,
         kind: "built-in",
-        items: applyMarketAdminConfig(builtInStrategyCatalog, marketConfig),
+        items: marketCatalog.filter((item) => item.kind === "built-in"),
       },
       {
         titleZh: copy.paid.title,
@@ -431,7 +402,7 @@ export function StrategyMarket() {
         descriptionEn: copy.paid.description,
         icon: ShoppingBag,
         kind: "paid",
-        items: applyMarketAdminConfig(paidStrategyCatalog, marketConfig),
+        items: marketCatalog.filter((item) => item.kind === "paid"),
       },
       {
         titleZh: copy.community.title,
@@ -440,24 +411,30 @@ export function StrategyMarket() {
         descriptionEn: copy.community.description,
         icon: Users,
         kind: "community",
-        items: communityStrategies,
+        items: marketCatalog.filter((item) => item.kind === "community"),
       },
     ],
-    [copy, communityStrategies, marketConfig],
+    [copy, marketCatalog],
   );
 
-  const saveStrategy = (item: StrategyCatalogItem, ownership: MarketOwnership) => {
+  const saveStrategy = async (item: StrategyCatalogItem, ownership: MarketOwnership) => {
     const nextStrategy = createMarketOwnedStrategy(item, ownership);
-    const nextOwned = upsertOwnedStrategy(ownedStrategies, nextStrategy);
-    setOwnedStrategies(nextOwned);
-    saveOwnedStrategies(nextOwned);
-    void api.upsertStrategy(nextStrategy).catch(() => undefined);
+    await api.upsertStrategy(nextStrategy);
+    setOwnedStrategies((current) => upsertOwnedStrategy(current, nextStrategy));
     toast.success(language === "zh-CN" ? `${item.name} ${copy.saved}` : `${item.name} ${copy.saved}`);
     return nextStrategy;
   };
 
-  const handleFavorite = (item: StrategyCatalogItem) => saveStrategy(item, "favorite");
-  const handlePurchase = (item: StrategyCatalogItem) => saveStrategy(item, "purchased");
+  const handleFavorite = (item: StrategyCatalogItem) => {
+    void saveStrategy(item, "favorite").catch((error) => {
+      toast.error(error instanceof Error ? error.message : language === "zh-CN" ? "保存策略失败" : "Failed to save strategy");
+    });
+  };
+  const handlePurchase = (item: StrategyCatalogItem) => {
+    void saveStrategy(item, "purchased").catch((error) => {
+      toast.error(error instanceof Error ? error.message : language === "zh-CN" ? "购买策略失败" : "Failed to purchase strategy");
+    });
+  };
   const handlePreview = (item: StrategyCatalogItem) => {
     navigate(`/strategy/${encodeURIComponent(getStrategyRouteId(item.id))}`);
   };
@@ -490,7 +467,7 @@ export function StrategyMarket() {
     }
     const ownedRecord = ownedStrategies.find((strategy) => strategy.id === item.id);
     if (!ownedRecord) {
-      saveStrategy(item, "favorite");
+      void saveStrategy(item, "favorite");
     }
     setBacktestSelection({ item, summary });
     const message = summary.status === "passed"
@@ -508,10 +485,8 @@ export function StrategyMarket() {
     setDeployingId(backtestSelection.item.id);
     try {
       const strategy = createMarketOwnedStrategy(backtestSelection.item, "favorite");
-      const nextOwned = upsertOwnedStrategy(ownedStrategies, strategy);
-      setOwnedStrategies(nextOwned);
-      saveOwnedStrategies(nextOwned);
       await api.upsertStrategy(strategy);
+      setOwnedStrategies((current) => upsertOwnedStrategy(current, strategy));
       const result = await api.createPaperDeployment({
         strategy_id: strategy.id,
         limits: defaultPaperLimitsForMarketStrategy(backtestSelection.item),
@@ -564,15 +539,15 @@ export function StrategyMarket() {
             </div>
             <div className="mt-4 grid grid-cols-3 gap-2">
               <div className="rounded-md border bg-card p-3">
-                <div className="font-mono text-lg font-semibold">{builtInStrategyCatalog.length}</div>
+                <div className="font-mono text-lg font-semibold">{marketCatalog.filter((item) => item.kind === "built-in").length}</div>
                 <div className="mt-1 text-xs text-muted-foreground">{language === "zh-CN" ? "内置" : "Built-in"}</div>
               </div>
               <div className="rounded-md border bg-card p-3">
-                <div className="font-mono text-lg font-semibold">{paidStrategyCatalog.length}</div>
+                <div className="font-mono text-lg font-semibold">{marketCatalog.filter((item) => item.kind === "paid").length}</div>
                 <div className="mt-1 text-xs text-muted-foreground">{language === "zh-CN" ? "付费" : "Paid"}</div>
               </div>
               <div className="rounded-md border bg-card p-3">
-                <div className="font-mono text-lg font-semibold">{communityStrategies.length}</div>
+                <div className="font-mono text-lg font-semibold">{marketCatalog.filter((item) => item.kind === "community").length}</div>
                 <div className="mt-1 text-xs text-muted-foreground">{language === "zh-CN" ? "社区" : "Community"}</div>
               </div>
             </div>

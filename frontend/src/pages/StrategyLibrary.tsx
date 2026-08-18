@@ -31,7 +31,6 @@ import { StrategyCodeEditor } from "@/components/strategy/StrategyCodeEditor";
 import { PAPER_EXECUTION_OPTIONS, executionOptionValue, paperExecutionPayload } from "@/lib/paperExecution";
 import { buildClassicTurtlePythonStrategyCode, getStrategyRouteId } from "@/lib/strategyMarketplace";
 import { useTranslation } from "@/i18n/I18nProvider";
-import { mergeOwnedStrategies, readOwnedStrategies, saveOwnedStrategies } from "@/lib/strategyStorage";
 
 type StrategyLanguage = "javascript" | "python" | "cpp" | "rust" | "pine";
 type StrategyStatus = "draft" | "testing" | "live" | "archived";
@@ -204,8 +203,7 @@ function newStrategy(overrides: Partial<StrategyItem> = {}): StrategyItem {
 }
 
 function loadStrategies(): StrategyItem[] {
-  if (typeof window === "undefined") return [];
-  return readOwnedStrategies().map((item) => normalizeStrategy(item, newStrategy()));
+  return [];
 }
 
 function toApiStrategy(strategy: StrategyItem): StrategyLibraryItem {
@@ -344,13 +342,8 @@ export function StrategyLibrary() {
         const remoteStrategies = payload.strategies
           .map((item) => normalizeStrategy(item, newStrategy()))
           .filter((strategy) => strategy.name.trim() && strategy.code.trim());
-        const localStrategies = readOwnedStrategies();
-        const hydratedStrategies = mergeOwnedStrategies(remoteStrategies, localStrategies)
-          .map((item) => normalizeStrategy(item, newStrategy()))
-          .filter((strategy) => strategy.name.trim() && strategy.code.trim());
-        setStrategies(hydratedStrategies);
-        setActiveId(hydratedStrategies[0]?.id ?? "");
-        saveOwnedStrategies(hydratedStrategies);
+        setStrategies(remoteStrategies);
+        setActiveId(remoteStrategies[0]?.id ?? "");
       })
       .catch((error) => {
         if (cancelled) return;
@@ -366,7 +359,6 @@ export function StrategyLibrary() {
   }, []);
 
   useEffect(() => {
-    saveOwnedStrategies(strategies);
     if (!remoteReadyRef.current) return;
     const timer = window.setTimeout(() => {
       const deleteIds = Array.from(pendingDeleteIdsRef.current);
@@ -663,10 +655,10 @@ export function StrategyLibrary() {
     if (!editorStrategy) return;
     setSavingEditor(true);
     try {
-      saveOwnedStrategies(strategies);
-      if (remoteReadyRef.current) {
-        await api.upsertStrategy(toApiStrategy(editorStrategy));
+      if (!remoteReadyRef.current) {
+        throw new Error(language === "zh-CN" ? "数据库未连接，无法保存策略" : "Database is unavailable; strategy was not saved");
       }
+      await api.upsertStrategy(toApiStrategy(editorStrategy));
       toast.success(copy.saved);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : language === "zh-CN" ? "保存策略失败" : "Failed to save strategy");

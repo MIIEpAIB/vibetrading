@@ -2,18 +2,23 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AlertTriangle, ArrowLeft, Check, ExternalLink, FileCode2, Play } from "lucide-react";
 import { toast } from "sonner";
-import { api, ApiError, type RunData, type StrategyLibraryItem, type StrategyMarketBacktestResponse } from "@/lib/api";
+import {
+  api,
+  ApiError,
+  type RunData,
+  type StrategyLibraryItem,
+  type StrategyMarketAdminItem,
+  type StrategyMarketBacktestResponse,
+} from "@/lib/api";
 import { StrategyCodeEditor } from "@/components/strategy/StrategyCodeEditor";
 import { StrategyReturnChart } from "@/components/charts/StrategyReturnChart";
 import { useTranslation } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/utils";
+import { normalizeOwnedStrategy } from "@/lib/strategyStorage";
 import {
-  mergeOwnedStrategies,
-  normalizeOwnedStrategy,
-  readOwnedStrategies,
-  saveOwnedStrategies,
-} from "@/lib/strategyStorage";
-import { getStrategyRouteId, resolveStrategyRouteId } from "@/lib/strategyMarketplace";
+  getStrategyRouteId,
+  resolveStrategyRouteId,
+} from "@/lib/strategyMarketplace";
 
 type StrategyLanguage = "javascript" | "python" | "cpp" | "rust" | "pine";
 type StrategyStatus = "draft" | "testing" | "live" | "archived";
@@ -317,6 +322,23 @@ function findStrategyByRouteId(strategies: StrategyLibraryItem[], routeId: strin
   return strategies.find((item) => item.id === resolvedId || getStrategyRouteId(item.id) === routeId) ?? null;
 }
 
+function catalogItemToStrategy(item: StrategyMarketAdminItem): StrategyLibraryItem {
+  const now = new Date().toISOString();
+  return {
+    id: item.id,
+    name: item.name || item.id,
+    description: item.description || item.summary || item.note || "",
+    strategyDescription: item.strategy_description || item.description || "",
+    language: item.language || "python",
+    category: item.category || "utility",
+    status: "draft",
+    tags: item.tags ?? [],
+    code: item.code_snapshot || "",
+    createdAt: item.published_at || item.updated_at || now,
+    updatedAt: item.updated_at || now,
+  };
+}
+
 export function StrategyEdit() {
   const { language } = useTranslation();
   const navigate = useNavigate();
@@ -476,14 +498,13 @@ export function StrategyEdit() {
       };
     }
 
-    api.listStrategies()
-      .then((payload) => {
+    Promise.all([api.listStrategies(), api.getStrategyMarketCatalogConfig()])
+      .then(([payload, catalogPayload]) => {
         if (cancelled) return;
         setRemoteReady(true);
-        const localStrategies = readOwnedStrategies();
-        const hydrated = mergeOwnedStrategies(payload.strategies, localStrategies).map((item) => normalizeOwnedStrategy(item));
-        saveOwnedStrategies(hydrated);
-        setStrategy(findStrategyByRouteId(hydrated, routeStrategyId, resolvedStrategyId));
+        const loaded = findStrategyByRouteId(payload.strategies, routeStrategyId, resolvedStrategyId);
+        const catalogItem = catalogPayload.items.find((item) => item.id === resolvedStrategyId || item.id === routeStrategyId);
+        setStrategy(loaded ? normalizeOwnedStrategy(loaded) : catalogItem ? catalogItemToStrategy(catalogItem) : null);
       })
       .catch((error) => {
         if (cancelled) return;
@@ -491,7 +512,7 @@ export function StrategyEdit() {
         if (!isRemotePersistenceUnavailable(error)) {
           toast.error(error instanceof Error ? error.message : "Failed to load strategies");
         }
-        setStrategy(findStrategyByRouteId(readOwnedStrategies(), routeStrategyId, resolvedStrategyId));
+        setStrategy(null);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -522,15 +543,10 @@ export function StrategyEdit() {
   };
 
   const persistStrategy = async (item: StrategyLibraryItem) => {
-    const strategies = readOwnedStrategies();
-    const index = strategies.findIndex((entry) => entry.id === item.id);
-    const next = index >= 0
-      ? strategies.map((entry) => entry.id === item.id ? item : entry)
-      : [item, ...strategies];
-    saveOwnedStrategies(next);
-    if (remoteReady) {
-      await api.upsertStrategy(item);
+    if (!remoteReady) {
+      throw new Error(language === "zh-CN" ? "数据库未连接，无法保存策略" : "Database is unavailable; strategy was not saved");
     }
+    await api.upsertStrategy(item);
   };
 
   const handleSave = async () => {

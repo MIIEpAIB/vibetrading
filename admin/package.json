@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "next dev -H 0.0.0.0 -p 8787",
     "build": "next build",
+    "postbuild": "cp -a .next/static .next/standalone/.next/static && if [ -d public ]; then cp -a public .next/standalone/public; fi",
     "start": "next start -H 0.0.0.0 -p 8787",
     "lint": "next lint"
   },

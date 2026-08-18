@@ -5,6 +5,7 @@ import fs from "fs";
 
 const PROXY_PATHS = [
   "/sessions",
+  "/api",
   "/auth",
   "/swarm/presets",
   "/swarm/runs",
@@ -44,11 +45,14 @@ export default defineConfig(({ mode }) => {
   const apiProxy = {
     target: apiTarget,
     changeOrigin: true,
-    configure(proxy: { on: (event: "proxyReq", handler: (proxyReq: { setHeader: (name: string, value: string) => void }) => void) => void }) {
+    ws: true,
+    configure(proxy: { on: (event: "proxyReq" | "proxyReqWs", handler: (proxyReq: { setHeader: (name: string, value: string) => void }) => void) => void }) {
       if (!devProxyAuth) return;
-      proxy.on("proxyReq", (proxyReq) => {
+      const injectDevProxyAuth = (proxyReq: { setHeader: (name: string, value: string) => void }) => {
         proxyReq.setHeader("x-vibe-dev-proxy-auth", devProxyAuth);
-      });
+      };
+      proxy.on("proxyReq", injectDevProxyAuth);
+      proxy.on("proxyReqWs", injectDevProxyAuth);
     },
   };
   const apiProxyWithHtmlFallback = {

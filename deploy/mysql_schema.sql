@@ -107,6 +107,53 @@ CREATE TABLE IF NOT EXISTS public_strategy_marketplace (
   KEY idx_public_strategy_source (owner_user_id, source_strategy_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS strategy_catalog (
+  strategy_id VARCHAR(128) NOT NULL,
+  kind VARCHAR(32) NOT NULL,
+  owner_user_id BIGINT UNSIGNED NULL,
+  source_strategy_id VARCHAR(128) NOT NULL,
+  name TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  description TEXT NOT NULL,
+  strategy_description MEDIUMTEXT NOT NULL,
+  language VARCHAR(32) NOT NULL,
+  category VARCHAR(64) NOT NULL,
+  tags_json JSON NOT NULL,
+  code_snapshot MEDIUMTEXT NOT NULL,
+  status VARCHAR(32) NOT NULL,
+  enabled TINYINT(1) NOT NULL DEFAULT 1,
+  featured TINYINT(1) NOT NULL DEFAULT 0,
+  price VARCHAR(64) NOT NULL,
+  note VARCHAR(500) NOT NULL,
+  deleted TINYINT(1) NOT NULL DEFAULT 0,
+  published_at VARCHAR(64) NOT NULL,
+  updated_at VARCHAR(64) NOT NULL,
+  backtest_summary_json JSON NOT NULL,
+  risk_warnings_json JSON NOT NULL,
+  PRIMARY KEY (strategy_id),
+  KEY idx_strategy_catalog_kind_status (kind, status, enabled, deleted),
+  KEY idx_strategy_catalog_owner (owner_user_id, updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS strategy_versions (
+  version_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  strategy_id VARCHAR(128) NOT NULL,
+  owner_user_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  version_no INT UNSIGNED NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL,
+  strategy_description MEDIUMTEXT NOT NULL,
+  language VARCHAR(32) NOT NULL,
+  category VARCHAR(64) NOT NULL,
+  tags_json JSON NOT NULL,
+  code MEDIUMTEXT NOT NULL,
+  code_sha256 CHAR(64) NOT NULL,
+  created_at VARCHAR(64) NOT NULL,
+  PRIMARY KEY (version_id),
+  UNIQUE KEY uq_strategy_version (owner_user_id, strategy_id, version_no),
+  KEY idx_strategy_versions_lookup (owner_user_id, strategy_id, version_no)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS assistant_prompts (
   prompt_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   owner_session_id VARCHAR(64) NULL,

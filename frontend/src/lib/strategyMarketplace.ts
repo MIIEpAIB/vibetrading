@@ -1,4 +1,7 @@
 import type { StrategyLibraryItem } from "@/lib/api";
+import cryptoAdvancedGridCode from "./strategies/CryptoAdvancedGrid.py?raw";
+
+export const PROFESSIONAL_GRID_SOURCE_TAG = "source:CryptoAdvancedGrid.py";
 
 export type StrategyCategory = "trend" | "mean_reversion" | "grid" | "risk" | "portfolio" | "arbitrage" | "utility";
 export type StrategyCatalogKind = "built-in" | "paid" | "community";
@@ -470,11 +473,18 @@ export function buildMarketStarterCode(strategy: StrategyCatalogItem): string {
   if (strategy.codeSnapshot) {
     return strategy.codeSnapshot;
   }
+  if (strategy.id === "professional-grid-trading") {
+    return cryptoAdvancedGridCode;
+  }
   if (strategy.id === "classic-turtle-trading") {
     return buildClassicTurtlePythonStrategyCode();
   }
   const spec = buildMarketStrategySpec(strategy);
   return JSON.stringify(spec, null, 2);
+}
+
+export function getProfessionalGridSourceCode(): string {
+  return cryptoAdvancedGridCode;
 }
 
 export function buildMarketBacktestSummary(strategy: StrategyCatalogItem): MarketBacktestSummary {

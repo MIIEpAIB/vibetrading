@@ -6,7 +6,12 @@ import { StrategyMarket } from "@/pages/StrategyMarket";
 import { StrategyLibrary } from "@/pages/StrategyLibrary";
 import { StrategyEdit } from "@/pages/StrategyEdit";
 import { api } from "@/lib/api";
-import { getStrategyRouteId } from "@/lib/strategyMarketplace";
+import {
+  buildMarketStarterCode,
+  builtInStrategyCatalog,
+  getStrategyRouteId,
+  paidStrategyCatalog,
+} from "@/lib/strategyMarketplace";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), message: vi.fn() } }));
 
@@ -24,6 +29,7 @@ vi.mock("@/lib/api", async () => {
       replaceStrategies: vi.fn().mockResolvedValue({ strategies: [] }),
       upsertStrategy: vi.fn().mockResolvedValue({}),
       deleteStrategy: vi.fn().mockResolvedValue({ status: "deleted", id: "x" }),
+      getStrategyMarketCatalogConfig: vi.fn(),
       getRun: vi.fn().mockResolvedValue({
         status: "success",
         run_id: "strategy_owned_1",
@@ -122,6 +128,55 @@ describe("strategy market / library split", () => {
     window.sessionStorage.clear();
     window.localStorage.setItem("vibe-language", "zh-CN");
     vi.clearAllMocks();
+    vi.mocked(api.listStrategies).mockReset().mockResolvedValue({ strategies: [] });
+    vi.mocked(api.upsertStrategy).mockReset().mockResolvedValue({} as never);
+    vi.mocked(api.createPaperDeployment).mockReset().mockResolvedValue({ deployment: { deployment_id: "paper_1" } } as never);
+    vi.mocked(api.startPaperDeployment).mockReset().mockResolvedValue({ deployment: { deployment_id: "paper_1", status: "running" } } as never);
+    vi.mocked(api.runStrategyMarketBacktest).mockReset().mockImplementation((body: { strategy_id: string }) => Promise.resolve({
+      strategy_id: body.strategy_id,
+      status: "passed",
+      run_id: `market_${body.strategy_id}`,
+      run_directory: `/tmp/${body.strategy_id}`,
+      symbol: body.strategy_id === "crypto-stat-arb-pairs" ? "ETH-USDT,SOL-USDT" : "BTC-USDT",
+      timeframe: body.strategy_id === "professional-grid-trading" ? "1H" : "4H",
+      period: "2024-01-01 - 2026-06-27",
+      totalReturnPct: 12.5,
+      annualizedReturnPct: 5.2,
+      maxDrawdownPct: 7.1,
+      sharpe: 1.3,
+      winRatePct: 54.2,
+      tradeCount: 24,
+      engine: body.strategy_id === "professional-grid-trading"
+        ? "real_professional_grid_v1"
+        : body.strategy_id === "classic-turtle-trading"
+          ? "real_classic_turtle_v1"
+          : "real_crypto_trend_momentum_v1",
+      assumptions: ["OKX public OHLCV candles"],
+      warnings: body.strategy_id === "crypto-trend-momentum" ? [] : ["proxy warning"],
+    }));
+    vi.mocked(api.getStrategyMarketCatalogConfig).mockResolvedValue({
+      items: [...builtInStrategyCatalog, ...paidStrategyCatalog].map((item) => ({
+        id: item.id,
+        kind: item.kind,
+        enabled: true,
+        featured: false,
+        price: item.price ?? "",
+        status: "published",
+        note: item.summary,
+        updated_at: "2026-06-27T00:00:00.000Z",
+        name: item.name,
+        summary: item.summary,
+        description: item.description,
+        strategy_description: item.strategyDescription,
+        language: item.language ?? "python",
+        category: item.category,
+        tags: item.tags,
+        code_snapshot: buildMarketStarterCode(item),
+        published_at: "2026-06-01T00:00:00.000Z",
+        risk_warnings: item.riskNotes ?? [],
+        deleted: false,
+      })),
+    });
   });
 
   it("shows marketplace items on /market and saves a favorite into the owned library", async () => {
@@ -141,9 +196,11 @@ describe("strategy market / library split", () => {
 
     await user.click(screen.getAllByRole("button", { name: "收藏" })[0]);
 
-    await waitFor(() => expect(api.upsertStrategy).toHaveBeenCalledTimes(1));
-    const saved = JSON.parse(window.localStorage.getItem("vibe-personal-strategy-library") || "[]") as Array<{ id: string; tags: string[] }>;
-    expect(saved.some((item) => item.id === "quantclaw-ai-assistant" || item.tags.includes("favorite"))).toBe(true);
+    await waitFor(() => expect(api.upsertStrategy).toHaveBeenCalledWith(expect.objectContaining({
+      id: "quantclaw-ai-assistant",
+      tags: expect.arrayContaining(["favorite"]),
+    })));
+    expect(window.localStorage.getItem("vibe-personal-strategy-library")).toBeNull();
   });
 
   it("runs a market backtest and starts paper trading from the result", async () => {
@@ -193,7 +250,7 @@ describe("strategy market / library split", () => {
 
     await waitFor(() => expect(api.upsertStrategy).toHaveBeenCalledWith(expect.objectContaining({
       id: "professional-grid-trading",
-      code: expect.stringContaining("\"engine\": \"professional_grid\""),
+      code: expect.stringContaining("class CryptoAdvancedGrid"),
     })));
     expect(api.createPaperDeployment).toHaveBeenCalledWith(expect.objectContaining({
       strategy_id: "professional-grid-trading",
@@ -220,8 +277,8 @@ describe("strategy market / library split", () => {
     const turtleCard = (await screen.findByText("经典海龟交易策略")).closest("article");
     expect(turtleCard).not.toBeNull();
     expect(within(turtleCard as HTMLElement).getByText(/Donchian 突破/)).toBeInTheDocument();
-    expect(within(turtleCard as HTMLElement).getByText("使用方式")).toBeInTheDocument();
-    expect(within(turtleCard as HTMLElement).getByText("风控要点")).toBeInTheDocument();
+    expect(within(turtleCard as HTMLElement).getByText(/复刻经典海龟双系统/)).toBeInTheDocument();
+    expect(within(turtleCard as HTMLElement).getByText(/风控要点/)).toBeInTheDocument();
 
     await user.click(within(turtleCard as HTMLElement).getByRole("button", { name: "回测" }));
 
@@ -452,14 +509,7 @@ describe("strategy market / library split", () => {
     );
 
     expect(await screen.findByText("经典海龟交易策略")).toBeInTheDocument();
-    await waitFor(() => {
-      const saved = JSON.parse(window.localStorage.getItem("vibe-personal-strategy-library") || "[]") as Array<{ id: string; code: string; language: string }>;
-      const turtle = saved.find((item) => item.id === "classic-turtle-trading");
-      expect(turtle?.language).toBe("python");
-      expect(turtle?.code).toContain("class SignalEngine");
-      expect(turtle?.code).toContain("def generate_signals(data):");
-      expect(turtle?.code).not.toContain("\"schema\": \"vibe.strategy_spec.v1\"");
-    });
+    expect(window.localStorage.getItem("vibe-personal-strategy-library")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "编辑" }));
   });
@@ -477,9 +527,9 @@ describe("strategy market / library split", () => {
 
     const trendCard = (await screen.findByText("加密趋势动量策略")).closest("article");
     expect(trendCard).not.toBeNull();
-    expect(within(trendCard as HTMLElement).getByText("使用方式")).toBeInTheDocument();
-    expect(within(trendCard as HTMLElement).getByText("风控要点")).toBeInTheDocument();
-    expect(within(trendCard as HTMLElement).getByText(/BTC_USDT、ETH_USDT/)).toBeInTheDocument();
+    expect(within(trendCard as HTMLElement).getByText(/用 20\/60 周期均线/)).toBeInTheDocument();
+    expect(within(trendCard as HTMLElement).getByText(/风控要点/)).toBeInTheDocument();
+    expect(within(trendCard as HTMLElement).getByText(/BTC\/ETH 多周期趋势跟随/)).toBeInTheDocument();
 
     await user.click(within(trendCard as HTMLElement).getByRole("button", { name: "回测" }));
 

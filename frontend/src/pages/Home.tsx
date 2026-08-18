@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   BarChart3,
@@ -12,43 +12,31 @@ import {
   TrendingDown,
   TrendingUp,
 } from "lucide-react";
-import {
-  CandlestickSeries,
-  ColorType,
-  createChart,
-  HistogramSeries,
-  type CandlestickData,
-  type HistogramData,
-  type IChartApi,
-  type ISeriesApi,
-  type UTCTimestamp,
-} from "lightweight-charts";
+import { KLineChartPanel } from "@/components/charts/KLineChartPanel";
 import { api, type CryptoKlineBar, type CryptoMarketRow, type CryptoMarketsResponse } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 type CoinSeed = {
   symbol: string;
   name: string;
-  price: number;
-  change: number;
   iconBg: string;
   iconFg: string;
 };
 
 const COIN_SEEDS: CoinSeed[] = [
-  { symbol: "BTC/USDT", name: "Bitcoin", price: 59510.865, change: 2.84, iconBg: "#f7931a", iconFg: "#111827" },
-  { symbol: "ETH/USDT", name: "Ethereum", price: 3450, change: 1.96, iconBg: "#627eea", iconFg: "#ffffff" },
-  { symbol: "BNB/USDT", name: "BNB", price: 655, change: -0.52, iconBg: "#f3ba2f", iconFg: "#111827" },
-  { symbol: "SOL/USDT", name: "Solana", price: 164, change: 4.2, iconBg: "#14f195", iconFg: "#111827" },
-  { symbol: "XRP/USDT", name: "XRP", price: 2.18, change: -1.31, iconBg: "#d1d5db", iconFg: "#111827" },
-  { symbol: "DOGE/USDT", name: "Dogecoin", price: 0.193, change: 3.12, iconBg: "#c2a633", iconFg: "#111827" },
-  { symbol: "ADA/USDT", name: "Cardano", price: 0.62, change: 0.74, iconBg: "#3468d1", iconFg: "#ffffff" },
-  { symbol: "TRX/USDT", name: "TRON", price: 0.286, change: 0.19, iconBg: "#ef0027", iconFg: "#ffffff" },
-  { symbol: "AVAX/USDT", name: "Avalanche", price: 28.4, change: -2.18, iconBg: "#e84142", iconFg: "#ffffff" },
-  { symbol: "SHIB/USDT", name: "Shiba Inu", price: 0.0000142, change: 1.47, iconBg: "#f00500", iconFg: "#ffffff" },
-  { symbol: "LINK/USDT", name: "Chainlink", price: 15.8, change: 2.24, iconBg: "#2a5ada", iconFg: "#ffffff" },
-  { symbol: "TON/USDT", name: "Toncoin", price: 3.15, change: -0.68, iconBg: "#0098ea", iconFg: "#ffffff" },
-  { symbol: "DOT/USDT", name: "Polkadot", price: 4.72, change: 1.08, iconBg: "#e6007a", iconFg: "#ffffff" },
+  { symbol: "BTC/USDT", name: "Bitcoin", iconBg: "#f7931a", iconFg: "#111827" },
+  { symbol: "ETH/USDT", name: "Ethereum", iconBg: "#627eea", iconFg: "#ffffff" },
+  { symbol: "BNB/USDT", name: "BNB", iconBg: "#f3ba2f", iconFg: "#111827" },
+  { symbol: "SOL/USDT", name: "Solana", iconBg: "#14f195", iconFg: "#111827" },
+  { symbol: "XRP/USDT", name: "XRP", iconBg: "#d1d5db", iconFg: "#111827" },
+  { symbol: "DOGE/USDT", name: "Dogecoin", iconBg: "#c2a633", iconFg: "#111827" },
+  { symbol: "ADA/USDT", name: "Cardano", iconBg: "#3468d1", iconFg: "#ffffff" },
+  { symbol: "TRX/USDT", name: "TRON", iconBg: "#ef0027", iconFg: "#ffffff" },
+  { symbol: "AVAX/USDT", name: "Avalanche", iconBg: "#e84142", iconFg: "#ffffff" },
+  { symbol: "SHIB/USDT", name: "Shiba Inu", iconBg: "#f00500", iconFg: "#ffffff" },
+  { symbol: "LINK/USDT", name: "Chainlink", iconBg: "#2a5ada", iconFg: "#ffffff" },
+  { symbol: "TON/USDT", name: "Toncoin", iconBg: "#0098ea", iconFg: "#ffffff" },
+  { symbol: "DOT/USDT", name: "Polkadot", iconBg: "#e6007a", iconFg: "#ffffff" },
 ];
 
 const COIN_ICON_META = new Map(
@@ -63,48 +51,25 @@ const COIN_ICON_META = new Map(
   ]),
 );
 
-const FALLBACK_ROWS: CryptoMarketRow[] = COIN_SEEDS.map(({ symbol, name, price, change, iconBg, iconFg }, index) => {
-  const rank = index + 1;
-  const quoteVolume = price * (1_800_000_000 / price) / rank ** 0.7;
-  const base = symbol.split("/")[0];
-  return {
-    rank,
-    symbol,
-    base,
-    name,
-    icon_url: `/coin-icons/${base.toLowerCase()}.svg`,
-    icon_bg: iconBg,
-    icon_fg: iconFg,
-    price,
-    change_24h: change,
-    high_24h: price * 1.035,
-    low_24h: price * 0.965,
-    volume_24h: quoteVolume / price,
-    quote_volume_24h: quoteVolume,
-    market_cap: quoteVolume * (20 + rank),
-    funding_rate: Math.sin(rank) * 0.02,
-    open_interest: quoteVolume * 0.2,
-    liquidation_24h: quoteVolume * 0.004,
-  };
-});
-
-const FALLBACK_MARKETS: CryptoMarketsResponse = {
-  status: "ok",
-  source: "frontend fallback",
+const EMPTY_MARKETS: CryptoMarketsResponse = {
+  status: "idle",
+  source: "not loaded",
   updated_at: new Date().toISOString(),
-  symbols: FALLBACK_ROWS.map((row) => row.symbol),
-  rows: FALLBACK_ROWS,
+  symbols: [],
+  rows: [],
   aggregate: {
-    market_cap: FALLBACK_ROWS.reduce((sum, row) => sum + row.market_cap, 0),
-    volume_24h: FALLBACK_ROWS.reduce((sum, row) => sum + row.quote_volume_24h, 0),
-    open_interest: FALLBACK_ROWS.reduce((sum, row) => sum + row.open_interest, 0),
-    liquidation_24h: FALLBACK_ROWS.reduce((sum, row) => sum + row.liquidation_24h, 0),
-    avg_change_24h: FALLBACK_ROWS.reduce((sum, row) => sum + row.change_24h, 0) / FALLBACK_ROWS.length,
-    btc_dominance: 48.6,
+    market_cap: 0,
+    volume_24h: 0,
+    open_interest: 0,
+    liquidation_24h: 0,
+    avg_change_24h: 0,
+    btc_dominance: 0,
   },
 };
 
-const TIMEFRAMES = ["15m", "1h", "4h", "1d"] as const;
+const TIMEFRAMES = ["5m", "15m", "1h", "1d"] as const;
+const MARKET_REFRESH_MS = 15_000;
+const KLINE_REFRESH_MS = 3_500;
 
 function formatMoney(value: number): string {
   const abs = Math.abs(value);
@@ -143,73 +108,6 @@ function enrichMarkets(payload: CryptoMarketsResponse): CryptoMarketsResponse {
     rows: payload.rows.map(withCoinMeta),
   };
 }
-
-function toChartTime(timestamp: number): UTCTimestamp {
-  return Math.floor(timestamp / 1000) as UTCTimestamp;
-}
-
-function alignBarsToReferencePrice(bars: CryptoKlineBar[], referencePrice?: number): CryptoKlineBar[] {
-  if (!bars.length || !Number.isFinite(referencePrice) || !referencePrice || referencePrice <= 0) return bars;
-  const last = bars[bars.length - 1]?.close;
-  if (!Number.isFinite(last) || last <= 0) return bars;
-  const factor = referencePrice / last;
-  if (!Number.isFinite(factor) || factor <= 0 || Math.abs(factor - 1) < 0.000001) return bars;
-  return bars.map((bar) => ({
-    ...bar,
-    open: bar.open * factor,
-    high: bar.high * factor,
-    low: bar.low * factor,
-    close: bar.close * factor,
-  }));
-}
-
-function buildFallbackBars(symbol: string, referencePrice?: number, limit = 180): CryptoKlineBar[] {
-  const row = FALLBACK_ROWS.find((item) => item.symbol === symbol) ?? FALLBACK_ROWS[0];
-  const now = Date.now();
-  
-  // 1. 设定初始价格，加入一些随机偏移，防止切换周期时每条线都一模一样
-  let currentClose = row.price * (1 + (Math.random() - 0.5) * 0.02);
-  
-  // 2. 根据所选的 K 线数量反推历史时间轴，按时间正序从老到新生成
-  const bars: CryptoKlineBar[] = [];
-  
-  for (let index = 0; index < limit; index++) {
-    // 假设每根 K 线时间间隔为 1 小时
-    const timestamp = now - (limit - index - 1) * 60 * 60 * 1000;
-    
-    // 3. 开盘价等于上一根 K 线的收盘价
-    const open = currentClose;
-    
-    // 4. 使用随机数模拟市场涨跌（限制在正负 0.6% 以内）
-    const changePercent = (Math.random() - 0.5) * 0.012; 
-    currentClose = open * (1 + changePercent);
-    
-    // 5. 制造影线：最高价与最低价在开盘和收盘的基础上向外随机延伸
-    const highestOfOpenClose = Math.max(open, currentClose);
-    const lowestOfOpenClose = Math.min(open, currentClose);
-    
-    const high = highestOfOpenClose * (1 + Math.random() * 0.004);
-    const low = lowestOfOpenClose * (1 - Math.random() * 0.004);
-    
-    // 6. 同样为成交量注入随机性
-    const volumeNoise = 0.7 + Math.random() * 0.6; // 0.7 到 1.3 的随机系数
-    const volume = (row.volume_24h / 24) * volumeNoise;
-
-    bars.push({
-      time: new Date(timestamp).toISOString(),
-      timestamp,
-      symbol,
-      open,
-      high,
-      low,
-      close: currentClose,
-      volume,
-    });
-  }
-  
-  return alignBarsToReferencePrice(bars, referencePrice ?? row.price);
-}
-
 
 function CoinIcon({ row, size = "md" }: { row: CryptoMarketRow; size?: "sm" | "md" }) {
   const sizeClass = size === "sm" ? "h-7 w-7 text-[10px]" : "h-8 w-8 text-xs";
@@ -261,176 +159,96 @@ function MetricBox({
 
 function KlinePanel({
   symbol,
+  timeframe,
   bars,
 }: {
   symbol: string;
+  timeframe: string;
   bars: CryptoKlineBar[];
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<IChartApi | null>(null);
-  const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
-  const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
-
-  useEffect(() => {
-    if (!ref.current) return;
-
-    const chart = createChart(ref.current, {
-      autoSize: true,
-      height: 360,
-      layout: {
-        background: { type: ColorType.Solid, color: "transparent" },
-        textColor: "#a1a1aa",
-        fontSize: 11,
-      },
-      grid: {
-        vertLines: { color: "rgba(63,63,70,0.22)" },
-        horzLines: { color: "rgba(63,63,70,0.35)" },
-      },
-      rightPriceScale: {
-        borderColor: "#27272a",
-        scaleMargins: { top: 0.08, bottom: 0.28 },
-      },
-      timeScale: {
-        borderColor: "#27272a",
-        timeVisible: true,
-        secondsVisible: false,
-        rightOffset: 8,
-        barSpacing: 7,
-      },
-      crosshair: {
-        mode: 0,
-        vertLine: { color: "rgba(251,146,60,0.55)", width: 1, style: 3, labelBackgroundColor: "#f97316" },
-        horzLine: { color: "rgba(251,146,60,0.55)", width: 1, style: 3, labelBackgroundColor: "#f97316" },
-      },
-      localization: {
-        priceFormatter: (price: number) => formatMoney(price),
-      },
-    });
-
-    const candleSeries = chart.addSeries(CandlestickSeries, {
-      upColor: "#10b981",
-      downColor: "#ef4444",
-      borderUpColor: "#10b981",
-      borderDownColor: "#ef4444",
-      wickUpColor: "#34d399",
-      wickDownColor: "#f87171",
-      priceLineColor: "#f97316",
-      lastValueVisible: true,
-      priceLineVisible: true,
-    });
-
-    const volumeSeries = chart.addSeries(HistogramSeries, {
-      priceFormat: { type: "volume" },
-      priceScaleId: "volume",
-      lastValueVisible: false,
-      priceLineVisible: false,
-    });
-
-    chart.priceScale("volume").applyOptions({
-      scaleMargins: { top: 0.78, bottom: 0 },
-      borderVisible: false,
-    });
-
-    chartRef.current = chart;
-    candleSeriesRef.current = candleSeries;
-    volumeSeriesRef.current = volumeSeries;
-
-    return () => {
-      chart.remove();
-      chartRef.current = null;
-      candleSeriesRef.current = null;
-      volumeSeriesRef.current = null;
-    };
-  }, []);
-
-  useEffect(() => {
-    const candleSeries = candleSeriesRef.current;
-    const volumeSeries = volumeSeriesRef.current;
-    if (!candleSeries || !volumeSeries) return;
-
-    const orderedBars = [...bars].sort((a, b) => a.timestamp - b.timestamp);
-    const candles: CandlestickData[] = orderedBars.map((bar) => ({
-      time: toChartTime(bar.timestamp),
-      open: bar.open,
-      high: bar.high,
-      low: bar.low,
-      close: bar.close,
-    }));
-    const volumes: HistogramData[] = orderedBars.map((bar) => ({
-      time: toChartTime(bar.timestamp),
-      value: bar.volume,
-      color: bar.close >= bar.open ? "rgba(16,185,129,0.42)" : "rgba(239,68,68,0.42)",
-    }));
-
-    candleSeries.setData(candles);
-    volumeSeries.setData(volumes);
-    chartRef.current?.timeScale().fitContent();
-  }, [bars]);
-
-  return (
-    <div
-      ref={ref}
-      className="h-[420px] w-full overflow-hidden rounded-md bg-[#0d0f13]"
-      aria-label={`${symbol} candlestick chart`}
-    />
-  );
+  return <KLineChartPanel symbol={symbol} timeframe={timeframe} bars={bars} height={420} className="rounded-md bg-[#0d0f13]" />;
 }
 
 export function Home() {
-  const [markets, setMarkets] = useState<CryptoMarketsResponse>(FALLBACK_MARKETS);
+  const [markets, setMarkets] = useState<CryptoMarketsResponse>(EMPTY_MARKETS);
   const [selectedSymbol, setSelectedSymbol] = useState("BTC/USDT");
-  const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>("1h");
-  const [bars, setBars] = useState<CryptoKlineBar[]>(() => buildFallbackBars("BTC/USDT"));
+  const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>("5m");
+  const [bars, setBars] = useState<CryptoKlineBar[]>([]);
   const [marketLoading, setMarketLoading] = useState(false);
   const [klineLoading, setKlineLoading] = useState(false);
   const [query, setQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const marketRequestVersionRef = useRef(0);
+  const klineRequestVersionRef = useRef(0);
+  const selectedSymbolRef = useRef(selectedSymbol);
   const selectedRow = markets.rows.find((row) => row.symbol === selectedSymbol) ?? markets.rows[0];
+  const hasMarketRows = markets.rows.length > 0;
 
-  const loadMarkets = async () => {
+  useEffect(() => {
+    selectedSymbolRef.current = selectedSymbol;
+  }, [selectedSymbol]);
+
+  const loadMarkets = useCallback(async () => {
+    const requestVersion = marketRequestVersionRef.current + 1;
+    marketRequestVersionRef.current = requestVersion;
     setMarketLoading(true);
     setError(null);
     try {
       const payload = await api.getCryptoMarkets(13);
+      if (marketRequestVersionRef.current !== requestVersion) return;
       const enrichedPayload = enrichMarkets(payload);
       setMarkets(enrichedPayload);
-      if (!payload.rows.some((row) => row.symbol === selectedSymbol)) {
+      if (payload.status !== "ok" || !payload.rows.length) {
+        setError("Failed to load live market prices");
+        return;
+      }
+      if (!payload.rows.some((row) => row.symbol === selectedSymbolRef.current)) {
         setSelectedSymbol(payload.rows[0]?.symbol ?? "BTC/USDT");
       }
     } catch (err) {
-      setMarkets(FALLBACK_MARKETS);
+      if (marketRequestVersionRef.current !== requestVersion) return;
+      setMarkets(EMPTY_MARKETS);
       setError(err instanceof Error ? err.message : "Failed to load market data");
     } finally {
-      setMarketLoading(false);
+      if (marketRequestVersionRef.current === requestVersion) {
+        setMarketLoading(false);
+      }
     }
-  };
-
-  useEffect(() => {
-    void loadMarkets();
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
+    void loadMarkets();
+    const timer = window.setInterval(() => {
+      void loadMarkets();
+    }, MARKET_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [loadMarkets]);
+
+  const loadKlines = useCallback(async () => {
+    const requestVersion = klineRequestVersionRef.current + 1;
+    klineRequestVersionRef.current = requestVersion;
     setKlineLoading(true);
-    api.getCryptoKlines(selectedSymbol, timeframe, 180)
-      .then((payload) => {
-        if (!cancelled) {
-          const nextBars = payload.source.trim().toLowerCase().startsWith("fallback")
-            ? alignBarsToReferencePrice(payload.bars, selectedRow?.price)
-            : payload.bars;
-          setBars(nextBars);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setBars(buildFallbackBars(selectedSymbol, selectedRow?.price));
-      })
-      .finally(() => {
-        if (!cancelled) setKlineLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedRow?.price, selectedSymbol, timeframe]);
+    try {
+      const payload = await api.getCryptoKlines(selectedSymbol, timeframe, 180);
+      if (klineRequestVersionRef.current !== requestVersion) return;
+      setBars(payload.status === "ok" ? payload.bars : []);
+    } catch {
+      if (klineRequestVersionRef.current !== requestVersion) return;
+      setBars([]);
+    } finally {
+      if (klineRequestVersionRef.current === requestVersion) {
+        setKlineLoading(false);
+      }
+    }
+  }, [selectedSymbol, timeframe]);
+
+  useEffect(() => {
+    void loadKlines();
+    const timer = window.setInterval(() => {
+      void loadKlines();
+    }, KLINE_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [loadKlines]);
 
   const filteredRows = useMemo(() => {
     const clean = query.trim().toLowerCase();
@@ -438,7 +256,7 @@ export function Home() {
     return markets.rows.filter((row) => row.symbol.toLowerCase().includes(clean) || row.name.toLowerCase().includes(clean));
   }, [markets.rows, query]);
 
-  const longShort = selectedRow.change_24h >= 0 ? "Long Bias" : "Short Pressure";
+  const longShort = selectedRow ? (selectedRow.change_24h >= 0 ? "Long Bias" : "Short Pressure") : "--";
 
   return (
     <main className="min-h-full overflow-auto bg-[#0b0d10] text-zinc-100">
@@ -463,10 +281,10 @@ export function Home() {
         </header>
 
         <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <MetricBox label="Total Market Cap" value={formatMoney(markets.aggregate.market_cap)} sub={`BTC dominance ${markets.aggregate.btc_dominance.toFixed(2)}%`} icon={BarChart3} />
-          <MetricBox label="24h Volume" value={formatMoney(markets.aggregate.volume_24h)} sub="Spot volume across top assets" icon={Activity} tone="green" />
-          <MetricBox label="Open Interest" value={formatMoney(markets.aggregate.open_interest)} sub={`${formatPercent(markets.aggregate.avg_change_24h)} average move`} icon={Gauge} tone={markets.aggregate.avg_change_24h >= 0 ? "green" : "red"} />
-          <MetricBox label="Liquidation 24h" value={formatMoney(markets.aggregate.liquidation_24h)} sub="Estimated risk flush monitor" icon={TrendingDown} tone="amber" />
+          <MetricBox label="Total Market Cap" value="--" sub="Not provided by current source" icon={BarChart3} />
+          <MetricBox label="24h Volume" value={hasMarketRows ? formatMoney(markets.aggregate.volume_24h) : "--"} sub="Spot volume across top assets" icon={Activity} tone="green" />
+          <MetricBox label="Open Interest" value="--" sub={hasMarketRows ? `${formatPercent(markets.aggregate.avg_change_24h)} average move` : "No live data"} icon={Gauge} tone={markets.aggregate.avg_change_24h >= 0 ? "green" : "red"} />
+          <MetricBox label="Liquidation 24h" value="--" sub="Not provided by current source" icon={TrendingDown} tone="amber" />
         </section>
 
         <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
@@ -476,24 +294,24 @@ export function Home() {
                 <div className="rounded-md bg-[#181b21] p-3">
                   <div className="text-xs text-zinc-500">Selected</div>
                   <div className="mt-2 flex items-center gap-2 text-xl font-semibold text-white">
-                    <CoinIcon row={selectedRow} size="sm" />
+                    {selectedRow ? <CoinIcon row={selectedRow} size="sm" /> : null}
                     {selectedSymbol}
                   </div>
                 </div>
                 <div className="rounded-md bg-[#181b21] p-3">
                   <div className="text-xs text-zinc-500">Price</div>
-                  <div className="mt-2 text-xl font-semibold text-white">{formatMoney(selectedRow.price)}</div>
+                  <div className="mt-2 text-xl font-semibold text-white">{selectedRow ? formatMoney(selectedRow.price) : "--"}</div>
                 </div>
                 <div className="rounded-md bg-[#181b21] p-3">
                   <div className="text-xs text-zinc-500">24h Change</div>
-                  <div className={cn("mt-2 flex items-center gap-1 text-xl font-semibold", toneClass(selectedRow.change_24h))}>
-                    {selectedRow.change_24h >= 0 ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
-                    {formatPercent(selectedRow.change_24h)}
+                  <div className={cn("mt-2 flex items-center gap-1 text-xl font-semibold", selectedRow ? toneClass(selectedRow.change_24h) : "text-zinc-300")}>
+                    {selectedRow ? selectedRow.change_24h >= 0 ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" /> : null}
+                    {selectedRow ? formatPercent(selectedRow.change_24h) : "--"}
                   </div>
                 </div>
                 <div className="rounded-md bg-[#181b21] p-3">
                   <div className="text-xs text-zinc-500">Funding / Bias</div>
-                  <div className="mt-2 text-xl font-semibold text-white">{formatPercent(selectedRow.funding_rate, 4)}</div>
+                  <div className="mt-2 text-xl font-semibold text-white">--</div>
                   <div className="mt-1 text-xs text-zinc-500">{longShort}</div>
                 </div>
               </div>
@@ -507,7 +325,7 @@ export function Home() {
                     K-line Data
                   </div>
                   <div className="mt-1 text-xs text-zinc-500">
-                    {selectedSymbol} Perpetual Index · {timeframe.toUpperCase()} · Redis cache + TimescaleDB persistence
+                    {selectedSymbol} · {timeframe.toUpperCase()} · Binance REST with Coinbase secondary source
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -533,7 +351,10 @@ export function Home() {
                   </div>
                 </div>
               </div>
-              <KlinePanel symbol={selectedSymbol} bars={bars} />
+              <KlinePanel symbol={selectedSymbol} timeframe={timeframe} bars={bars} />
+              {!bars.length && !klineLoading ? (
+                <div className="mt-2 text-xs text-amber-200">No live K-line data returned. Chart is intentionally empty.</div>
+              ) : null}
             </div>
           </div>
 
@@ -571,15 +392,15 @@ export function Home() {
             </div>
 
             <div className="rounded-lg border border-zinc-800 bg-[#111318] p-4">
-              <div className="text-sm font-semibold text-zinc-100">Storage Status</div>
+              <div className="text-sm font-semibold text-zinc-100">Data Status</div>
               <div className="mt-4 space-y-3 text-sm">
                 <div className="flex items-center justify-between rounded-md bg-[#181b21] px-3 py-2">
-                  <span className="text-zinc-400">Redis</span>
-                  <span className="font-mono text-emerald-300">127.0.0.1</span>
+                  <span className="text-zinc-400">Market source</span>
+                  <span className="font-mono text-emerald-300">{markets.source}</span>
                 </div>
                 <div className="flex items-center justify-between rounded-md bg-[#181b21] px-3 py-2">
-                  <span className="text-zinc-400">TimescaleDB</span>
-                  <span className="font-mono text-sky-300">venus</span>
+                  <span className="text-zinc-400">K-line bars</span>
+                  <span className="font-mono text-sky-300">{bars.length}</span>
                 </div>
                 <div className="flex items-center justify-between rounded-md bg-[#181b21] px-3 py-2">
                   <span className="text-zinc-400">Rows</span>
@@ -644,13 +465,20 @@ export function Home() {
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-zinc-100">{formatMoney(row.price)}</td>
                     <td className={cn("px-4 py-3 text-right font-mono font-semibold", toneClass(row.change_24h))}>{formatPercent(row.change_24h)}</td>
-                    <td className={cn("px-4 py-3 text-right font-mono", toneClass(row.funding_rate))}>{formatPercent(row.funding_rate, 4)}</td>
+                    <td className="px-4 py-3 text-right font-mono text-zinc-500">--</td>
                     <td className="px-4 py-3 text-right font-mono text-zinc-300">{formatMoney(row.quote_volume_24h)}</td>
-                    <td className="px-4 py-3 text-right font-mono text-zinc-300">{formatMoney(row.market_cap)}</td>
-                    <td className="px-4 py-3 text-right font-mono text-zinc-300">{formatMoney(row.open_interest)}</td>
-                    <td className="px-4 py-3 text-right font-mono text-zinc-300">{formatMoney(row.liquidation_24h)}</td>
+                    <td className="px-4 py-3 text-right font-mono text-zinc-500">--</td>
+                    <td className="px-4 py-3 text-right font-mono text-zinc-500">--</td>
+                    <td className="px-4 py-3 text-right font-mono text-zinc-500">--</td>
                   </tr>
                 ))}
+                {!filteredRows.length ? (
+                  <tr>
+                    <td colSpan={9} className="px-4 py-8 text-center text-sm text-zinc-500">
+                      No live market prices returned.
+                    </td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>

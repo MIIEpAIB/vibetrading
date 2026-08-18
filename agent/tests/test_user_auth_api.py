@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import api_server
+import pytest
 
 
 def test_operator_api_key_short_circuits_user_token_lookup(monkeypatch) -> None:
@@ -87,3 +88,80 @@ def test_strategy_market_admin_config_roundtrip(monkeypatch, tmp_path) -> None:
     assert loaded[0].enabled is False
     assert loaded[0].status == "hidden"
     assert loaded[1].price == "80 USD/30 days"
+
+
+def test_strategy_market_admin_response_includes_full_builtin_catalog(monkeypatch) -> None:
+    monkeypatch.setattr(api_server, "_load_strategy_market_admin_items", lambda: [])
+    monkeypatch.setattr(
+        api_server,
+        "_get_strategy_store",
+        lambda: (_ for _ in ()).throw(RuntimeError("store unavailable")),
+    )
+
+    items = api_server._load_strategy_market_admin_response_items()
+
+    assert len(items) == 20
+    assert items[0].id == "quantclaw-ai-assistant"
+    assert items[3].id == "classic-turtle-trading"
+    assert items[-1].id == "perp-multi-symbol-balance"
+    assert all(item.enabled and item.status == "published" for item in items)
+
+
+def test_professional_grid_builtin_details_are_available_to_admin(monkeypatch) -> None:
+    monkeypatch.setattr(api_server, "_load_strategy_market_admin_items", lambda: [])
+    monkeypatch.setattr(
+        api_server,
+        "_get_strategy_store",
+        lambda: (_ for _ in ()).throw(RuntimeError("store unavailable")),
+    )
+
+    item = next(
+        item
+        for item in api_server._load_strategy_market_admin_response_items()
+        if item.id == "professional-grid-trading"
+    )
+
+    assert item.language == "python"
+    assert item.category == "grid"
+    assert item.strategy_description
+    assert item.code_snapshot
+    assert "CryptoAdvancedGrid" in item.code_snapshot or "SignalEngine" in item.code_snapshot
+
+
+@pytest.mark.asyncio
+async def test_admin_delete_strategy_market_item_removes_public_record(monkeypatch) -> None:
+    class FakeStore:
+        def __init__(self) -> None:
+            self.deleted_ids: list[str] = []
+
+        def delete_public_strategy(self, public_id: str) -> bool:
+            self.deleted_ids.append(public_id)
+            return public_id == "pub_123"
+
+    store = FakeStore()
+    monkeypatch.setattr(api_server, "_get_strategy_store", lambda: store)
+    monkeypatch.setattr(api_server, "_load_strategy_market_admin_response_items", lambda: [])
+
+    response = await api_server.delete_admin_strategy_market("pub_123")
+
+    assert store.deleted_ids == ["pub_123"]
+    assert response == {"items": []}
+
+
+@pytest.mark.asyncio
+async def test_admin_delete_strategy_market_item_persists_builtin_delete(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(api_server, "STRATEGY_MARKET_ADMIN_PATH", tmp_path / "market.json")
+    monkeypatch.setattr(
+        api_server,
+        "_get_strategy_store",
+        lambda: (_ for _ in ()).throw(api_server.HTTPException(status_code=501)),
+    )
+
+    response = await api_server.delete_admin_strategy_market("classic-turtle-trading")
+
+    assert response["items"]
+    assert all(item.id != "classic-turtle-trading" for item in response["items"])
+    saved = api_server._load_strategy_market_admin_items()
+    deleted = next(item for item in saved if item.id == "classic-turtle-trading")
+    assert deleted.deleted is True
+    assert deleted.status == "archived"

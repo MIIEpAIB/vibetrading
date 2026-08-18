@@ -20,9 +20,9 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Security, UploadFile, status
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Security, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -641,8 +641,19 @@ class StrategyMarketAdminItem(BaseModel):
     note: str = Field("", max_length=500)
     updated_at: str = ""
     name: str = ""
+    summary: str = ""
     owner_user_id: Optional[int] = None
     source_strategy_id: str = ""
+    deleted: bool = False
+    description: str = ""
+    strategy_description: str = ""
+    language: str = ""
+    category: str = ""
+    tags: List[str] = Field(default_factory=list)
+    code_snapshot: str = ""
+    published_at: str = ""
+    backtest_summary: Dict[str, Any] = Field(default_factory=dict)
+    risk_warnings: List[str] = Field(default_factory=list)
 
 
 class StrategyMarketAdminResponse(BaseModel):
@@ -655,6 +666,30 @@ class StrategyMarketAdminUpdateRequest(BaseModel):
     """Replace the operator-managed strategy market config."""
 
     items: List[StrategyMarketAdminItem] = Field(default_factory=list)
+
+
+BUILTIN_STRATEGY_MARKET_ITEMS: tuple[tuple[str, str, str], ...] = (
+    ("quantclaw-ai-assistant", "built-in", "QuantClaw AI交易助手"),
+    ("cross-platform-copy-trading", "built-in", "跨平台跟单策略"),
+    ("professional-grid-trading", "built-in", "专业网格交易策略"),
+    ("classic-turtle-trading", "built-in", "经典海龟交易策略"),
+    ("multi-symbol-supertrend", "built-in", "多品种超级趋势策略"),
+    ("cross-exchange-market-making", "built-in", "跨交易所做市商策略"),
+    ("smart-dca", "built-in", "智能定投策略"),
+    ("liquidity-market-making", "built-in", "流动性做市策略"),
+    ("auto-step-grid", "built-in", "自动步进网格"),
+    ("iceberg-twap", "built-in", "冰山委托TWAP策略"),
+    ("crypto-trend-momentum", "built-in", "加密趋势动量策略"),
+    ("crypto-perp-funding-carry", "built-in", "永续资金费率套利"),
+    ("crypto-cross-exchange-spread", "built-in", "跨交易所价差套利"),
+    ("crypto-stat-arb-pairs", "built-in", "加密统计套利配对"),
+    ("crypto-vol-target-rotation", "built-in", "波动率目标轮动策略"),
+    ("crypto-event-driven-risk", "built-in", "加密事件驱动策略"),
+    ("binance-perp-funding-arbitrage", "paid", "币安永续资金费率套利"),
+    ("perp-multi-symbol-grid", "paid", "永续合约多币种网格策略"),
+    ("universal-perp-single-symbol-grid", "paid", "通用永续单币种网格策略"),
+    ("perp-multi-symbol-balance", "paid", "永续合约多币种平衡策略"),
+)
 
 
 # ---- V4 Session Models ----
@@ -830,6 +865,23 @@ class StrategyLibraryResponse(BaseModel):
     """Strategy library list response."""
 
     strategies: List[StrategyLibraryItem]
+
+
+class StrategyVersionItem(BaseModel):
+    """Immutable saved version of a strategy."""
+
+    version: int
+    strategy_id: str
+    owner_user_id: int
+    name: str
+    description: str = ""
+    strategyDescription: str = ""
+    language: str = "python"
+    category: str = "trend"
+    tags: List[str] = Field(default_factory=list)
+    code: str
+    code_sha256: str
+    createdAt: str
 
 
 class PublicStrategyMarketItem(BaseModel):
@@ -1450,6 +1502,15 @@ def _has_trusted_dev_proxy_auth(request: Request) -> bool:
     return bool(token) and hmac.compare_digest(token, secret)
 
 
+def _has_trusted_dev_proxy_auth_headers(headers: Mapping[str, str]) -> bool:
+    """Return whether a non-HTTP stream carries the trusted dev proxy marker."""
+    secret = os.getenv(_DEV_PROXY_AUTH_ENV, "").strip()
+    if len(secret) < 16:
+        return False
+    token = str(headers.get(_DEV_PROXY_AUTH_HEADER, "")).strip()
+    return bool(token) and hmac.compare_digest(token, secret)
+
+
 def _has_dev_proxy_header(request: Request) -> bool:
     """Return whether a request carries the dev-proxy marker header."""
     return bool(request.headers.get(_DEV_PROXY_AUTH_HEADER, "").strip())
@@ -1468,6 +1529,39 @@ def _validate_explicit_operator_bearer(
     token = _auth_credential_from_header_or_query(cred, None, allow_query=False)
     if not token or not hmac.compare_digest(token, api_key):
         raise HTTPException(status_code=401, detail="Invalid or missing operator API key")
+
+
+def _is_local_websocket_client(websocket: WebSocket) -> bool:
+    """Return whether a websocket peer originates from loopback."""
+    host = websocket.client.host if websocket.client else ""
+    if host in {"localhost", "testclient"}:
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if ip.is_loopback:
+        return True
+    return _trusted_docker_loopback_ip(ip)
+
+
+def _resolve_websocket_auth_context(websocket: WebSocket, query_api_key: Optional[str]) -> AuthContext:
+    """Resolve websocket auth using the same token model as HTTP endpoints."""
+    token = (query_api_key or "").strip()
+    api_key = _configured_api_key()
+    if api_key and token and hmac.compare_digest(token, api_key):
+        return AuthContext(user=None, operator=True)
+
+    user = _resolve_user_from_token(token)
+    if user is not None:
+        return AuthContext(user=user, operator=False)
+
+    if _is_local_websocket_client(websocket) or _has_trusted_dev_proxy_auth_headers(websocket.headers):
+        return AuthContext(user=None, operator=True)
+
+    if api_key:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing API key")
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="API_AUTH_KEY is required for non-local API access")
 
 
 def _env_flag_enabled(name: str) -> bool:
@@ -2076,21 +2170,176 @@ def _public_strategy_admin_item(record: Any) -> StrategyMarketAdminItem:
         note=str(record.summary or "")[:500],
         updated_at=record.updatedAt,
         name=record.name,
+        summary=str(record.summary or ""),
         owner_user_id=record.ownerUserId,
         source_strategy_id=record.sourceStrategyId,
+        description=record.description,
+        strategy_description=record.strategyDescription,
+        language=record.language,
+        category=record.category,
+        tags=list(record.tags),
+        code_snapshot=record.codeSnapshot,
+        published_at=record.publishedAt,
+        backtest_summary=dict(record.backtestSummary),
+        risk_warnings=list(record.riskWarnings),
     )
 
 
+def _builtin_strategy_details(strategy_id: str) -> dict[str, Any]:
+    """Return details for built-in strategies shown in the operator console."""
+    if strategy_id != "professional-grid-trading":
+        return {}
+
+    code = ""
+    for candidate in (
+        AGENT_DIR.parent / "Strategy" / "CryptoAdvancedGrid.py",
+        AGENT_DIR.parent / "frontend" / "src" / "lib" / "strategies" / "CryptoAdvancedGrid.py",
+    ):
+        try:
+            code = candidate.read_text(encoding="utf-8")
+            break
+        except OSError:
+            continue
+    if not code:
+        code = _market_signal_engine_code(strategy_id)
+
+    return {
+        "description": "价格区间、层级仓位和极端行情保护。",
+        "strategy_description": (
+            "专业网格交易策略围绕 BTC/USDT 价格区间建立多层买卖网格，"
+            "结合 EMA 趋势过滤和 ATR 波动率动态调整网格间距；"
+            "当价格突破保护区间或波动率过高时暂停交易，降低极端行情风险。"
+        ),
+        "language": "python",
+        "category": "grid",
+        "tags": ["grid", "risk", "official"],
+        "code_snapshot": code,
+        "risk_warnings": [
+            "网格策略在单边行情中可能持续累积库存或错过趋势。",
+            "真实交易前必须配置 API 权限、资金上限和止损规则。",
+            "交易所连接、手续费、滑点和流动性会显著影响实际收益。",
+        ],
+    }
+
+
+def _default_strategy_market_items() -> list[StrategyMarketAdminItem]:
+    return [
+        StrategyMarketAdminItem(
+            id=strategy_id,
+            kind=kind,
+            enabled=True,
+            featured=False,
+            price="",
+            status="published",
+            name=name,
+            **_builtin_strategy_details(strategy_id),
+        )
+        for strategy_id, kind, name in BUILTIN_STRATEGY_MARKET_ITEMS
+    ]
+
+
+def _merge_builtin_strategy_item(
+    default: StrategyMarketAdminItem,
+    configured: StrategyMarketAdminItem | None,
+) -> StrategyMarketAdminItem:
+    if configured is None:
+        return default
+    detail_fields = (
+        "description",
+        "strategy_description",
+        "language",
+        "category",
+        "code_snapshot",
+        "published_at",
+    )
+    updates = {
+        field: getattr(configured, field) or getattr(default, field)
+        for field in detail_fields
+    }
+    updates["tags"] = configured.tags or default.tags
+    updates["risk_warnings"] = configured.risk_warnings or default.risk_warnings
+    updates["backtest_summary"] = configured.backtest_summary or default.backtest_summary
+    return default.model_copy(update={**configured.model_dump(), **updates})
+
+
+def _strategy_catalog_api_items(store: Any) -> list[StrategyMarketAdminItem]:
+    configured = {item.id: item for item in _load_strategy_market_admin_items()}
+    defaults = [
+        _merge_builtin_strategy_item(item, configured.get(item.id))
+        for item in _default_strategy_market_items()
+    ]
+    store.ensure_strategy_catalog([item.model_dump() for item in defaults])
+    for record in store.list_all_public_strategies():
+        store.upsert_strategy_catalog(
+            [
+                {
+                    "strategy_id": record.publicId,
+                    "kind": "community",
+                    "owner_user_id": record.ownerUserId,
+                    "source_strategy_id": record.sourceStrategyId,
+                    "name": record.name,
+                    "summary": record.summary,
+                    "description": record.description,
+                    "strategy_description": record.strategyDescription,
+                    "language": record.language,
+                    "category": record.category,
+                    "tags": record.tags,
+                    "code_snapshot": record.codeSnapshot,
+                    "status": record.reviewStatus,
+                    "published_at": record.publishedAt,
+                    "updated_at": record.updatedAt,
+                    "backtest_summary": record.backtestSummary,
+                    "risk_warnings": record.riskWarnings,
+                }
+            ],
+        )
+    return [
+        StrategyMarketAdminItem(**item)
+        for item in store.list_strategy_catalog(kinds={"built-in", "paid", "community"})
+    ]
+
+
 def _load_strategy_market_admin_response_items() -> list[StrategyMarketAdminItem]:
-    items = _load_strategy_market_admin_items()
     try:
-        public_items = [_public_strategy_admin_item(record) for record in _get_strategy_store().list_all_public_strategies()]
-    except RuntimeError:
-        public_items = []
-    return [*items, *public_items]
+        return _strategy_catalog_api_items(_get_strategy_store())
+    except HTTPException as exc:
+        if exc.status_code != 501:
+            raise
+        configured = {item.id: item for item in _load_strategy_market_admin_items()}
+        merged_items = [
+            _merge_builtin_strategy_item(item, configured.get(item.id))
+            for item in _default_strategy_market_items()
+        ]
+        return [item for item in merged_items if not item.deleted and item.status != "archived"]
+
+
+def _load_strategy_market_catalog_items() -> list[StrategyMarketAdminItem]:
+    """Return catalog metadata, including deleted overrides for public filtering."""
+    try:
+        return _strategy_catalog_api_items(_get_strategy_store())
+    except HTTPException as exc:
+        if exc.status_code != 501:
+            raise
+        configured = {item.id: item for item in _load_strategy_market_admin_items()}
+        return [
+            _merge_builtin_strategy_item(item, configured.get(item.id))
+            for item in _default_strategy_market_items()
+        ]
 
 
 def _save_strategy_market_admin_items(items: list[StrategyMarketAdminItem]) -> list[StrategyMarketAdminItem]:
+    try:
+        store = _get_strategy_store()
+    except HTTPException as exc:
+        if exc.status_code != 501:
+            raise
+        store = None
+    if store is not None:
+        return [
+            StrategyMarketAdminItem(**item)
+            for item in store.upsert_strategy_catalog([item.model_dump() for item in items])
+        ]
+
     now = datetime.utcnow().isoformat()
     deduped: dict[str, StrategyMarketAdminItem] = {}
     public_statuses: dict[str, str] = {}
@@ -2589,7 +2838,7 @@ async def admin_delete_user(user_id: int):
 @app.get("/strategy-market/catalog", response_model=StrategyMarketAdminResponse)
 async def get_strategy_market_catalog_config():
     """Return public strategy market operator metadata."""
-    return {"items": _load_strategy_market_admin_items()}
+    return {"items": _load_strategy_market_catalog_items()}
 
 
 @app.get("/strategy-market/public", response_model=PublicStrategyMarketResponse)
@@ -2605,10 +2854,67 @@ async def get_admin_strategy_market():
     return {"items": _load_strategy_market_admin_response_items()}
 
 
+@app.get(
+    "/admin/strategy-market/{strategy_id}/versions",
+    response_model=List[StrategyVersionItem],
+    dependencies=[Depends(require_operator_auth)],
+)
+async def list_admin_strategy_market_versions(strategy_id: str):
+    """List immutable database-backed versions of a marketplace strategy."""
+    versions = _get_strategy_store().list_strategy_versions(strategy_id)
+    return [StrategyVersionItem(**version) for version in versions]
+
+
 @app.put("/admin/strategy-market", response_model=StrategyMarketAdminResponse, dependencies=[Depends(require_operator_auth)])
 async def update_admin_strategy_market(payload: StrategyMarketAdminUpdateRequest):
     """Replace operator-managed strategy market config."""
     return {"items": _save_strategy_market_admin_items(payload.items)}
+
+
+@app.delete(
+    "/admin/strategy-market/{strategy_id}",
+    response_model=StrategyMarketAdminResponse,
+    dependencies=[Depends(require_operator_auth)],
+)
+async def delete_admin_strategy_market(strategy_id: str):
+    """Permanently delete a community item or remove a catalog item override."""
+    try:
+        store = _get_strategy_store()
+    except HTTPException as exc:
+        if exc.status_code != 501:
+            raise
+        store = None
+
+    if store is not None:
+        if not store.delete_catalog_strategy(strategy_id):
+            raise HTTPException(status_code=404, detail=f"Strategy market item {strategy_id} not found")
+        if store.delete_public_strategy(strategy_id):
+            pass
+        return {"items": _load_strategy_market_admin_response_items()}
+
+    configured = _load_strategy_market_admin_items()
+    existing = next((item for item in configured if item.id == strategy_id), None)
+    if existing is None and strategy_id not in {item[0] for item in BUILTIN_STRATEGY_MARKET_ITEMS}:
+        raise HTTPException(status_code=404, detail=f"Strategy market item {strategy_id} not found")
+
+    item = existing or next(
+        StrategyMarketAdminItem(id=item_id, kind=kind, name=name)
+        for item_id, kind, name in BUILTIN_STRATEGY_MARKET_ITEMS
+        if item_id == strategy_id
+    )
+    _save_strategy_market_admin_items(
+        [
+            *[row for row in configured if row.id != strategy_id],
+            item.model_copy(
+                update={
+                    "enabled": False,
+                    "status": "archived",
+                    "deleted": True,
+                },
+            ),
+        ],
+    )
+    return {"items": _load_strategy_market_admin_response_items()}
 
 
 # ============================================================================
@@ -3395,7 +3701,7 @@ async def health_check():
 @app.get(
     "/crypto/markets",
     response_model=CryptoMarketsResponse,
-    dependencies=[Depends(require_local_or_auth)],
+    dependencies=[Depends(require_auth)],
 )
 async def get_crypto_markets(
     limit: int = Query(13, description="Number of mainstream crypto rows to return", ge=1, le=100),
@@ -3409,7 +3715,7 @@ async def get_crypto_markets(
 @app.get(
     "/crypto/symbols",
     response_model=CryptoSymbolsResponse,
-    dependencies=[Depends(require_local_or_auth)],
+    dependencies=[Depends(require_auth)],
 )
 async def get_crypto_symbols(
     exchange: str = Query("binance", pattern="^(okx|binance)$"),
@@ -3564,11 +3870,11 @@ async def reset_shadow_account(ctx: AuthContext = Depends(require_auth)):
 @app.get(
     "/crypto/klines",
     response_model=CryptoKlinesResponse,
-    dependencies=[Depends(require_local_or_auth)],
+    dependencies=[Depends(require_auth)],
 )
 async def get_crypto_klines(
     symbol: str = Query("BTC/USDT", description="Crypto symbol, e.g. BTC/USDT"),
-    timeframe: str = Query("1h", description="Bar size: 1m, 5m, 15m, 30m, 1h, 4h, 1d"),
+    timeframe: str = Query("1h", description="Bar size: 1m, 5m, 15m, 1h, 1d"),
     limit: int = Query(180, description="Maximum bars to return", ge=20, le=1000),
 ):
     """Return normalized OHLCV K-line bars for the dashboard chart."""
@@ -3578,6 +3884,92 @@ async def get_crypto_klines(
         return get_klines(symbol=symbol, timeframe=timeframe, limit=limit)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@app.websocket("/crypto/stream")
+async def stream_crypto_klines(websocket: WebSocket):
+    """Proxy Binance kline websocket updates to dashboard clients."""
+    from src.crypto_market import binance_kline_ws_url, parse_binance_kline_stream_message
+
+    await websocket.accept()
+    try:
+        _resolve_websocket_auth_context(websocket, websocket.query_params.get("api_key"))
+        symbol = websocket.query_params.get("symbol", "BTC/USDT")
+        timeframe = websocket.query_params.get("timeframe", "1h")
+        upstream_url = binance_kline_ws_url(symbol, timeframe)
+    except HTTPException as exc:
+        await websocket.close(code=1008, reason=exc.detail)
+        return
+    except ValueError as exc:
+        await websocket.close(code=1008, reason=str(exc))
+        return
+
+    try:
+        import websockets
+
+        await websocket.send_json({
+            "type": "subscribed",
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "source": "binance",
+        })
+        async with websockets.connect(upstream_url, ping_interval=20, ping_timeout=20, close_timeout=5) as upstream:
+            while True:
+                raw = await upstream.recv()
+                try:
+                    payload = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                message = parse_binance_kline_stream_message(payload)
+                if message is None:
+                    continue
+                await websocket.send_json(message)
+    except WebSocketDisconnect:
+        return
+    except Exception as exc:
+        logger.info("crypto websocket stream ended: %s", exc)
+        try:
+            await websocket.send_json({"type": "error", "detail": "crypto stream unavailable"})
+        except Exception:
+            pass
+        await websocket.close(code=1011, reason="crypto stream unavailable")
+
+
+@app.get("/api/crypto/kline", dependencies=[Depends(require_auth)])
+async def get_legacy_crypto_kline(
+    symbol: str = Query("BTCUSDT", description="Crypto symbol, e.g. BTCUSDT"),
+    frequency: str = Query("1d", description="Bar size: 5m, 15m, 1h, 1d"),
+    limit: int = Query(240, description="Maximum bars to return", ge=1, le=1000),
+):
+    """QUANTAXIS-compatible crypto kline payload."""
+    from src.crypto_market import get_klines
+
+    normalized = get_klines(symbol=symbol, timeframe=frequency, limit=limit)
+    if normalized["status"] != "ok":
+        return {
+            "status": 502,
+            "message": normalized.get("source", "crypto kline unavailable"),
+            "data": [],
+        }
+    return {
+        "status": 200,
+        "symbol": f"BINANCE.{normalized['symbol'].replace('/', '')}",
+        "frequency": normalized["timeframe"],
+        "count": len(normalized["bars"]),
+        "data": [
+            {
+                "time": int(bar["timestamp"] / 1000),
+                "date": bar["time"].replace("Z", "").replace("T", " "),
+                "open": bar["open"],
+                "high": bar["high"],
+                "low": bar["low"],
+                "close": bar["close"],
+                "volume": bar["volume"],
+                "source": normalized["source"],
+            }
+            for bar in normalized["bars"]
+        ],
+    }
 
 
 @app.get("/correlation")
@@ -4571,6 +4963,17 @@ async def upsert_strategy(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return store.upsert_strategy(record, user_id=ctx.user_id).to_dict()
+
+
+@app.get("/strategies/{strategy_id}/versions", response_model=List[StrategyVersionItem])
+async def list_strategy_versions(
+    strategy_id: str,
+    ctx: AuthContext = Depends(require_auth),
+):
+    """List immutable database-backed versions of a user's strategy."""
+    record = _strategy_or_404(strategy_id, user_id=ctx.user_id)
+    versions = _get_strategy_store().list_strategy_versions(record.id, user_id=ctx.user_id)
+    return [StrategyVersionItem(**version) for version in versions]
 
 
 @app.post("/strategies/{strategy_id}/publish", response_model=PublicStrategyMarketItem)

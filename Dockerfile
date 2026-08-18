@@ -34,6 +34,7 @@ RUN pip install --no-cache-dir -r agent/requirements.txt
 # Copy project
 COPY pyproject.toml LICENSE README.md ./
 COPY agent/ agent/
+COPY --from=frontend-build /app/frontend/src/lib/strategies/CryptoAdvancedGrid.py Strategy/CryptoAdvancedGrid.py
 
 # Copy built frontend
 COPY --from=frontend-build /app/frontend/dist frontend/dist

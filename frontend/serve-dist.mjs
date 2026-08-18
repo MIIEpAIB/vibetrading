@@ -1,6 +1,8 @@
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { createServer } from "node:http";
+import net from "node:net";
 import { dirname, extname, join, normalize, resolve } from "node:path";
+import tls from "node:tls";
 import { fileURLToPath } from "node:url";
 import { URL } from "node:url";
 
@@ -12,8 +14,10 @@ const tradingViewRoot = process.env.TRADINGVIEW_ROOT
   ? resolve(process.env.TRADINGVIEW_ROOT)
   : join(scriptDir, "lightweight-charts", "website", "build");
 const apiTarget = process.env.API_URL || process.env.VITE_API_URL || "http://127.0.0.1:8899";
+const devProxyAuth = process.env.VIBE_DEV_PROXY_AUTH || "";
 
 const apiPrefixes = [
+  "/api",
   "/alpha",
   "/admin",
   "/auth",
@@ -137,6 +141,9 @@ function isTradingViewRequest(urlPath) {
 function proxyApiRequest(request, response) {
   const target = new URL(request.url || "/", apiTarget);
   const headers = { ...request.headers, host: target.host };
+  if (devProxyAuth) {
+    headers["x-vibe-dev-proxy-auth"] = devProxyAuth;
+  }
 
   const upstream = fetch(target, {
     method: request.method,
@@ -176,6 +183,50 @@ function proxyApiRequest(request, response) {
     });
 }
 
+function proxyWebSocketUpgrade(request, socket, head) {
+  if (!isApiRequest(request)) {
+    socket.destroy();
+    return;
+  }
+
+  const target = new URL(request.url || "/", apiTarget);
+  const isSecureTarget = target.protocol === "https:" || target.protocol === "wss:";
+  const port = Number(target.port || (isSecureTarget ? 443 : 80));
+  const headers = {
+    ...request.headers,
+    host: target.host,
+  };
+  if (devProxyAuth) {
+    headers["x-vibe-dev-proxy-auth"] = devProxyAuth;
+  }
+
+  const headerLines = Object.entries(headers)
+    .filter(([, value]) => value !== undefined)
+    .flatMap(([name, value]) => Array.isArray(value)
+      ? value.map((item) => `${name}: ${item}`)
+      : [`${name}: ${value}`]);
+  const upgradeRequest = [
+    `${request.method} ${request.url || "/"} HTTP/${request.httpVersion}`,
+    ...headerLines,
+    "",
+    "",
+  ].join("\r\n");
+
+  const onUpstreamReady = () => {
+    upstream.write(upgradeRequest);
+    if (head.length > 0) {
+      upstream.write(head);
+    }
+    socket.pipe(upstream).pipe(socket);
+  };
+  const upstream = isSecureTarget
+    ? tls.connect({ host: target.hostname, port, servername: target.hostname }, onUpstreamReady)
+    : net.connect({ host: target.hostname, port }, onUpstreamReady);
+
+  upstream.on("error", () => socket.destroy());
+  socket.on("error", () => upstream.destroy());
+}
+
 const server = createServer((request, response) => {
   if (isApiRequest(request)) {
     proxyApiRequest(request, response);
@@ -200,6 +251,8 @@ const server = createServer((request, response) => {
 
   createReadStream(filePath).pipe(response);
 });
+
+server.on("upgrade", proxyWebSocketUpgrade);
 
 server.listen(port, host, () => {
   console.log(`Serving ${root} at http://${host}:${port}`);

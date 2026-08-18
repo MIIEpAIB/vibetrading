@@ -5,7 +5,7 @@ import { useTranslation } from "@/i18n/I18nProvider";
 import { adminUrl } from "@/lib/adminUrl";
 import { useAuthStore } from "@/stores/auth";
 
-const Home = lazy(() => import("@/pages/Home").then((m) => ({ default: m.Home })));
+const Crypto = lazy(() => import("@/pages/Crypto").then((m) => ({ default: m.Crypto })));
 const Agent = lazy(() => import("@/pages/Agent").then((m) => ({ default: m.Agent })));
 const RunDetail = lazy(() =>
   import("@/pages/RunDetail").then((m) => ({ default: m.RunDetail })),
@@ -18,6 +18,9 @@ const Correlation = lazy(() =>
 );
 const AlphaZoo = lazy(() =>
   import("@/pages/AlphaZoo").then((m) => ({ default: m.AlphaZoo })),
+);
+const Dashboard = lazy(() =>
+  import("@/pages/Dashboard").then((m) => ({ default: m.Dashboard })),
 );
 const StrategyMarket = lazy(() =>
   import("@/pages/StrategyMarket").then((m) => ({ default: m.StrategyMarket })),
@@ -109,7 +112,8 @@ export const router = createBrowserRouter([
       {
         element: <Layout />,
         children: [
-          { path: "/dashboard", element: wrap(Home) },
+          { path: "/dashboard", element: wrap(Dashboard) },
+          { path: "/crypto", element: wrap(Crypto) },
           { path: "/agent", element: wrap(Agent) },
           { path: "/strategies", element: wrap(StrategyLibrary) },
           { path: "/m/add-strategy", element: wrap(StrategyEdit) },

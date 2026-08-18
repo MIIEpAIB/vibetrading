@@ -1,7 +1,5 @@
 import type { StrategyLibraryItem } from "@/lib/api";
 
-export const OWNED_STRATEGY_STORAGE_KEY = "vibe-personal-strategy-library";
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -60,26 +58,6 @@ export function normalizeOwnedStrategy(value: unknown, fallback = fallbackStrate
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : fallback.updatedAt ?? now,
     shareStatus: typeof value.shareStatus === "string" && value.shareStatus.trim() ? value.shareStatus : fallback.shareStatus ?? "none",
   };
-}
-
-export function readOwnedStrategies(): StrategyLibraryItem[] {
-  if (typeof window === "undefined") return [];
-  const raw = window.localStorage.getItem(OWNED_STRATEGY_STORAGE_KEY);
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map((item) => normalizeOwnedStrategy(item))
-      .filter((strategy) => strategy.name.trim() && strategy.code.trim());
-  } catch {
-    return [];
-  }
-}
-
-export function saveOwnedStrategies(strategies: StrategyLibraryItem[]) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(OWNED_STRATEGY_STORAGE_KEY, JSON.stringify(strategies));
 }
 
 export function upsertOwnedStrategy(strategies: StrategyLibraryItem[], next: StrategyLibraryItem): StrategyLibraryItem[] {

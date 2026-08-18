@@ -183,6 +183,8 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(strategy),
     }),
+  listStrategyVersions: (strategyId: string) =>
+    request<StrategyVersionItem[]>(`/strategies/${encodeURIComponent(strategyId)}/versions`),
   deleteStrategy: (strategyId: string) =>
     request<{ status: string; id: string }>(`/strategies/${encodeURIComponent(strategyId)}`, {
       method: "DELETE",
@@ -368,6 +370,12 @@ export const api = {
     const q = new URLSearchParams({ symbol, timeframe, limit: String(limit) });
     return request<CryptoKlinesResponse>(`/crypto/klines?${q.toString()}`);
   },
+  getCryptoKlineStreamUrl: (symbol: string, timeframe = "1h") => {
+    const path = withAuthQuery(`/crypto/stream?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}`);
+    if (typeof window === "undefined") return path;
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return `${protocol}//${window.location.host}${path}`;
+  },
   getShadowAccount: () => request<ShadowAccountResponse>("/shadow/account"),
   listShadowOrders: () => request<ShadowOrder[]>("/shadow/orders"),
   placeShadowOrder: (body: ShadowPlaceOrderRequest) =>
@@ -540,8 +548,19 @@ export interface StrategyMarketAdminItem {
   note: string;
   updated_at: string;
   name?: string;
+  summary?: string;
+  description?: string;
+  strategy_description?: string;
+  language?: string;
+  category?: string;
+  tags?: string[];
+  code_snapshot?: string;
+  published_at?: string;
+  backtest_summary?: Record<string, unknown>;
+  risk_warnings?: string[];
   owner_user_id?: number | null;
   source_strategy_id?: string;
+  deleted?: boolean;
 }
 
 export interface StrategyMarketAdminResponse {
@@ -1355,6 +1374,21 @@ export interface StrategyLibraryItem {
 
 export interface StrategyLibraryResponse {
   strategies: StrategyLibraryItem[];
+}
+
+export interface StrategyVersionItem {
+  version: number;
+  strategy_id: string;
+  owner_user_id: number;
+  name: string;
+  description: string;
+  strategyDescription?: string;
+  language: string;
+  category: string;
+  tags: string[];
+  code: string;
+  code_sha256: string;
+  createdAt: string;
 }
 
 export interface PublicStrategyMarketItem {

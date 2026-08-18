@@ -15,17 +15,9 @@ import { toast } from "sonner";
 import { api, type StrategyLibraryItem } from "@/lib/api";
 import { useTranslation } from "@/i18n/I18nProvider";
 import {
-  createMarketOwnedStrategy,
-  findMarketStrategyByRouteId,
   getStrategyRouteId,
   resolveStrategyRouteId,
 } from "@/lib/strategyMarketplace";
-import {
-  normalizeOwnedStrategy,
-  readOwnedStrategies,
-  saveOwnedStrategies,
-  upsertOwnedStrategy,
-} from "@/lib/strategyStorage";
 
 const SHARE_STATS_KEY = "vibe-strategy-share-stats";
 
@@ -142,19 +134,31 @@ export function StrategyShare() {
 
   useEffect(() => {
     let cancelled = false;
-    const marketItem = findMarketStrategyByRouteId(routeId);
-    const local = readOwnedStrategies();
-    const localItem = local.find((item) => item.id === resolvedId || getStrategyRouteId(item.id) === routeId) ?? null;
-    const fallback = localItem ?? (marketItem ? createMarketOwnedStrategy(marketItem, "favorite") : null);
-
-    api.listStrategies()
+    Promise.all([api.listStrategies(), api.getStrategyMarketCatalogConfig()])
       .then((payload) => {
         if (cancelled) return;
-        const remote = payload.strategies.find((item) => item.id === resolvedId || getStrategyRouteId(item.id) === routeId) ?? null;
-        setStrategy(remote || fallback ? normalizeOwnedStrategy(remote ?? fallback) : null);
+        const [strategies, catalog] = payload;
+        const remote = strategies.strategies.find((item) => item.id === resolvedId || getStrategyRouteId(item.id) === routeId) ?? null;
+        const market = catalog.items.find((item) => item.id === resolvedId || item.id === routeId);
+        const fallback: StrategyLibraryItem | null = market
+          ? {
+            id: market.id,
+            name: market.name || market.id,
+            description: market.description || market.summary || "",
+            strategyDescription: market.strategy_description || market.description || "",
+            language: market.language || "python",
+            category: market.category || "utility",
+            status: "draft",
+            tags: market.tags ?? [],
+            code: market.code_snapshot || "",
+            createdAt: market.published_at || market.updated_at,
+            updatedAt: market.updated_at,
+          }
+          : null;
+        setStrategy(remote || fallback);
       })
       .catch(() => {
-        if (!cancelled) setStrategy(fallback ? normalizeOwnedStrategy(fallback) : null);
+        if (!cancelled) setStrategy(null);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -173,7 +177,7 @@ export function StrategyShare() {
     next[key] = { ...current, views: current.views + 1 };
     writeStats(next);
     setStats(next);
-    setFavorited(readOwnedStrategies().some((item) => item.id === strategy.id));
+    setFavorited((strategy.tags ?? []).includes("favorite"));
   }, [strategy]);
 
   const currentStats = strategy ? stats[getStrategyRouteId(strategy.id)] ?? { views: 0, copies: 0, favorites: 0 } : { views: 0, copies: 0, favorites: 0 };
@@ -196,22 +200,25 @@ export function StrategyShare() {
       ...strategy,
       tags: Array.from(new Set([...(strategy.tags ?? []), "favorite"])).slice(0, 8),
     };
-    const next = upsertOwnedStrategy(readOwnedStrategies(), favoriteStrategy);
-    saveOwnedStrategies(next);
-    void api.upsertStrategy(favoriteStrategy).catch(() => undefined);
-    setFavorited(true);
-    bump("favorites");
-    toast.success(copy.saved);
+    void api.upsertStrategy(favoriteStrategy)
+      .then(() => {
+        setStrategy(favoriteStrategy);
+        setFavorited(true);
+        bump("favorites");
+        toast.success(copy.saved);
+      })
+      .catch((error) => toast.error(error instanceof Error ? error.message : "Failed to save strategy"));
   };
 
   const handleCopy = () => {
     if (!strategy) return;
     const duplicated = cloneStrategy(strategy);
-    const next = upsertOwnedStrategy(readOwnedStrategies(), duplicated);
-    saveOwnedStrategies(next);
-    void api.upsertStrategy(duplicated).catch(() => undefined);
-    bump("copies");
-    toast.success(copy.copied);
+    void api.upsertStrategy(duplicated)
+      .then(() => {
+        bump("copies");
+        toast.success(copy.copied);
+      })
+      .catch((error) => toast.error(error instanceof Error ? error.message : "Failed to copy strategy"));
   };
 
   if (loading) {

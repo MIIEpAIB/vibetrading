@@ -89,10 +89,36 @@ export interface StrategyMarketAdminItem {
   name?: string;
   owner_user_id?: number | null;
   source_strategy_id?: string;
+  deleted?: boolean;
+  summary?: string;
+  description?: string;
+  strategy_description?: string;
+  language?: string;
+  category?: string;
+  tags?: string[];
+  code_snapshot?: string;
+  published_at?: string;
+  backtest_summary?: JsonObject;
+  risk_warnings?: string[];
 }
 
 export interface StrategyMarketAdminResponse {
   items: StrategyMarketAdminItem[];
+}
+
+export interface StrategyVersionItem {
+  version: number;
+  strategy_id: string;
+  owner_user_id: number;
+  name: string;
+  description: string;
+  strategyDescription?: string;
+  language: string;
+  category: string;
+  tags: string[];
+  code: string;
+  code_sha256: string;
+  createdAt: string;
 }
 
 export type JsonObject = Record<string, unknown>;
@@ -159,10 +185,16 @@ export const api = {
       method: "DELETE",
     }),
   getAdminStrategyMarket: () => request<StrategyMarketAdminResponse>("/admin/strategy-market"),
+  getAdminStrategyMarketVersions: (strategyId: string) =>
+    request<StrategyVersionItem[]>(`/admin/strategy-market/${encodeURIComponent(strategyId)}/versions`),
   updateAdminStrategyMarket: (items: StrategyMarketAdminItem[]) =>
     request<StrategyMarketAdminResponse>("/admin/strategy-market", {
       method: "PUT",
       body: JSON.stringify({ items }),
+    }),
+  deleteAdminStrategyMarket: (strategyId: string) =>
+    request<StrategyMarketAdminResponse>(`/admin/strategy-market/${encodeURIComponent(strategyId)}`, {
+      method: "DELETE",
     }),
   getLLMSettings: () => request<JsonObject>("/settings/llm"),
   updateLLMSettings: (settings: JsonObject) =>

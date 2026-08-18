@@ -27,6 +27,8 @@ const nav = [
   ["usage", "调用情况"],
 ] as const;
 
+type AdminSection = (typeof nav)[number][0];
+
 function formatPercent(part: number, total: number) {
   if (!total) return "0%";
   return `${Math.round((part / total) * 100)}%`;
@@ -218,6 +220,17 @@ export function AdminConsole() {
   const [loading, setLoading] = useState(false);
   const [savingMarket, setSavingMarket] = useState(false);
   const [message, setMessage] = useState("");
+  const [activeSection, setActiveSection] = useState<AdminSection>("overview");
+  const [selectedMarketItem, setSelectedMarketItem] = useState<StrategyMarketAdminItem | null>(null);
+
+  useEffect(() => {
+    if (!selectedMarketItem) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSelectedMarketItem(null);
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [selectedMarketItem]);
 
   const load = async () => {
     setLoading(true);
@@ -282,10 +295,6 @@ export function AdminConsole() {
     setMarketItems([]);
   };
 
-  const scrollToSection = (id: string) => {
-    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
-  };
-
   const updateUser = async (userId: number) => {
     const draft = userDrafts[userId];
     if (!draft) return;
@@ -334,6 +343,36 @@ export function AdminConsole() {
     }
   };
 
+  const updateMarketItem = (id: string, patch: Partial<StrategyMarketAdminItem>) => {
+    setMarketItems((prev) => prev.map((item) => item.id === id ? { ...item, ...patch } : item));
+  };
+
+  const saveMarketItem = async (item: StrategyMarketAdminItem) => {
+    setSavingMarket(true);
+    try {
+      const nextItems = marketItems.map((row) => row.id === item.id ? item : row);
+      const response = await api.updateAdminStrategyMarket(nextItems);
+      setMarketItems(response.items);
+      setMessage(`${item.name || item.id} 已保存`);
+    } finally {
+      setSavingMarket(false);
+    }
+  };
+
+  const deleteMarketItem = async (item: StrategyMarketAdminItem) => {
+    const label = item.name || item.id;
+    if (!window.confirm(`确认删除策略“${label}”？删除后将无法恢复。`)) return;
+
+    setSavingMarket(true);
+    try {
+      const response = await api.deleteAdminStrategyMarket(item.id);
+      setMarketItems(response.items);
+      setMessage(`${label} 已删除`);
+    } finally {
+      setSavingMarket(false);
+    }
+  };
+
   if (!authenticated) {
     return (
       <main className="login-page">
@@ -375,7 +414,13 @@ export function AdminConsole() {
         </div>
         <nav>
           {nav.map(([id, label]) => (
-            <button key={id} type="button" className="nav-button" onClick={() => scrollToSection(id)}>
+            <button
+              key={id}
+              type="button"
+              className={`nav-button${activeSection === id ? " active" : ""}`}
+              aria-current={activeSection === id ? "page" : undefined}
+              onClick={() => setActiveSection(id)}
+            >
               {label}
             </button>
           ))}
@@ -391,12 +436,12 @@ export function AdminConsole() {
           </div>
           <div className="toolbar">
             {message ? <span>{message}</span> : null}
-            <button className="primary" onClick={() => scrollToSection("chat")}>后台查看聊天</button>
+            <button className="primary" onClick={() => setActiveSection("chat")}>后台查看聊天</button>
             <button onClick={load} disabled={loading}>{loading ? "刷新中" : "刷新"}</button>
           </div>
         </header>
 
-        <section id="overview" className="section">
+        {activeSection === "overview" ? <section id="overview" className="section">
           <div className="section-title">
             <h2>运营看板</h2>
             <p>用户、Agent 调用和策略商城发布状态。</p>
@@ -407,9 +452,9 @@ export function AdminConsole() {
             <Metric label="失败调用" value={summary?.failed_attempts ?? 0} detail={`运行中 ${summary?.running_attempts ?? 0}`} />
             <Metric label="策略商城" value={marketItems.length} detail={`启用 ${enabledItems} / 推荐 ${featuredItems}`} />
           </div>
-        </section>
+        </section> : null}
 
-        <section id="settings" className="section">
+        {activeSection === "settings" ? <section id="settings" className="section">
           <div className="section-title">
             <h2>系统设置</h2>
             <p>直接对接现有设置 API，保存前会校验 JSON 格式。</p>
@@ -432,65 +477,84 @@ export function AdminConsole() {
               }}
             />
           </div>
-        </section>
+        </section> : null}
 
-        <section id="users" className="section">
+        {activeSection === "users" ? <section id="users" className="section">
           <div className="section-title">
             <h2>用户管理</h2>
             <p>更新显示名、重置密码、吊销令牌或删除用户。</p>
           </div>
-          <div className="user-grid">
-            {(dashboard?.users ?? []).map((user) => {
-              const draft = userDrafts[user.user_id] ?? { display_name: user.display_name, password: "", revoke_tokens: false };
-              return (
-                <article className="panel" key={user.user_id}>
-                  <div className="panel-title">
-                    <div>
-                      <h3>{user.username}</h3>
-                      <p>ID {user.user_id} · {user.created_at}</p>
-                    </div>
-                    <button className="danger" onClick={() => void deleteUser(user.user_id)}>删除</button>
-                  </div>
-                  <label>
-                    显示名
-                    <input
-                      value={draft.display_name}
-                      onChange={(event) => setUserDrafts((prev) => ({
-                        ...prev,
-                        [user.user_id]: { ...draft, display_name: event.target.value },
-                      }))}
-                    />
-                  </label>
-                  <label>
-                    新密码
-                    <input
-                      type="password"
-                      value={draft.password}
-                      onChange={(event) => setUserDrafts((prev) => ({
-                        ...prev,
-                        [user.user_id]: { ...draft, password: event.target.value },
-                      }))}
-                    />
-                  </label>
-                  <label className="check-row">
-                    <input
-                      type="checkbox"
-                      checked={draft.revoke_tokens}
-                      onChange={(event) => setUserDrafts((prev) => ({
-                        ...prev,
-                        [user.user_id]: { ...draft, revoke_tokens: event.target.checked },
-                      }))}
-                    />
-                    踢下线
-                  </label>
-                  <button onClick={() => void updateUser(user.user_id)}>更新</button>
-                </article>
-              );
-            })}
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>用户名</th>
+                  <th>显示名</th>
+                  <th>创建时间</th>
+                  <th>新密码</th>
+                  <th>踢下线</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(dashboard?.users ?? []).map((user) => {
+                  const draft = userDrafts[user.user_id] ?? { display_name: user.display_name, password: "", revoke_tokens: false };
+                  return (
+                    <tr key={user.user_id}>
+                      <td>{user.user_id}</td>
+                      <td><strong>{user.username}</strong></td>
+                      <td>
+                        <input
+                          value={draft.display_name}
+                          onChange={(event) => setUserDrafts((prev) => ({
+                            ...prev,
+                            [user.user_id]: { ...draft, display_name: event.target.value },
+                          }))}
+                        />
+                      </td>
+                      <td>{user.created_at}</td>
+                      <td>
+                        <input
+                          type="password"
+                          value={draft.password}
+                          onChange={(event) => setUserDrafts((prev) => ({
+                            ...prev,
+                            [user.user_id]: { ...draft, password: event.target.value },
+                          }))}
+                          placeholder="留空不修改"
+                        />
+                      </td>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={draft.revoke_tokens}
+                          onChange={(event) => setUserDrafts((prev) => ({
+                            ...prev,
+                            [user.user_id]: { ...draft, revoke_tokens: event.target.checked },
+                          }))}
+                        />
+                      </td>
+                      <td>
+                        <div className="table-actions">
+                          <button onClick={() => void updateUser(user.user_id)}>更新</button>
+                          <button className="danger" onClick={() => void deleteUser(user.user_id)}>删除</button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {!(dashboard?.users ?? []).length ? (
+                  <tr>
+                    <td colSpan={7} className="empty-cell">暂无用户</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
           </div>
-        </section>
+        </section> : null}
 
-        <section id="chat" className="section">
+        {activeSection === "chat" ? <section id="chat" className="section">
           <div className="section-title row">
             <div>
               <h2>聊天审计</h2>
@@ -545,9 +609,9 @@ export function AdminConsole() {
             terms={moderationTerms}
             onDeleteUser={(userId) => void deleteUser(userId)}
           />
-        </section>
+        </section> : null}
 
-        <section id="market" className="section">
+        {activeSection === "market" ? <section id="market" className="section">
           <div className="section-title row">
             <div>
               <h2>策略商城</h2>
@@ -561,75 +625,158 @@ export function AdminConsole() {
                 <tr>
                   <th>策略</th>
                   <th>类型</th>
-                  <th>启用</th>
-                  <th>推荐</th>
                   <th>状态</th>
                   <th>价格</th>
                   <th>备注</th>
+                  <th>启用</th>
+                  <th>推荐</th>
+                  <th>操作</th>
                 </tr>
               </thead>
               <tbody>
-                {marketItems.map((item, index) => (
+                {marketItems.map((item) => (
                   <tr key={item.id}>
-                    <td>
-                      <strong>{item.name || item.id}</strong>
-                      <span>{item.kind === "community" ? `${item.id} · 用户 ${item.owner_user_id ?? "-"}` : item.id}</span>
-                    </td>
-                    <td>{item.kind}</td>
-                    <td>
-                      <input
-                        type="checkbox"
-                        checked={item.enabled}
-                        onChange={(event) => setMarketItems((prev) => prev.map((row, i) => i === index ? { ...row, enabled: event.target.checked } : row))}
-                      />
-                    </td>
-                    <td>
-                      <input
-                        type="checkbox"
-                        checked={item.featured}
-                        onChange={(event) => setMarketItems((prev) => prev.map((row, i) => i === index ? { ...row, featured: event.target.checked } : row))}
-                      />
-                    </td>
-                    <td>
-                      <select
-                        value={item.status}
-                        onChange={(event) => setMarketItems((prev) => prev.map((row, i) => i === index ? { ...row, status: event.target.value } : row))}
-                      >
-                        <option value="draft">draft</option>
-                        {item.kind === "community" ? <option value="submitted">submitted</option> : null}
-                        <option value="published">published</option>
-                        {item.kind === "community" ? <option value="rejected">rejected</option> : null}
-                        <option value="hidden">hidden</option>
-                        <option value="archived">archived</option>
-                      </select>
-                    </td>
-                    <td>
-                      <input
-                        value={item.price}
-                        onChange={(event) => setMarketItems((prev) => prev.map((row, i) => i === index ? { ...row, price: event.target.value } : row))}
-                      />
-                    </td>
-                    <td>
-                      <input
-                        value={item.note}
-                        onChange={(event) => setMarketItems((prev) => prev.map((row, i) => i === index ? { ...row, note: event.target.value } : row))}
-                      />
-                    </td>
+                      <td>
+                        <button
+                          className="strategy-name-button"
+                          onClick={() => setSelectedMarketItem(item)}
+                        >
+                          {item.name || item.id}
+                        </button>
+                        <span>{item.kind === "community" ? `${item.id} · 用户 ${item.owner_user_id ?? "-"}` : item.id}</span>
+                      </td>
+                      <td>{item.kind}</td>
+                      <td>
+                        <select
+                          value={item.status}
+                          onChange={(event) => updateMarketItem(item.id, { status: event.target.value })}
+                        >
+                          <option value="draft">draft</option>
+                          {item.kind === "community" ? <option value="submitted">submitted</option> : null}
+                          <option value="published">published</option>
+                          {item.kind === "community" ? <option value="rejected">rejected</option> : null}
+                          <option value="hidden">hidden</option>
+                          <option value="archived">archived</option>
+                        </select>
+                      </td>
+                      <td>
+                        <input
+                          value={item.price}
+                          onChange={(event) => updateMarketItem(item.id, { price: event.target.value })}
+                        />
+                      </td>
+                      <td>
+                        <input
+                          value={item.note}
+                          onChange={(event) => updateMarketItem(item.id, { note: event.target.value })}
+                        />
+                      </td>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={item.enabled}
+                          onChange={(event) => updateMarketItem(item.id, { enabled: event.target.checked })}
+                        />
+                      </td>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={item.featured}
+                          onChange={(event) => updateMarketItem(item.id, { featured: event.target.checked })}
+                        />
+                      </td>
+                      <td>
+                        <div className="table-actions">
+                          <button onClick={() => setSelectedMarketItem(item)}>查看详情</button>
+                          <button onClick={() => void saveMarketItem(item)} disabled={savingMarket}>保存</button>
+                          <button className="danger" onClick={() => void deleteMarketItem(item)} disabled={savingMarket}>删除</button>
+                        </div>
+                      </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        </section>
+        </section> : null}
 
-        <section id="usage" className="section">
+        {activeSection === "usage" ? <section id="usage" className="section">
           <div className="section-title">
             <h2>Agent 调用情况</h2>
             <p>按用户聚合会话、消息、调用和策略数量。</p>
           </div>
           <UsageTable rows={dashboard?.usage ?? []} />
-        </section>
+        </section> : null}
       </main>
+      {selectedMarketItem ? (
+        <div className="strategy-modal-backdrop" onMouseDown={() => setSelectedMarketItem(null)}>
+          <section
+            className="strategy-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="strategy-modal-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="strategy-modal-header">
+              <div>
+                <span className="eyebrow">策略详情</span>
+                <h2 id="strategy-modal-title">{selectedMarketItem.name || selectedMarketItem.id}</h2>
+                <p>{selectedMarketItem.kind} · {selectedMarketItem.id}</p>
+              </div>
+              <button
+                className="modal-close"
+                aria-label="关闭策略详情"
+                onClick={() => setSelectedMarketItem(null)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="strategy-detail">
+              <div className="strategy-detail-meta">
+                <div><strong>来源策略</strong><span>{selectedMarketItem.source_strategy_id || "-"}</span></div>
+                <div><strong>语言</strong><span>{selectedMarketItem.language || "-"}</span></div>
+                <div><strong>分类</strong><span>{selectedMarketItem.category || "-"}</span></div>
+                <div><strong>所有者</strong><span>{selectedMarketItem.owner_user_id ?? "平台"}</span></div>
+                <div><strong>状态</strong><span>{selectedMarketItem.status}</span></div>
+                <div><strong>更新时间</strong><span>{selectedMarketItem.updated_at || "-"}</span></div>
+              </div>
+              <div className="strategy-detail-copy">
+                <strong>策略简介</strong>
+                <p>{selectedMarketItem.description || selectedMarketItem.note || "暂无简介"}</p>
+              </div>
+              {selectedMarketItem.strategy_description ? (
+                <div className="strategy-detail-copy">
+                  <strong>策略说明</strong>
+                  <p>{selectedMarketItem.strategy_description}</p>
+                </div>
+              ) : null}
+              {selectedMarketItem.tags?.length ? (
+                <div className="strategy-detail-copy">
+                  <strong>标签</strong>
+                  <div className="strategy-tags">{selectedMarketItem.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>
+                </div>
+              ) : null}
+              {selectedMarketItem.risk_warnings?.length ? (
+                <div className="strategy-detail-copy">
+                  <strong>风险提示</strong>
+                  <ul>{selectedMarketItem.risk_warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
+                </div>
+              ) : null}
+              {selectedMarketItem.code_snapshot ? (
+                <div className="strategy-detail-copy">
+                  <strong>策略代码</strong>
+                  <pre>{selectedMarketItem.code_snapshot}</pre>
+                </div>
+              ) : null}
+              {selectedMarketItem.backtest_summary && Object.keys(selectedMarketItem.backtest_summary).length ? (
+                <div className="strategy-detail-copy">
+                  <strong>回测摘要</strong>
+                  <pre>{JSON.stringify(selectedMarketItem.backtest_summary, null, 2)}</pre>
+                </div>
+              ) : null}
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }
