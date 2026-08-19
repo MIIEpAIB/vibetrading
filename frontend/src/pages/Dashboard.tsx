@@ -10,7 +10,7 @@ import {
   WalletCards,
 } from "lucide-react";
 import { StrategyReturnChart } from "@/components/charts/StrategyReturnChart";
-import { api, type EquityPoint, type ShadowAccountResponse, type ShadowOrder, type ShadowWallet } from "@/lib/api";
+import { api, type EquityPoint, type QIFIOrder, type ShadowAccountResponse } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const QUOTE_ASSETS = new Set(["USD", "USDT", "USDC", "BUSD", "DAI"]);
@@ -31,8 +31,8 @@ function formatPercent(value: number, decimals = 2): string {
   return `${sign}${value.toFixed(decimals)}%`;
 }
 
-function formatDate(value: number): string {
-  const date = new Date(value * 1000);
+function formatDate(value: string): string {
+  const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "--" : date.toLocaleString();
 }
 
@@ -52,23 +52,17 @@ function assetPrice(asset: string, marketPrices: Record<string, number>): number
   );
 }
 
-function walletValue(wallet: ShadowWallet, marketPrices: Record<string, number>): number {
-  const price = assetPrice(wallet.asset_name, marketPrices);
-  return (wallet.balance + wallet.frozen) * price;
+function accountValue(assetAccount: ShadowAccountResponse["accounts"][string], marketPrices: Record<string, number>): number {
+  const price = assetPrice(assetAccount.asset, marketPrices);
+  return (assetAccount.balance + assetAccount.frozen) * price;
 }
 
-function orderFilledQuantity(order: ShadowOrder): number {
-  if (order.filled_quantity && order.filled_quantity > 0) return order.filled_quantity;
-  if (order.status === "FILLED") return order.quantity;
-  return 0;
+function orderFilledQuantity(order: QIFIOrder): number {
+  return order.filled_quantity > 0 ? order.filled_quantity : order.status === "FILLED" ? order.quantity : 0;
 }
 
-function orderExecutedPrice(order: ShadowOrder): number {
-  return order.average_price && order.average_price > 0
-    ? order.average_price
-    : order.executed_price > 0
-      ? order.executed_price
-      : order.price;
+function orderExecutedPrice(order: QIFIOrder): number {
+  return order.avg_price > 0 ? order.avg_price : order.price;
 }
 
 function splitSymbol(symbol: string): [string, string] {
@@ -80,7 +74,7 @@ function splitSymbol(symbol: string): [string, string] {
 function buildEquitySeries(account: ShadowAccountResponse): EquityPoint[] {
   const filledOrders = [...account.orders]
     .filter((order) => order.status === "FILLED" || order.status === "PARTIALLY_FILLED")
-    .sort((a, b) => a.timestamp - b.timestamp);
+    .sort((a, b) => Date.parse(a.datetime) - Date.parse(b.datetime));
 
   const positions = new Map<string, number>();
   const prices = new Map<string, number>();
@@ -98,8 +92,8 @@ function buildEquitySeries(account: ShadowAccountResponse): EquityPoint[] {
     const qty = orderFilledQuantity(order);
     const price = orderExecutedPrice(order);
     if (!qty || !price) continue;
-    const notional = order.executed_value && order.executed_value > 0 ? order.executed_value : qty * price;
-    const fee = order.fee_paid && order.fee_paid > 0 ? order.fee_paid : 0;
+    const notional = qty * price;
+    const fee = order.commission || 0;
 
     if (order.side === "BUY") {
       cash -= notional + fee;
@@ -119,14 +113,14 @@ function buildEquitySeries(account: ShadowAccountResponse): EquityPoint[] {
     }
     peak = Math.max(peak, equity);
     points.push({
-      time: formatDate(order.timestamp),
+      time: formatDate(order.datetime),
       equity,
       drawdown: peak > 0 ? (equity - peak) / peak : 0,
     });
   }
 
   if (points.length === 1) {
-    const currentEquity = account.wallets.reduce((sum, wallet) => sum + walletValue(wallet, account.market_prices), 0);
+    const currentEquity = account.total_asset;
     points.push({
       time: new Date().toISOString(),
       equity: currentEquity || INITIAL_VIRTUAL_CAPITAL,
@@ -203,21 +197,20 @@ export function Dashboard() {
     return () => window.clearInterval(timer);
   }, [loadAccount]);
 
-  const wallets = account?.wallets ?? [];
+  const accounts = account?.accounts ?? {};
   const orders = account?.orders ?? [];
   const marketPrices = account?.market_prices ?? {};
   const equitySeries = useMemo(() => (account ? buildEquitySeries(account) : []), [account]);
 
   const equityValue = useMemo(
-    () => wallets.reduce((sum, wallet) => sum + walletValue(wallet, marketPrices), 0),
-    [marketPrices, wallets],
+    () => account?.total_asset ?? 0,
+    [account],
   );
   const cashValue = useMemo(
-    () => wallets.filter((wallet) => QUOTE_ASSETS.has(normalizeAsset(wallet.asset_name)))
-      .reduce((sum, wallet) => sum + wallet.balance + wallet.frozen, 0),
-    [wallets],
+    () => (account?.cash ?? 0) + (account?.frozen ?? 0),
+    [account],
   );
-  const investedValue = Math.max(equityValue - cashValue, 0);
+  const investedValue = Math.max(account?.market_value ?? equityValue - cashValue, 0);
   const pnl = equityValue - INITIAL_VIRTUAL_CAPITAL;
   const pnlPct = INITIAL_VIRTUAL_CAPITAL > 0 ? (pnl / INITIAL_VIRTUAL_CAPITAL) * 100 : 0;
   const exposurePct = equityValue > 0 ? (investedValue / equityValue) * 100 : 0;
@@ -225,7 +218,7 @@ export function Dashboard() {
   const activeOrders = orders.filter((order) => order.status === "PENDING" || order.status === "PARTIALLY_FILLED");
   const filledOrders = orders.filter((order) => order.status === "FILLED");
   const closedOrders = orders.filter((order) => order.status === "CANCELED" || order.status === "EXPIRED" || order.status === "REJECTED");
-  const topWallets = [...wallets].sort((a, b) => walletValue(b, marketPrices) - walletValue(a, marketPrices));
+  const topAccounts = Object.values(accounts).sort((a, b) => accountValue(b, marketPrices) - accountValue(a, marketPrices));
 
   if (loading && !account) {
     return (
@@ -325,22 +318,22 @@ export function Dashboard() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-800">
-                    {topWallets.map((wallet) => {
-                      const value = walletValue(wallet, marketPrices);
+                    {topAccounts.map((assetAccount) => {
+                      const value = accountValue(assetAccount, marketPrices);
                       const weight = equityValue > 0 ? (value / equityValue) * 100 : 0;
-                      const mark = assetPrice(wallet.asset_name, marketPrices);
+                      const mark = assetPrice(assetAccount.asset, marketPrices);
                       return (
-                        <tr key={`${wallet.user_id}:${wallet.asset_name}`}>
-                          <td className="px-4 py-3 font-semibold text-zinc-100">{wallet.asset_name}</td>
-                          <td className="px-4 py-3 text-right font-mono text-zinc-100">{wallet.balance.toFixed(6).replace(/\.?0+$/, "")}</td>
-                          <td className="px-4 py-3 text-right font-mono text-zinc-400">{wallet.frozen.toFixed(6).replace(/\.?0+$/, "")}</td>
+                        <tr key={assetAccount.asset}>
+                          <td className="px-4 py-3 font-semibold text-zinc-100">{assetAccount.asset}</td>
+                          <td className="px-4 py-3 text-right font-mono text-zinc-100">{assetAccount.balance.toFixed(6).replace(/\.?0+$/, "")}</td>
+                          <td className="px-4 py-3 text-right font-mono text-zinc-400">{assetAccount.frozen.toFixed(6).replace(/\.?0+$/, "")}</td>
                           <td className="px-4 py-3 text-right font-mono text-zinc-300">{mark ? formatMoney(mark) : "--"}</td>
                           <td className="px-4 py-3 text-right font-mono text-zinc-100">{formatMoney(value)}</td>
                           <td className="px-4 py-3 text-right font-mono text-zinc-500">{formatPercent(weight)}</td>
                         </tr>
                       );
                     })}
-                    {!topWallets.length ? (
+                    {!topAccounts.length ? (
                       <tr>
                         <td colSpan={6} className="px-4 py-8 text-center text-sm text-zinc-500">
                           No shadow account data yet.
@@ -389,7 +382,7 @@ export function Dashboard() {
                       <span className={cn("font-mono", order.side === "BUY" ? "text-emerald-300" : "text-red-300")}>{order.side}</span>
                     </div>
                     <div className="mt-1 flex items-center justify-between gap-2 text-zinc-500">
-                      <span>{order.type}</span>
+                      <span>{order.order_type}</span>
                       <span>{order.status}</span>
                     </div>
                     <div className="mt-1 flex items-center justify-between gap-2 font-mono text-zinc-300">

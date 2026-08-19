@@ -692,13 +692,20 @@ class ShadowTradingService:
         await self.ensure_default_wallets(user_id)
         wallets = await self.wallet_manager.list_wallets(user_id, AccountType.VIRTUAL)
         orders = await self.list_orders(user_id)
-        return {
+        source_snapshot = {
             "user_id": str(user_id),
             "account_type": AccountType.VIRTUAL.value,
             "wallets": [wallet.to_dict() for wallet in wallets if wallet.balance or wallet.frozen or wallet.asset_name in {"USD", "USDT"}],
             "orders": [order.to_dict() for order in orders],
             "market_prices": self.engine.market_prices(),
         }
+        from src.qifi import QIFIAccount
+
+        return QIFIAccount.from_shadow_snapshot(
+            source_snapshot,
+            account_cookie=f"shadow:{user_id}",
+            portfolio_cookie="virtual",
+        ).snapshot().to_dict()
 
     async def list_orders(self, user_id: str) -> list[Order]:
         async with self._order_lock:

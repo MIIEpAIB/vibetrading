@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Security, UploadFile, WebSocket, WebSocketDisconnect, status
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
@@ -363,13 +363,21 @@ class ShadowOrderResponse(BaseModel):
 
 
 class ShadowAccountResponse(BaseModel):
-    """Virtual account snapshot for the Web UI."""
+    """Canonical QIFI-compatible virtual account snapshot."""
 
-    user_id: str
+    account_cookie: str
+    portfolio_cookie: str
     account_type: str
-    wallets: List[ShadowWalletResponse]
-    orders: List[ShadowOrderResponse]
+    cash: float
+    frozen: float
+    market_value: float
+    total_asset: float
+    accounts: Dict[str, Dict[str, Any]]
+    positions: Dict[str, Dict[str, Any]]
+    orders: List[Dict[str, Any]]
+    trades: List[Dict[str, Any]]
     market_prices: Dict[str, float]
+    updated_at: str
 
 
 class ShadowPlaceOrderRequest(BaseModel):
@@ -1245,7 +1253,8 @@ app.add_middleware(
 # text/html`` (e.g. a user pasting the URL into the address bar).
 
 _FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
-_SPA_HTML_EXACT_PATHS: frozenset[str] = frozenset({"/correlation"})
+_SPA_HTML_EXACT_PATHS: frozenset[str] = frozenset({"/correlation", "/strategies"})
+_SPA_HTML_REDIRECT_PATHS: frozenset[str] = frozenset({"/api/strategies"})
 # Each regex matches a complete request path. Trailing slash optional.
 _SPA_HTML_PATH_REGEX: tuple[re.Pattern[str], ...] = (
     # ``/runs/{run_id}`` — RunDetail page. Excludes ``/runs/{id}/code``,
@@ -1294,18 +1303,28 @@ def _is_spa_html_route(path: str) -> bool:
     return any(pattern.match(path) for pattern in _SPA_HTML_PATH_REGEX)
 
 
+def _is_browser_navigation_request(request: Request) -> bool:
+    """Return whether the request is a top-level browser navigation."""
+    accept = request.headers.get("accept", "")
+    if "text/html" in accept:
+        return True
+    return request.headers.get("sec-fetch-dest", "").lower() == "document"
+
+
 @app.middleware("http")
 async def _spa_html_deep_link_fallback(request: Request, call_next):
     """Serve ``frontend/dist/index.html`` when a browser navigates directly to
     an SPA path that also exists as an API endpoint.
 
-    Conflicts: ``/runs/{id}`` (RunDetail page vs API) and ``/correlation``
-    (Correlation page vs API). Programmatic clients (``Accept: */*`` or
+    Conflicts: ``/runs/{id}`` (RunDetail page vs API), ``/correlation``
+    (Correlation page vs API), and ``/strategies`` (StrategyLibrary page vs
+    API collection). Programmatic clients (``Accept: */*`` or
     ``application/json``) still hit the real API handler.
     """
     if request.method == "GET":
-        accept = request.headers.get("accept", "")
-        if "text/html" in accept and _is_spa_html_route(request.url.path):
+        if _is_browser_navigation_request(request) and request.url.path in _SPA_HTML_REDIRECT_PATHS:
+            return RedirectResponse(url="/strategies", status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+        if _is_browser_navigation_request(request) and _is_spa_html_route(request.url.path):
             index = _FRONTEND_DIST / "index.html"
             if index.exists():
                 return FileResponse(str(index))
@@ -4118,7 +4137,7 @@ _paper_service = None
 
 
 def _get_strategy_store():
-    """Return the shared strategy library store when MySQL is configured."""
+    """Return the shared strategy library store."""
     from src.persistence import mysql_configured
 
     if not mysql_configured():
@@ -4127,7 +4146,11 @@ def _get_strategy_store():
     if _strategy_store is None:
         from src.strategies import MySQLStrategyStore
 
-        _strategy_store = MySQLStrategyStore()
+        try:
+            _strategy_store = MySQLStrategyStore()
+        except Exception:
+            logger.exception("Strategy library MySQL initialization failed")
+            raise
     return _strategy_store
 
 
@@ -4865,6 +4888,7 @@ async def run_strategy_market_backtest(
 
 
 @app.post("/strategies/{strategy_id}/backtest", response_model=StrategyMarketBacktestResponse)
+@app.post("/api/strategies/{strategy_id}/backtest", response_model=StrategyMarketBacktestResponse)
 async def run_strategy_backtest(
     strategy_id: str,
     payload: StrategyBacktestRequest,
@@ -4920,19 +4944,27 @@ async def run_strategy_backtest(
 
 
 @app.get("/strategies", response_model=StrategyLibraryResponse)
+@app.get("/api/strategies", response_model=StrategyLibraryResponse)
 async def list_strategy_library(ctx: AuthContext = Depends(require_auth)):
     """List persisted personal strategies."""
-    store = _get_strategy_store()
-    share_statuses = store.list_share_statuses(user_id=ctx.user_id)
-    strategies = []
-    for item in store.list_strategies(user_id=ctx.user_id):
-        data = item.to_dict()
-        data["shareStatus"] = share_statuses.get(item.id, "none")
-        strategies.append(data)
-    return {"strategies": strategies}
+    try:
+        store = _get_strategy_store()
+        share_statuses = store.list_share_statuses(user_id=ctx.user_id)
+        strategies = []
+        for item in store.list_strategies(user_id=ctx.user_id):
+            data = item.to_dict()
+            data["shareStatus"] = share_statuses.get(item.id, "none")
+            strategies.append(data)
+        return {"strategies": strategies}
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Strategy library request failed")
+        raise
 
 
 @app.put("/strategies", response_model=StrategyLibraryResponse)
+@app.put("/api/strategies", response_model=StrategyLibraryResponse)
 async def replace_strategy_library(req: ReplaceStrategyLibraryRequest, ctx: AuthContext = Depends(require_auth)):
     """Replace the full persisted personal strategy library."""
     from src.strategies import StrategyRecord
@@ -4947,6 +4979,7 @@ async def replace_strategy_library(req: ReplaceStrategyLibraryRequest, ctx: Auth
 
 
 @app.put("/strategies/{strategy_id}", response_model=StrategyLibraryItem)
+@app.put("/api/strategies/{strategy_id}", response_model=StrategyLibraryItem)
 async def upsert_strategy(
     strategy_id: str,
     item: StrategyLibraryItem,
@@ -4966,6 +4999,7 @@ async def upsert_strategy(
 
 
 @app.get("/strategies/{strategy_id}/versions", response_model=List[StrategyVersionItem])
+@app.get("/api/strategies/{strategy_id}/versions", response_model=List[StrategyVersionItem])
 async def list_strategy_versions(
     strategy_id: str,
     ctx: AuthContext = Depends(require_auth),
@@ -4977,6 +5011,7 @@ async def list_strategy_versions(
 
 
 @app.post("/strategies/{strategy_id}/publish", response_model=PublicStrategyMarketItem)
+@app.post("/api/strategies/{strategy_id}/publish", response_model=PublicStrategyMarketItem)
 async def publish_strategy(strategy_id: str, ctx: AuthContext = Depends(require_auth)):
     """Submit the current user's strategy for operator review before public listing."""
     record = _strategy_or_404(strategy_id, user_id=ctx.user_id)
@@ -4998,6 +5033,7 @@ async def publish_strategy(strategy_id: str, ctx: AuthContext = Depends(require_
 
 
 @app.delete("/strategies/{strategy_id}")
+@app.delete("/api/strategies/{strategy_id}")
 async def delete_strategy(strategy_id: str, ctx: AuthContext = Depends(require_auth)):
     """Delete one persisted strategy."""
     store = _get_strategy_store()

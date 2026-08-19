@@ -29,14 +29,20 @@ def _expected_taker_price(market_price: float, quantity: float, depth: float = D
 def _expected_taker_quantity(market_price: float, depth: float) -> float:
     return round(depth / market_price, 12)
 
+def _accounts(snapshot: dict) -> dict:
+    return snapshot["accounts"]
+
 
 def test_virtual_wallet_initializes_with_usdt_cash() -> None:
     async def scenario() -> None:
         service = ShadowTradingService()
         snapshot = await service.account_snapshot("user-1")
-        usdt = next(wallet for wallet in snapshot["wallets"] if wallet["asset_name"] == "USDT")
+        usdt = _accounts(snapshot)["USDT"]
         assert usdt["balance"] == 100_000.0
         assert usdt["frozen"] == 0.0
+        assert snapshot["account_cookie"] == "shadow:user-1"
+        assert snapshot["portfolio_cookie"] == "virtual"
+        assert snapshot["cash"] == 100_000.0
 
     asyncio.run(scenario())
 
@@ -62,10 +68,13 @@ def test_market_buy_freezes_and_settles_at_latest_price() -> None:
         assert order.fee_paid == pytest.approx(expected_fee)
 
         snapshot = await service.account_snapshot("user-1")
-        wallets = {wallet["asset_name"]: wallet for wallet in snapshot["wallets"]}
-        assert wallets["USDT"]["balance"] == pytest.approx(100_000.0 - expected_notional - expected_fee)
-        assert wallets["USDT"]["frozen"] == 0.0
-        assert wallets["BTC"]["balance"] == 0.5
+        accounts = _accounts(snapshot)
+        assert accounts["USDT"]["balance"] == pytest.approx(100_000.0 - expected_notional - expected_fee)
+        assert accounts["USDT"]["frozen"] == 0.0
+        assert accounts["BTC"]["balance"] == 0.5
+        assert snapshot["positions"]["BTC_USDT"]["volume_long"] == pytest.approx(0.5)
+        assert snapshot["orders"][0]["status"] == "FILLED"
+        assert snapshot["trades"][0]["order_id"] == snapshot["orders"][0]["order_id"]
 
     asyncio.run(scenario())
 
@@ -91,10 +100,10 @@ def test_marketable_limit_buy_fills_immediately_at_current_price() -> None:
         assert order.executed_price == pytest.approx(expected_price)
 
         snapshot = await service.account_snapshot("user-1")
-        wallets = {wallet["asset_name"]: wallet for wallet in snapshot["wallets"]}
-        assert wallets["USDT"]["balance"] == pytest.approx(100_000.0 - expected_notional - expected_fee)
-        assert wallets["USDT"]["frozen"] == 0.0
-        assert wallets["BTC"]["balance"] == 1.0
+        accounts = _accounts(snapshot)
+        assert accounts["USDT"]["balance"] == pytest.approx(100_000.0 - expected_notional - expected_fee)
+        assert accounts["USDT"]["frozen"] == 0.0
+        assert accounts["BTC"]["balance"] == 1.0
 
     asyncio.run(scenario())
 
@@ -125,10 +134,10 @@ def test_limit_order_triggers_on_market_price_update() -> None:
         assert order.fee_paid == pytest.approx(expected_fee)
 
         snapshot = await service.account_snapshot("user-1")
-        wallets = {wallet["asset_name"]: wallet for wallet in snapshot["wallets"]}
-        assert wallets["USDT"]["balance"] == pytest.approx(100_000.0 - update_price - expected_fee)
-        assert wallets["USDT"]["frozen"] == 0.0
-        assert wallets["BTC"]["balance"] == 1.0
+        accounts = _accounts(snapshot)
+        assert accounts["USDT"]["balance"] == pytest.approx(100_000.0 - update_price - expected_fee)
+        assert accounts["USDT"]["frozen"] == 0.0
+        assert accounts["BTC"]["balance"] == 1.0
 
     asyncio.run(scenario())
 
@@ -150,7 +159,7 @@ def test_post_only_rejects_when_order_would_take_liquidity() -> None:
         assert order.rejection_reason == "post-only order would take liquidity"
 
         snapshot = await service.account_snapshot("user-1")
-        usdt = next(wallet for wallet in snapshot["wallets"] if wallet["asset_name"] == "USDT")
+        usdt = _accounts(snapshot)["USDT"]
         assert usdt["balance"] == 100_000.0
         assert usdt["frozen"] == 0.0
 
@@ -181,9 +190,9 @@ def test_ioc_partially_fills_and_expires_remainder() -> None:
         assert order.executed_price == pytest.approx(expected_price)
 
         snapshot = await service.account_snapshot("user-1")
-        wallets = {wallet["asset_name"]: wallet for wallet in snapshot["wallets"]}
-        assert wallets["BTC"]["balance"] == pytest.approx(expected_quantity)
-        assert wallets["USDT"]["frozen"] == 0.0
+        accounts = _accounts(snapshot)
+        assert accounts["BTC"]["balance"] == pytest.approx(expected_quantity)
+        assert accounts["USDT"]["frozen"] == 0.0
 
     asyncio.run(scenario())
 
@@ -206,10 +215,10 @@ def test_fok_rejects_when_depth_cannot_fill_entire_order() -> None:
         assert order.rejection_reason == "not enough simulated liquidity for FOK"
 
         snapshot = await service.account_snapshot("user-1")
-        wallets = {wallet["asset_name"]: wallet for wallet in snapshot["wallets"]}
-        assert "BTC" not in wallets
-        assert wallets["USDT"]["balance"] == 1_000_000.0
-        assert wallets["USDT"]["frozen"] == 0.0
+        accounts = _accounts(snapshot)
+        assert "BTC" not in accounts
+        assert accounts["USDT"]["balance"] == 1_000_000.0
+        assert accounts["USDT"]["frozen"] == 0.0
 
     asyncio.run(scenario())
 
@@ -257,7 +266,7 @@ def test_cancel_limit_order_unfreezes_reserved_funds() -> None:
         assert canceled.status == OrderStatus.CANCELED
 
         snapshot = await service.account_snapshot("user-1")
-        usdt = next(wallet for wallet in snapshot["wallets"] if wallet["asset_name"] == "USDT")
+        usdt = _accounts(snapshot)["USDT"]
         assert usdt["balance"] == 100_000.0
         assert usdt["frozen"] == 0.0
 

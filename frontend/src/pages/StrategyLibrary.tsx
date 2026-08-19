@@ -223,7 +223,7 @@ function toApiStrategy(strategy: StrategyItem): StrategyLibraryItem {
 }
 
 function isRemotePersistenceUnavailable(error: unknown): boolean {
-  return error instanceof ApiError && (error.status === 404 || error.status === 501);
+  return error instanceof ApiError && (error.status === 404 || error.status === 500 || error.status === 501);
 }
 
 function extractStrategies(payload: unknown): StrategyItem[] {

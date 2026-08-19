@@ -13,7 +13,6 @@ const PROXY_PATHS = [
   "/settings/data-sources",
   "/admin",
   "/strategy-market",
-  "/strategies",
   "/paper",
   "/crypto",
   "/dm",

@@ -35,7 +35,11 @@ def _json_loads(value: str | bytes | None, default: object) -> object:
         value = value.decode("utf-8")
     if not value:
         return default
-    return json.loads(value)
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        logger.warning("Invalid strategy JSON payload; falling back to default")
+        return default
 
 
 def _row_text(value: Any) -> str:
@@ -891,6 +895,9 @@ class MySQLStrategyStore:
             """,
             (table, column),
         )
+        row = cur.fetchone() or {}
+        if int(row.get("count") or 0) == 0:
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     @staticmethod
     def _init_strategy_versions(cur: Any) -> None:
@@ -916,9 +923,6 @@ class MySQLStrategyStore:
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """
         )
-        row = cur.fetchone() or {}
-        if int(row.get("count") or 0) == 0:
-            cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     @staticmethod
     def _ensure_index(cur: Any, table: str, index_name: str, columns: str) -> None:
@@ -1017,9 +1021,15 @@ class MySQLStrategyStore:
         columns = [str(row.get("column_name") or row.get("COLUMN_NAME")) for row in rows]
         if columns == ["user_id", "id"] or set(columns) == {"user_id", "id"}:
             return
-        if columns == ["id"] and MySQLStrategyStore._has_inbound_foreign_keys(cur, "strategy_library"):
+        # Changing a referenced primary key makes MySQL rebuild the table. Even
+        # when the final composite key is valid, the intermediate DROP PRIMARY
+        # KEY can fail with errno 150 while inbound foreign keys are attached.
+        # Keep the legacy key in that case; availability is more important than
+        # completing this optional schema upgrade during a request.
+        if MySQLStrategyStore._has_inbound_foreign_keys(cur, "strategy_library"):
             logger.warning(
-                "Leaving legacy strategy_library primary key on id because inbound foreign keys reference it"
+                "Leaving legacy strategy_library primary key %s because inbound foreign keys reference it",
+                columns,
             )
             return
         if columns:

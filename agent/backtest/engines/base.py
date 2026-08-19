@@ -30,6 +30,7 @@ from backtest.metrics import (
     calc_metrics,
 )
 from backtest.models import EquitySnapshot, Position, TradeRecord
+from src.qifi import QIFIAccount
 
 logger = logging.getLogger(__name__)
 
@@ -224,6 +225,12 @@ class BaseEngine(ABC):
         self.positions: Dict[str, Position] = {}
         self.trades: List[TradeRecord] = []
         self.equity_snapshots: List[EquitySnapshot] = []
+        self.qifi_account = QIFIAccount(
+            account_cookie=str(config.get("account_cookie") or config.get("run_id") or "backtest"),
+            portfolio_cookie=str(config.get("portfolio_cookie") or "backtest"),
+            account_type="BACKTEST",
+            init_cash=self.initial_capital,
+        )
         self._bar_idx: int = 0
         self._active_symbol: str = ""  # set by _rebalance/_close_position for subclass use
 
@@ -482,6 +489,7 @@ class BaseEngine(ABC):
             total_unrealized = 0.0
             for p in self.positions.values():
                 cp = self._safe_price(close_df, ts, p.symbol, p.entry_price)
+                self.qifi_account.mark_price(p.symbol, cp)
                 total_unrealized += self._calc_pnl(p.symbol, p.direction, p.size, p.entry_price, cp)
             self.equity_snapshots.append(EquitySnapshot(
                 timestamp=ts,
@@ -584,6 +592,29 @@ class BaseEngine(ABC):
                 entry_bar_idx=self._bar_idx,
                 entry_commission=comm,
             )
+            side = "BUY" if target_dir == 1 else "SELL_SHORT"
+            qifi_order = self.qifi_account.insert_order(
+                symbol=symbol,
+                side=side,
+                price=slipped,
+                quantity=size,
+                order_type="MARKET",
+                status="NEW",
+                metadata={
+                    "bar": str(ts),
+                    "target_weight": target_weight,
+                    "leverage": leverage,
+                    "margin": margin,
+                    "engine_capital_after": self.capital,
+                },
+            )
+            self.qifi_account.fill_order(
+                qifi_order,
+                fill_price=slipped,
+                fill_quantity=size,
+                commission=comm,
+                metadata={"reason": "signal", "position_effect": "open"},
+            )
 
     def _close_position(
         self,
@@ -604,6 +635,30 @@ class BaseEngine(ABC):
         exit_comm = self.calc_commission(pos.size, exit_price, pos.direction, is_open=False)
 
         self.capital += margin + pnl - exit_comm
+        side = "SELL" if pos.direction == 1 else "BUY_TO_CLOSE"
+        qifi_order = self.qifi_account.insert_order(
+            symbol=symbol,
+            side=side,
+            price=exit_price,
+            quantity=pos.size,
+            order_type="MARKET",
+            status="NEW",
+            metadata={
+                "bar": str(exit_time),
+                "reason": reason,
+                "leverage": pos.leverage,
+                "margin": margin,
+                "engine_capital_after": self.capital,
+            },
+        )
+        self.qifi_account.fill_order(
+            qifi_order,
+            fill_price=exit_price,
+            fill_quantity=pos.size,
+            commission=exit_comm,
+            pnl=pnl,
+            metadata={"reason": reason, "position_effect": "close"},
+        )
 
         holding_bars = max(self._bar_idx - pos.entry_bar_idx, 0)
 
@@ -697,6 +752,14 @@ class BaseEngine(ABC):
 
         trade_cols = ["timestamp", "code", "side", "price", "qty", "reason", "pnl", "holding_days", "return_pct"]
         pd.DataFrame(trade_rows or [], columns=trade_cols).to_csv(out / "trades.csv", index=False)
+
+        qifi_snapshot = self.qifi_account.snapshot().to_dict()
+        (out / "qifi_account.json").write_text(
+            json.dumps(qifi_snapshot, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        pd.DataFrame(qifi_snapshot["orders"]).to_csv(out / "qifi_orders.csv", index=False)
+        pd.DataFrame(qifi_snapshot["trades"]).to_csv(out / "qifi_trades.csv", index=False)
 
         # Metrics
         flat_metrics = {k: v for k, v in metrics.items() if not isinstance(v, dict)}

@@ -21,6 +21,7 @@ from src.paper_trading.models import (
     now_iso,
 )
 from src.paper_trading.store import PaperTradingStore
+from src.qifi import QIFIAccount
 from src.shadow_trading import AccountType, OrderSide, OrderType, ShadowTradingError, normalize_symbol
 
 
@@ -215,8 +216,9 @@ class PaperTradingService:
             self._stamp_last_tick(deployment)
             return self._tick_payload(tick, signal=signal, decision=decision)
 
+        qifi_source = await self._qifi_source_snapshot(deployment)
         order = await self._place_execution_order(deployment, signal, decision)
-        link = self._link_order(deployment, signal, decision, order)
+        link = self._link_order(deployment, signal, decision, order, qifi_source)
         order_status = _order_status(order)
         order_id = _order_id(order)
         tick = self._record_tick(
@@ -543,10 +545,18 @@ class PaperTradingService:
         signal: PaperSignal,
         decision: PaperRiskDecision,
         order: Any,
+        qifi_source: dict[str, Any] | None = None,
     ) -> PaperOrderLink:
         status = _order_status(order)
         order_id = _order_id(order)
         broker_order_id = _broker_order_id(order)
+        qifi_order_id, qifi_trade_id, qifi_account_json = self._qifi_order_projection(
+            deployment,
+            signal,
+            decision,
+            order,
+            qifi_source,
+        )
         link = PaperOrderLink(
             link_id=_id("plink"),
             deployment_id=deployment.deployment_id,
@@ -561,8 +571,72 @@ class PaperTradingService:
             connector_profile_id=deployment.connector_profile_id,
             broker_order_id=broker_order_id,
             broker_payload=order if isinstance(order, dict) else {},
+            qifi_order_id=qifi_order_id,
+            qifi_trade_id=qifi_trade_id,
+            qifi_account_json=qifi_account_json,
         )
         return self.store.add_order_link(link)
+
+    async def _qifi_source_snapshot(self, deployment: PaperDeployment) -> dict[str, Any] | None:
+        try:
+            return await self.shadow_service.account_snapshot(self._shadow_user_id(deployment.user_id))
+        except Exception:
+            return None
+
+    def _qifi_order_projection(
+        self,
+        deployment: PaperDeployment,
+        signal: PaperSignal,
+        decision: PaperRiskDecision,
+        order: Any,
+        source_snapshot: dict[str, Any] | None,
+    ) -> tuple[str, str, dict[str, Any]]:
+        account_cookie = f"paper:{deployment.user_id}:{deployment.deployment_id}"
+        if isinstance(source_snapshot, dict):
+            qifi_account = QIFIAccount.from_snapshot(
+                source_snapshot,
+                account_cookie=account_cookie,
+                portfolio_cookie=deployment.execution_mode,
+            )
+        else:
+            qifi_account = QIFIAccount(
+                account_cookie=account_cookie,
+                portfolio_cookie=deployment.execution_mode,
+                account_type="PAPER",
+                init_cash=0.0,
+            )
+
+        status = _order_status(order)
+        price = float(decision.price or signal.limit_price or 0.0)
+        quantity = float(decision.quantity or signal.quantity or 0.0)
+        qifi_order = qifi_account.insert_order(
+            symbol=signal.symbol,
+            side=signal.action,
+            price=price,
+            quantity=quantity,
+            order_type=deployment.limits.order_type,
+            status=status or "NEW",
+            metadata={
+                "deployment_id": deployment.deployment_id,
+                "signal_id": signal.signal_id,
+                "decision_id": decision.decision_id,
+                "execution_mode": deployment.execution_mode,
+                "source_order_id": _order_id(order),
+            },
+        )
+        qifi_trade_id = ""
+        if status == "REJECTED":
+            qifi_order = qifi_account.reject_order(qifi_order, _rejection_reason(order))
+        elif status == "FILLED":
+            qifi_trade = qifi_account.fill_order(
+                qifi_order,
+                fill_price=price,
+                fill_quantity=quantity,
+                metadata={"reason": signal.reason, "paper_decision": decision.reason},
+            )
+            qifi_trade_id = qifi_trade.trade_id
+
+        return qifi_order.order_id, qifi_trade_id, qifi_account.snapshot().to_dict()
 
     def _record_tick(
         self,
@@ -622,17 +696,15 @@ class PaperTradingService:
 
     def _current_exposure(self, account: dict[str, Any], symbols: Iterable[str]) -> float:
         prices = account.get("market_prices") or {}
-        wallets = account.get("wallets") or []
+        accounts = account.get("accounts") or {}
         exposure = 0.0
         for symbol in symbols:
             base, _quote = symbol.split("_", 1)
             price = prices.get(symbol)
             if not _finite_positive(price):
                 continue
-            qty = 0.0
-            for wallet in wallets:
-                if str(wallet.get("asset_name") or "").upper() == base:
-                    qty += float(wallet.get("balance") or 0.0) + float(wallet.get("frozen") or 0.0)
+            asset_account = accounts.get(base) or {}
+            qty = float(asset_account.get("balance") or 0.0) + float(asset_account.get("frozen") or 0.0)
             exposure += abs(qty * float(price))
         return exposure
 
@@ -652,10 +724,7 @@ def _optional_float(value: Any) -> float | None:
 
 def _wallet_balance(account: dict[str, Any], asset: str) -> float:
     asset = asset.upper()
-    for wallet in account.get("wallets") or []:
-        if str(wallet.get("asset_name") or "").upper() == asset:
-            return float(wallet.get("balance") or 0.0)
-    return 0.0
+    return float((account.get("accounts") or {}).get(asset, {}).get("balance") or 0.0)
 
 
 def _connector_symbol(connector: str, symbol: str) -> str:

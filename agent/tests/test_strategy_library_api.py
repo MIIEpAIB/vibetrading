@@ -26,6 +26,20 @@ def test_strategy_library_api_requires_mysql(monkeypatch) -> None:
     assert "MySQL" in excinfo.value.detail
 
 
+@pytest.mark.asyncio
+async def test_strategy_library_api_logs_unexpected_failures(monkeypatch, caplog) -> None:
+    def _boom():
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(api_server, "_get_strategy_store", _boom)
+    caplog.set_level("ERROR")
+
+    with pytest.raises(RuntimeError):
+        await api_server.list_strategy_library(SimpleNamespace(user_id=123))
+
+    assert any("Strategy library request failed" in record.message for record in caplog.records)
+
+
 class _FakeSchemaCursor:
     def __init__(self) -> None:
         self.columns = {"strategy_id", "tags"}
@@ -100,6 +114,15 @@ def test_strategy_store_keeps_legacy_id_primary_key_when_referenced() -> None:
     assert not any("DROP PRIMARY KEY" in statement for statement in cursor.statements)
 
 
+def test_strategy_store_does_not_rebuild_any_referenced_primary_key() -> None:
+    cursor = _FakePrimaryKeyCursor(primary_columns=["id", "user_id"], inbound_fk_count=1)
+
+    MySQLStrategyStore._ensure_composite_primary_key(cursor)
+
+    assert cursor.primary_columns == ["id", "user_id"]
+    assert not any("DROP PRIMARY KEY" in statement for statement in cursor.statements)
+
+
 def test_strategy_store_converts_datetime_rows_to_api_strings() -> None:
     record = MySQLStrategyStore._from_row(
         {
@@ -118,6 +141,25 @@ def test_strategy_store_converts_datetime_rows_to_api_strings() -> None:
 
     assert record.createdAt == "2026-06-22T10:30:00"
     assert record.updatedAt == "2026-06-22T10:31:00"
+
+
+def test_strategy_store_tolerates_invalid_tags_json() -> None:
+    record = MySQLStrategyStore._from_row(
+        {
+            "id": "broken-tags",
+            "name": "Broken Tags",
+            "description": "",
+            "language": "python",
+            "category": "trend",
+            "status": "draft",
+            "tags_json": "{not json",
+            "code": "print('ok')",
+            "created_at": datetime(2026, 6, 22, 10, 30, 0),
+            "updated_at": datetime(2026, 6, 22, 10, 31, 0),
+        }
+    )
+
+    assert record.tags == []
 
 
 def test_strategy_record_supports_unified_language_set() -> None:

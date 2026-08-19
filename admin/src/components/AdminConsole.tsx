@@ -282,6 +282,19 @@ export function AdminConsole() {
   const enabledItems = useMemo(() => marketItems.filter((item) => item.enabled).length, [marketItems]);
   const featuredItems = useMemo(() => marketItems.filter((item) => item.featured).length, [marketItems]);
   const moderationTerms = useMemo(() => splitTerms(sensitiveWords), [sensitiveWords]);
+  const userNamesById = useMemo(
+    () => new Map((dashboard?.users ?? []).map((user) => [user.user_id, user.username])),
+    [dashboard?.users],
+  );
+  const marketTypeLabel = (item: StrategyMarketAdminItem) => {
+    if (item.kind === "community") {
+      const username = item.owner_user_id != null ? userNamesById.get(item.owner_user_id) : undefined;
+      return username ? `用户策略 · ${username}` : `用户策略 · ID ${item.owner_user_id ?? "-"}`;
+    }
+    if (item.kind === "built-in") return "内置策略";
+    if (item.kind === "paid") return "付费策略";
+    return item.kind;
+  };
 
   const login = async () => {
     setApiKey(apiKeyDraft);
@@ -645,7 +658,7 @@ export function AdminConsole() {
                         </button>
                         <span>{item.kind === "community" ? `${item.id} · 用户 ${item.owner_user_id ?? "-"}` : item.id}</span>
                       </td>
-                      <td>{item.kind}</td>
+                      <td>{marketTypeLabel(item)}</td>
                       <td>
                         <select
                           value={item.status}
@@ -735,7 +748,14 @@ export function AdminConsole() {
                 <div><strong>来源策略</strong><span>{selectedMarketItem.source_strategy_id || "-"}</span></div>
                 <div><strong>语言</strong><span>{selectedMarketItem.language || "-"}</span></div>
                 <div><strong>分类</strong><span>{selectedMarketItem.category || "-"}</span></div>
-                <div><strong>所有者</strong><span>{selectedMarketItem.owner_user_id ?? "平台"}</span></div>
+                <div>
+                  <strong>所有者</strong>
+                  <span>
+                    {selectedMarketItem.kind === "community"
+                      ? `${userNamesById.get(selectedMarketItem.owner_user_id ?? -1) || "用户"} · ID ${selectedMarketItem.owner_user_id ?? "-"}`
+                      : "平台"}
+                  </span>
+                </div>
                 <div><strong>状态</strong><span>{selectedMarketItem.status}</span></div>
                 <div><strong>更新时间</strong><span>{selectedMarketItem.updated_at || "-"}</span></div>
               </div>

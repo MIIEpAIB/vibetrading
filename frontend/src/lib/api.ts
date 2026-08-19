@@ -172,25 +172,25 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(body),
     }),
-  listStrategies: () => request<StrategyLibraryResponse>("/strategies"),
+  listStrategies: () => request<StrategyLibraryResponse>("/api/strategies"),
   replaceStrategies: (strategies: StrategyLibraryItem[]) =>
-    request<StrategyLibraryResponse>("/strategies", {
+    request<StrategyLibraryResponse>("/api/strategies", {
       method: "PUT",
       body: JSON.stringify({ strategies }),
     }),
   upsertStrategy: (strategy: StrategyLibraryItem) =>
-    request<StrategyLibraryItem>(`/strategies/${encodeURIComponent(strategy.id)}`, {
+    request<StrategyLibraryItem>(`/api/strategies/${encodeURIComponent(strategy.id)}`, {
       method: "PUT",
       body: JSON.stringify(strategy),
     }),
   listStrategyVersions: (strategyId: string) =>
-    request<StrategyVersionItem[]>(`/strategies/${encodeURIComponent(strategyId)}/versions`),
+    request<StrategyVersionItem[]>(`/api/strategies/${encodeURIComponent(strategyId)}/versions`),
   deleteStrategy: (strategyId: string) =>
-    request<{ status: string; id: string }>(`/strategies/${encodeURIComponent(strategyId)}`, {
+    request<{ status: string; id: string }>(`/api/strategies/${encodeURIComponent(strategyId)}`, {
       method: "DELETE",
     }),
   publishStrategy: (strategyId: string) =>
-    request<PublicStrategyMarketItem>(`/strategies/${encodeURIComponent(strategyId)}/publish`, {
+    request<PublicStrategyMarketItem>(`/api/strategies/${encodeURIComponent(strategyId)}/publish`, {
       method: "POST",
     }),
   listPublicStrategies: () => request<PublicStrategyMarketResponse>("/strategy-market/public"),
@@ -200,7 +200,7 @@ export const api = {
       body: JSON.stringify(body),
     }),
   runStrategyBacktest: (strategyId: string, body: StrategyBacktestRequest = {}) =>
-    request<StrategyMarketBacktestResponse>(`/strategies/${encodeURIComponent(strategyId)}/backtest`, {
+    request<StrategyMarketBacktestResponse>(`/api/strategies/${encodeURIComponent(strategyId)}/backtest`, {
       method: "POST",
       body: JSON.stringify(body),
     }),
@@ -700,11 +700,56 @@ export interface ShadowOrder {
 }
 
 export interface ShadowAccountResponse {
-  user_id: string;
-  account_type: "VIRTUAL" | string;
-  wallets: ShadowWallet[];
-  orders: ShadowOrder[];
+  account_cookie: string;
+  portfolio_cookie: string;
+  account_type: string;
+  cash: number;
+  frozen: number;
+  market_value: number;
+  total_asset: number;
+  accounts: Record<string, {
+    account_cookie: string;
+    asset: string;
+    balance: number;
+    frozen: number;
+    available: number;
+    equity: number;
+  }>;
+  positions: Record<string, Record<string, unknown>>;
+  orders: QIFIOrder[];
+  trades: QIFITrade[];
   market_prices: Record<string, number>;
+  updated_at: string;
+}
+
+export interface QIFIOrder {
+  order_id: string;
+  account_cookie: string;
+  symbol: string;
+  side: string;
+  price: number;
+  quantity: number;
+  order_type: string;
+  status: string;
+  datetime: string;
+  filled_quantity: number;
+  avg_price: number;
+  commission: number;
+  metadata: Record<string, unknown>;
+}
+
+export interface QIFITrade {
+  trade_id: string;
+  order_id: string;
+  account_cookie: string;
+  symbol: string;
+  side: string;
+  price: number;
+  quantity: number;
+  datetime: string;
+  commission: number;
+  pnl: number;
+  metadata: Record<string, unknown>;
 }
 
 export interface ShadowPlaceOrderRequest {

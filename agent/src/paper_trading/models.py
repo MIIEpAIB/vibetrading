@@ -221,6 +221,9 @@ class PaperOrderLink:
     connector_profile_id: str = ""
     broker_order_id: str = ""
     broker_payload: dict[str, Any] = field(default_factory=dict)
+    qifi_order_id: str = ""
+    qifi_trade_id: str = ""
+    qifi_account_json: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

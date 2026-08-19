@@ -143,6 +143,59 @@ def test_configured_api_key_required_for_sensitive_reads(
         assert response.status_code == 401, path
 
 
+def test_strategy_library_browser_refresh_serves_spa_shell(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("API_AUTH_KEY", "secret")
+    monkeypatch.setattr(api_server, "_API_KEY", "secret")
+    (tmp_path / "index.html").write_text("<!doctype html><div id=\"root\"></div>", encoding="utf-8")
+    monkeypatch.setattr(api_server, "_FRONTEND_DIST", tmp_path)
+
+    response = _remote_client().get("/strategies", headers={"Accept": "text/html"})
+
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert "root" in response.text
+
+
+def test_strategy_library_api_browser_navigation_redirects_to_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = _remote_client().get("/api/strategies", headers={"Accept": "text/html"}, follow_redirects=False)
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "/strategies"
+
+
+def test_strategy_library_api_browser_navigation_redirects_with_fetch_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = _remote_client().get(
+        "/api/strategies",
+        headers={"Accept": "application/json", "Sec-Fetch-Dest": "document"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "/strategies"
+
+
+def test_strategy_library_api_request_still_requires_auth(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("API_AUTH_KEY", "secret")
+    monkeypatch.setattr(api_server, "_API_KEY", "secret")
+    (tmp_path / "index.html").write_text("<!doctype html><div id=\"root\"></div>", encoding="utf-8")
+    monkeypatch.setattr(api_server, "_FRONTEND_DIST", tmp_path)
+
+    response = _remote_client().get("/strategies", headers={"Accept": "application/json"})
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid or missing API key"
+
+
 def test_configured_api_key_accepts_bearer_for_sensitive_reads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

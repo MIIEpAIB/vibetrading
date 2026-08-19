@@ -176,8 +176,8 @@ button.danger {
 }
 
 .strategy-detail-copy pre {
-  max-height: 360px;
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: visible;
   margin: 0;
   padding: 14px;
   border: 1px solid var(--line);

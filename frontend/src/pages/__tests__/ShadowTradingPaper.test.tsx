@@ -18,37 +18,40 @@ describe("Dashboard shadow account performance", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(api.getShadowAccount).mockResolvedValue({
-      user_id: "operator",
+      account_cookie: "shadow:operator",
+      portfolio_cookie: "virtual",
       account_type: "VIRTUAL",
-      wallets: [
-        { user_id: "operator", account_type: "VIRTUAL", asset_name: "USDT", balance: 90000, frozen: 0, equity: 90000 },
-        { user_id: "operator", account_type: "VIRTUAL", asset_name: "BTC", balance: 0.2, frozen: 0, equity: 0.2 },
-      ],
+      cash: 90000,
+      frozen: 0,
+      market_value: 11000,
+      total_asset: 101000,
+      accounts: {
+        USDT: { account_cookie: "shadow:operator", asset: "USDT", balance: 90000, frozen: 0, available: 90000, equity: 90000 },
+        BTC: { account_cookie: "shadow:operator", asset: "BTC", balance: 0.2, frozen: 0, available: 0.2, equity: 0.2 },
+      },
+      positions: {
+        BTC_USDT: { symbol: "BTC_USDT", volume_long: 0.2, volume_short: 0, market_value: 11000 },
+      },
       orders: [
         {
           order_id: "order_1",
-          user_id: "operator",
-          account_type: "VIRTUAL",
+          account_cookie: "shadow:operator",
           symbol: "BTC_USDT",
           side: "BUY",
-          type: "MARKET",
+          order_type: "MARKET",
           price: 50000,
           quantity: 0.2,
           status: "FILLED",
-          executed_price: 50000,
-          average_price: 50000,
+          datetime: "2026-08-19T00:00:00Z",
           filled_quantity: 0.2,
-          remaining_quantity: 0,
-          executed_value: 10000,
-          reserved_asset: "USDT",
-          reserved_amount: 10000,
-          fee_asset: "USDT",
-          fee_paid: 0,
-          timestamp: 1_782_475_200,
-          updated_at: 1_782_475_200,
+          avg_price: 50000,
+          commission: 0,
+          metadata: {},
         },
       ],
+      trades: [],
       market_prices: { BTC_USDT: 55000 },
+      updated_at: "2026-08-19T00:00:00Z",
     });
   });
 

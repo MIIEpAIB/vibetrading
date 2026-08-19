@@ -266,7 +266,10 @@ class SQLitePaperTradingStore:
                     execution_mode TEXT NOT NULL DEFAULT 'shadow',
                     connector_profile_id TEXT NOT NULL DEFAULT '',
                     broker_order_id TEXT NOT NULL DEFAULT '',
-                    broker_payload_json TEXT NOT NULL DEFAULT '{}'
+                    broker_payload_json TEXT NOT NULL DEFAULT '{}',
+                    qifi_order_id TEXT NOT NULL DEFAULT '',
+                    qifi_trade_id TEXT NOT NULL DEFAULT '',
+                    qifi_account_json TEXT NOT NULL DEFAULT '{}'
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_paper_order_links_deployment_created
@@ -294,6 +297,9 @@ class SQLitePaperTradingStore:
             self._ensure_column("paper_order_links", "connector_profile_id", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column("paper_order_links", "broker_order_id", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column("paper_order_links", "broker_payload_json", "TEXT NOT NULL DEFAULT '{}'")
+            self._ensure_column("paper_order_links", "qifi_order_id", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column("paper_order_links", "qifi_trade_id", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column("paper_order_links", "qifi_account_json", "TEXT NOT NULL DEFAULT '{}'")
             self._conn.commit()
 
     def _ensure_column(self, table: str, column: str, definition: str) -> None:
@@ -469,9 +475,10 @@ class SQLitePaperTradingStore:
                 INSERT INTO paper_order_links (
                     link_id, deployment_id, signal_id, decision_id, user_id,
                     shadow_order_id, shadow_status, created_at, rejection_reason,
-                    execution_mode, connector_profile_id, broker_order_id, broker_payload_json
+                    execution_mode, connector_profile_id, broker_order_id, broker_payload_json,
+                    qifi_order_id, qifi_trade_id, qifi_account_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     link.link_id,
@@ -487,6 +494,9 @@ class SQLitePaperTradingStore:
                     link.connector_profile_id,
                     link.broker_order_id,
                     _json_dumps(link.broker_payload),
+                    link.qifi_order_id,
+                    link.qifi_trade_id,
+                    _json_dumps(link.qifi_account_json),
                 ),
             )
             self._conn.commit()
@@ -647,6 +657,9 @@ class SQLitePaperTradingStore:
             connector_profile_id=_row_text(row, "connector_profile_id"),
             broker_order_id=_row_text(row, "broker_order_id"),
             broker_payload=dict(_json_loads(_row_text(row, "broker_payload_json", "{}"), {})),
+            qifi_order_id=_row_text(row, "qifi_order_id"),
+            qifi_trade_id=_row_text(row, "qifi_trade_id"),
+            qifi_account_json=dict(_json_loads(_row_text(row, "qifi_account_json", "{}"), {})),
         )
 
     @staticmethod
