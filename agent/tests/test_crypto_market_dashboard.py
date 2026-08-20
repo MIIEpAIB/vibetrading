@@ -10,22 +10,23 @@ import api_server
 from src import crypto_market
 
 
-def _binance_tickers(symbols):
+def _okx_tickers(symbols):
     return {
         symbol: {
-            "lastPrice": 1000.0 + index,
-            "priceChangePercent": 1.5 - index * 0.1,
-            "highPrice": 1020.0 + index,
-            "lowPrice": 980.0 + index,
-            "volume": 10000 + index,
-            "quoteVolume": 10_000_000 + index,
+            "instId": crypto_market.okx_instrument_id(symbol),
+            "last": str(1000.0 + index),
+            "sodUtc8": "985",
+            "high24h": str(1020.0 + index),
+            "low24h": str(980.0 + index),
+            "vol24h": str(10000 + index),
+            "volCcy24h": str(10_000_000 + index),
         }
         for index, symbol in enumerate(symbols)
     }
 
 
 def test_market_dashboard_does_not_return_fake_prices_when_live_data_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(crypto_market, "_binance_tickers", lambda symbols: (_ for _ in ()).throw(RuntimeError("network blocked")))
+    monkeypatch.setattr(crypto_market, "_okx_tickers", lambda symbols: (_ for _ in ()).throw(RuntimeError("network blocked")))
 
     payload = crypto_market.get_market_dashboard()
 
@@ -35,19 +36,19 @@ def test_market_dashboard_does_not_return_fake_prices_when_live_data_fails(monke
     assert payload["aggregate"]["market_cap"] == 0
 
 
-def test_market_dashboard_uses_binance_rows(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(crypto_market, "_binance_tickers", _binance_tickers)
+def test_market_dashboard_uses_okx_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(crypto_market, "_okx_tickers", _okx_tickers)
+    monkeypatch.setattr(crypto_market, "_okx_funding_rates", lambda symbols: {symbol: 0.0001 for symbol in symbols})
 
     payload = crypto_market.get_market_dashboard()
 
-    assert payload["source"] == "binance"
+    assert payload["source"] == "okx"
     assert payload["rows"][0]["price"] == 1000
     assert payload["rows"][0]["quote_volume_24h"] == 10000000
 
 
 def test_klines_do_not_return_fake_bars_when_live_data_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(crypto_market, "_fetch_from_binance", lambda *args: (_ for _ in ()).throw(RuntimeError("network blocked")))
-    monkeypatch.setattr(crypto_market, "_fetch_from_coinbase", lambda *args: (_ for _ in ()).throw(RuntimeError("network blocked")))
+    monkeypatch.setattr(crypto_market, "_json_get", lambda *args: (_ for _ in ()).throw(RuntimeError("network blocked")))
 
     payload = crypto_market.get_klines("BTC/USDT", "1h", 24)
 
@@ -63,7 +64,8 @@ def test_klines_do_not_return_fake_bars_when_live_data_fails(monkeypatch: pytest
 def test_crypto_api_returns_rows_and_hides_credentials(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(crypto_market, "_binance_tickers", _binance_tickers)
+    monkeypatch.setattr(crypto_market, "_okx_tickers", _okx_tickers)
+    monkeypatch.setattr(crypto_market, "_okx_funding_rates", lambda symbols: {symbol: 0.0001 for symbol in symbols})
 
     payload = asyncio.run(api_server.get_crypto_markets(limit=13))
 
@@ -78,7 +80,8 @@ def test_crypto_api_returns_rows_and_hides_credentials(
 def test_crypto_api_accepts_oversized_limit_and_clamps(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(crypto_market, "_binance_tickers", _binance_tickers)
+    monkeypatch.setattr(crypto_market, "_okx_tickers", _okx_tickers)
+    monkeypatch.setattr(crypto_market, "_okx_funding_rates", lambda symbols: {symbol: 0.0001 for symbol in symbols})
 
     payload = asyncio.run(api_server.get_crypto_markets(limit=20))
 
@@ -89,22 +92,8 @@ def test_crypto_api_accepts_oversized_limit_and_clamps(
 def test_crypto_klines_api_normalizes_bars(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def binance_bars(symbol: str, timeframe: str, limit: int):
-        return [
-            crypto_market.CryptoKlineBar(
-                time=crypto_market._iso_from_ms(1_700_000_000_000 + i * 3_600_000),
-                timestamp=1_700_000_000_000 + i * 3_600_000,
-                symbol=symbol,
-                open=100 + i,
-                high=104 + i,
-                low=98 + i,
-                close=102 + i,
-                volume=1000 + i,
-            )
-            for i in range(limit)
-        ]
-
-    monkeypatch.setattr(crypto_market, "_fetch_from_binance", binance_bars)
+    rows = [[1_700_000_000_000 + i * 3_600_000, 100 + i, 104 + i, 98 + i, 102 + i, 1000 + i] for i in range(20)]
+    monkeypatch.setattr(crypto_market, "_json_get", lambda *args: rows)
 
     payload = asyncio.run(api_server.get_crypto_klines(symbol="BTC-USDT", timeframe="1h", limit=20))
 
@@ -113,28 +102,16 @@ def test_crypto_klines_api_normalizes_bars(
     assert body.storage.model_dump() == {"redis": "disabled", "timescale": "disabled", "detail": ""}
     assert len(body.bars) == 20
     assert body.bars[0].time.endswith("Z")
-    assert body.bars[0].open == 100
+    assert body.bars[0].open == 119
 
 
-def test_binance_kline_stream_payload_is_normalized() -> None:
+def test_okx_kline_stream_payload_is_normalized() -> None:
     payload = {
-        "e": "kline",
-        "E": 1_700_000_003_000,
-        "s": "BTCUSDT",
-        "k": {
-            "t": 1_700_000_000_000,
-            "s": "BTCUSDT",
-            "i": "1h",
-            "o": "67000.00",
-            "h": "68100.50",
-            "l": "66950.25",
-            "c": "68050.75",
-            "v": "123.45",
-            "x": False,
-        },
+        "arg": {"channel": "candle1H", "instId": "BTC-USDT-SWAP"},
+        "data": [["1700000000000", "67000.00", "68100.50", "66950.25", "68050.75", "123.45", "0", "0", "0"]],
     }
 
-    message = crypto_market.parse_binance_kline_stream_message(payload)
+    message = crypto_market.parse_okx_kline_message(payload)
 
     assert message is not None
     assert message["type"] == "kline"
@@ -153,5 +130,8 @@ def test_binance_kline_stream_payload_is_normalized() -> None:
     }
 
 
-def test_binance_kline_stream_url_uses_normalized_symbol_and_timeframe() -> None:
-    assert crypto_market.binance_kline_ws_url("BTC-USDT", "60min").endswith("/btcusdt@kline_1h")
+def test_okx_kline_subscription_uses_swap_instrument() -> None:
+    assert crypto_market.okx_kline_subscription("BTC-USDT", "60min") == {
+        "channel": "candle1H",
+        "instId": "BTC-USDT-SWAP",
+    }

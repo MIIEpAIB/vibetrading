@@ -395,22 +395,6 @@ class ShadowPlaceOrderRequest(BaseModel):
     trigger_order_price: float = Field(0.0, ge=0)
 
 
-class ShadowPriceUpdateRequest(BaseModel):
-    """Inject a latest-market-price update for virtual limit order matching."""
-
-    symbol: str = Field(..., min_length=3, max_length=32)
-    price: float = Field(..., gt=0)
-
-
-class ShadowPriceUpdateResponse(BaseModel):
-    """Result of a virtual market-price update."""
-
-    symbol: str
-    price: float
-    filled_orders: List[ShadowOrderResponse]
-    account: ShadowAccountResponse
-
-
 # ---- User Auth Models ----
 
 class RegisterRequest(BaseModel):
@@ -1187,6 +1171,8 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
+_shadow_market_feed = None
+
 _DEFAULT_CORS_ORIGINS = [
     "http://localhost:3000",
     "http://localhost:5173",
@@ -1337,6 +1323,21 @@ async def _run_startup_preflight() -> None:
     from src.preflight import run_preflight
 
     run_preflight(console)
+    from src.shadow_trading import shadow_trading_service
+    from src.shadow_market_feed import ShadowMarketFeed
+
+    global _shadow_market_feed
+    _shadow_market_feed = ShadowMarketFeed(shadow_trading_service)
+    _shadow_market_feed.start()
+
+
+@app.on_event("shutdown")
+async def _stop_shadow_market_feed() -> None:
+    """Stop the single exchange market-event source with the API process."""
+    global _shadow_market_feed
+    if _shadow_market_feed is not None:
+        await _shadow_market_feed.stop()
+        _shadow_market_feed = None
 
 
 # ============================================================================
@@ -3737,7 +3738,7 @@ async def get_crypto_markets(
     dependencies=[Depends(require_auth)],
 )
 async def get_crypto_symbols(
-    exchange: str = Query("binance", pattern="^(okx|binance)$"),
+    exchange: str = Query("okx", pattern="^okx$"),
     product_type: str = Query("spot", pattern="^(spot|usdm_futures)$"),
     limit: int = Query(200, ge=1, le=1000),
 ):
@@ -3858,24 +3859,6 @@ async def cancel_shadow_order(order_id: str, ctx: AuthContext = Depends(require_
         raise _shadow_http_error(exc) from exc
 
 
-@app.post("/shadow/market-price", response_model=ShadowPriceUpdateResponse)
-async def update_shadow_market_price(payload: ShadowPriceUpdateRequest, ctx: AuthContext = Depends(require_auth)):
-    """Update latest price and trigger eligible virtual limit orders."""
-    from src.shadow_trading import ShadowTradingError, normalize_symbol, shadow_trading_service
-
-    user_id = _shadow_user_id(ctx)
-    try:
-        filled_orders = await shadow_trading_service.update_market_price(payload.symbol, payload.price, user_id=user_id)
-        return {
-            "symbol": normalize_symbol(payload.symbol),
-            "price": payload.price,
-            "filled_orders": [order.to_dict() for order in filled_orders],
-            "account": await shadow_trading_service.account_snapshot(user_id),
-        }
-    except ShadowTradingError as exc:
-        raise _shadow_http_error(exc) from exc
-
-
 @app.post("/shadow/reset", response_model=ShadowAccountResponse)
 async def reset_shadow_account(ctx: AuthContext = Depends(require_auth)):
     """Reset the caller's virtual account to its initial ledger state."""
@@ -3907,15 +3890,15 @@ async def get_crypto_klines(
 
 @app.websocket("/crypto/stream")
 async def stream_crypto_klines(websocket: WebSocket):
-    """Proxy Binance kline websocket updates to dashboard clients."""
-    from src.crypto_market import binance_kline_ws_url, parse_binance_kline_stream_message
+    """Proxy OKX kline websocket updates to dashboard clients."""
+    from src.crypto_market import OKX_WS_URL, okx_kline_subscription, parse_okx_kline_message
 
     await websocket.accept()
     try:
         _resolve_websocket_auth_context(websocket, websocket.query_params.get("api_key"))
         symbol = websocket.query_params.get("symbol", "BTC/USDT")
         timeframe = websocket.query_params.get("timeframe", "1h")
-        upstream_url = binance_kline_ws_url(symbol, timeframe)
+        subscription = okx_kline_subscription(symbol, timeframe)
     except HTTPException as exc:
         await websocket.close(code=1008, reason=exc.detail)
         return
@@ -3930,16 +3913,17 @@ async def stream_crypto_klines(websocket: WebSocket):
             "type": "subscribed",
             "symbol": symbol,
             "timeframe": timeframe,
-            "source": "binance",
+            "source": "okx",
         })
-        async with websockets.connect(upstream_url, ping_interval=20, ping_timeout=20, close_timeout=5) as upstream:
+        async with websockets.connect(OKX_WS_URL, ping_interval=20, ping_timeout=20, close_timeout=5) as upstream:
+            await upstream.send(json.dumps({"op": "subscribe", "args": [subscription]}))
             while True:
                 raw = await upstream.recv()
                 try:
                     payload = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
-                message = parse_binance_kline_stream_message(payload)
+                message = parse_okx_kline_message(payload)
                 if message is None:
                     continue
                 await websocket.send_json(message)
@@ -3972,7 +3956,7 @@ async def get_legacy_crypto_kline(
         }
     return {
         "status": 200,
-        "symbol": f"BINANCE.{normalized['symbol'].replace('/', '')}",
+        "symbol": f"OKX.{normalized['symbol'].replace('/', '')}.SWAP",
         "frequency": normalized["timeframe"],
         "count": len(normalized["bars"]),
         "data": [
