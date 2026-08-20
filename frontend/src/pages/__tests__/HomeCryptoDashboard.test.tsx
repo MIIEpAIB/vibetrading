@@ -1,4 +1,5 @@
-import { act, render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { ShadowTrading } from "@/pages/ShadowTrading";
 import { api } from "@/lib/api";
 
@@ -10,104 +11,109 @@ vi.mock("@/components/charts/KLineChartPanel", () => ({
 
 vi.mock("@/lib/api", () => ({
   api: {
-    getCryptoMarkets: vi.fn(),
+    getShadowAccount: vi.fn(),
+    listShadowOrders: vi.fn(),
+    placeShadowOrder: vi.fn(),
     getCryptoKlines: vi.fn(),
   },
 }));
 
-const mockData = vi.hoisted(() => {
-  const markets1 = {
-    status: "ok",
-    source: "binance",
-    updated_at: "2026-08-06T00:00:00Z",
-    symbols: ["BTC/USDT"],
-    aggregate: {
-      market_cap: 1_000_000_000,
-      volume_24h: 20_000_000,
-      open_interest: 2_000_000,
-      liquidation_24h: 50_000,
-      avg_change_24h: 1.23,
-      btc_dominance: 48,
-    },
-    rows: [{
-      rank: 1,
-      symbol: "BTC/USDT",
-      base: "BTC",
-      name: "Bitcoin",
-      icon_url: "/coin-icons/btc.svg",
-      icon_bg: "#f7931a",
-      icon_fg: "#111827",
-      price: 67200,
-      change_24h: 1.23,
-      high_24h: 68100,
-      low_24h: 64900,
-      volume_24h: 300,
-      quote_volume_24h: 20_000_000,
-      market_cap: 1_000_000_000,
-      funding_rate: 0.01,
-      open_interest: 2_000_000,
-      liquidation_24h: 50_000,
-    }],
-  };
-  const markets2 = {
-    ...markets1,
-    updated_at: "2026-08-06T00:00:15Z",
-    rows: [{ ...markets1.rows[0], price: 68150, change_24h: 1.8 }],
-  };
-  const klines1 = {
-    status: "ok",
-    symbol: "BTC/USDT",
-    timeframe: "1h",
-    source: "binance",
-    updated_at: "2026-08-06T00:00:00Z",
-    storage: { redis: "disabled", timescale: "disabled" },
-    bars: [
-      { time: "2026-08-06T00:00:00Z", timestamp: 1, symbol: "BTC/USDT", open: 67000, high: 67300, low: 66900, close: 67200, volume: 1000 },
-    ],
-  };
-  const klines2 = {
-    ...klines1,
-    updated_at: "2026-08-06T00:00:10Z",
-    bars: [
-      { time: "2026-08-06T00:00:00Z", timestamp: 1, symbol: "BTC/USDT", open: 67000, high: 68180, low: 66900, close: 68150, volume: 1500 },
-    ],
-  };
-  return { markets1, markets2, klines1, klines2 };
-});
-
-describe("ShadowTrading crypto dashboard live K-line refresh", () => {
+describe("ShadowTrading paper order controls", () => {
   beforeEach(() => {
-    vi.useFakeTimers();
     vi.clearAllMocks();
-    vi.mocked(api.getCryptoMarkets)
-      .mockResolvedValueOnce(mockData.markets1)
-      .mockResolvedValueOnce(mockData.markets2);
-    vi.mocked(api.getCryptoKlines)
-      .mockResolvedValueOnce(mockData.klines1)
-      .mockResolvedValueOnce(mockData.klines2);
+    vi.mocked(api.getShadowAccount).mockResolvedValue({
+      account_cookie: "shadow:operator",
+      portfolio_cookie: "virtual",
+      account_type: "VIRTUAL",
+      cash: 90000,
+      frozen: 0,
+      market_value: 11000,
+      total_asset: 101000,
+      accounts: {
+        USDT: { account_cookie: "shadow:operator", asset: "USDT", balance: 90000, frozen: 0, available: 90000, equity: 90000 },
+        BTC: { account_cookie: "shadow:operator", asset: "BTC", balance: 0.2, frozen: 0, available: 0.2, equity: 0.2 },
+      },
+      positions: {
+        BTC_USDT: { symbol: "BTC_USDT", volume_long: 0.2, volume_short: 0, market_value: 11000 },
+      },
+      orders: [
+        {
+          order_id: "order_1",
+          account_cookie: "shadow:operator",
+          symbol: "BTC_USDT",
+          side: "buy",
+          price: 50000,
+          quantity: 0.2,
+          order_type: "MARKET",
+          status: "FILLED",
+          datetime: "2026-08-19T00:00:00Z",
+          filled_quantity: 0.2,
+          avg_price: 50000,
+          commission: 0,
+          metadata: {},
+        },
+      ],
+      trades: [],
+      market_prices: { BTC_USDT: 55000 },
+      updated_at: "2026-08-19T00:00:00Z",
+    });
+    vi.mocked(api.listShadowOrders).mockResolvedValue([]);
+    vi.mocked(api.getCryptoKlines).mockResolvedValue({
+      status: "ok",
+      symbol: "BTC/USDT",
+      timeframe: "5m",
+      source: "okx",
+      updated_at: "2026-08-19T00:00:00Z",
+      storage: { redis: "disabled", timescale: "disabled" },
+      bars: [
+        { time: "2026-08-19T00:00:00Z", timestamp: 1, symbol: "BTC/USDT", open: 67000, high: 67300, low: 66900, close: 67200, volume: 1000 },
+      ],
+    });
+    vi.mocked(api.placeShadowOrder).mockResolvedValue({
+      order_id: "order_2",
+      user_id: "shadow:operator",
+      account_type: "VIRTUAL",
+      symbol: "BTC_USDT",
+      side: "BUY",
+      type: "MARKET",
+      price: 55000,
+      quantity: 0.1,
+      status: "FILLED",
+      executed_price: 55000,
+      average_price: 55000,
+      filled_quantity: 0.1,
+      remaining_quantity: 0,
+      executed_value: 5500,
+      reserved_asset: "USDT",
+      reserved_amount: 5500,
+      timestamp: 1,
+      updated_at: 1,
+    });
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("refreshes K-line data automatically between market table refreshes", async () => {
+  it("enables buy when virtual cash and market price are available", async () => {
+    const user = userEvent.setup();
     render(<ShadowTrading />);
 
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(api.getCryptoMarkets).toHaveBeenCalledTimes(1);
-    expect(api.getCryptoKlines).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId("kline-panel")).toHaveTextContent("BTC/USDT:67200");
+    await waitFor(() => expect(api.getShadowAccount).toHaveBeenCalledTimes(1));
+    expect(screen.getByText("总资产")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("数量 (BTC)"), "0.1");
+    expect(screen.getByRole("button", { name: "买入 BTC" })).toBeEnabled();
+  });
 
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(3500);
-      await Promise.resolve();
-    });
+  it("submits a shadow order", async () => {
+    const user = userEvent.setup();
+    render(<ShadowTrading />);
 
-    expect(api.getCryptoMarkets).toHaveBeenCalledTimes(1);
-    expect(api.getCryptoKlines).toHaveBeenCalledTimes(2);
-    expect(screen.getByTestId("kline-panel")).toHaveTextContent("BTC/USDT:68150");
+    await waitFor(() => expect(api.getShadowAccount).toHaveBeenCalledTimes(1));
+    await user.type(screen.getByLabelText("数量 (BTC)"), "0.1");
+    await user.click(screen.getByRole("button", { name: "买入 BTC" }));
+
+    await waitFor(() => expect(api.placeShadowOrder).toHaveBeenCalledWith({
+      symbol: "BTC_USDT",
+      side: "BUY",
+      order_type: "MARKET",
+      quantity: 0.1,
+    }));
   });
 });

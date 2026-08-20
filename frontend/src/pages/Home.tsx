@@ -1,16 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity,
-  BarChart3,
   CandlestickChart,
-  Database,
-  Gauge,
   LineChart,
   RefreshCw,
   Search,
   Server,
-  TrendingDown,
-  TrendingUp,
 } from "lucide-react";
 import { KLineChartPanel } from "@/components/charts/KLineChartPanel";
 import { api, type CryptoKlineBar, type CryptoMarketRow, type CryptoMarketsResponse } from "@/lib/api";
@@ -124,39 +118,6 @@ function CoinIcon({ row, size = "md" }: { row: CryptoMarketRow; size?: "sm" | "m
   );
 }
 
-function MetricBox({
-  label,
-  value,
-  sub,
-  icon: Icon,
-  tone = "neutral",
-}: {
-  label: string;
-  value: string;
-  sub: string;
-  icon: typeof BarChart3;
-  tone?: "green" | "red" | "amber" | "neutral";
-}) {
-  const toneMap = {
-    green: "text-emerald-300 bg-emerald-400/10 border-emerald-400/15",
-    red: "text-red-300 bg-red-400/10 border-red-400/15",
-    amber: "text-amber-300 bg-amber-400/10 border-amber-400/15",
-    neutral: "text-sky-300 bg-sky-400/10 border-sky-400/15",
-  };
-  return (
-    <div className="MuiBox-root cg-style-u54ou rounded-lg border border-zinc-800 bg-[#111318] p-4 shadow-sm">
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-xs font-medium text-zinc-400">{label}</span>
-        <span className={cn("flex h-8 w-8 items-center justify-center rounded-md border", toneMap[tone])}>
-          <Icon className="h-4 w-4" />
-        </span>
-      </div>
-      <div className="mt-4 text-2xl font-semibold tracking-normal text-zinc-50">{value}</div>
-      <div className="mt-1 text-xs text-zinc-500">{sub}</div>
-    </div>
-  );
-}
-
 function KlinePanel({
   symbol,
   timeframe,
@@ -181,8 +142,6 @@ export function Home() {
   const marketRequestVersionRef = useRef(0);
   const klineRequestVersionRef = useRef(0);
   const selectedSymbolRef = useRef(selectedSymbol);
-  const selectedRow = markets.rows.find((row) => row.symbol === selectedSymbol) ?? markets.rows[0];
-  const hasMarketRows = markets.rows.length > 0;
 
   useEffect(() => {
     selectedSymbolRef.current = selectedSymbol;
@@ -256,8 +215,6 @@ export function Home() {
     return markets.rows.filter((row) => row.symbol.toLowerCase().includes(clean) || row.name.toLowerCase().includes(clean));
   }, [markets.rows, query]);
 
-  const longShort = selectedRow ? (selectedRow.change_24h >= 0 ? "Long Bias" : "Short Pressure") : "--";
-
   return (
     <main className="min-h-full overflow-auto bg-[#0b0d10] text-zinc-100">
       <div className="mx-auto max-w-[1480px] space-y-4 px-4 py-4 sm:px-6 lg:px-8">
@@ -280,43 +237,8 @@ export function Home() {
           </div>
         </header>
 
-        <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <MetricBox label="Total Market Cap" value="--" sub="Not provided by current source" icon={BarChart3} />
-          <MetricBox label="24h Volume" value={hasMarketRows ? formatMoney(markets.aggregate.volume_24h) : "--"} sub="Spot volume across top assets" icon={Activity} tone="green" />
-          <MetricBox label="Open Interest" value="--" sub={hasMarketRows ? `${formatPercent(markets.aggregate.avg_change_24h)} average move` : "No live data"} icon={Gauge} tone={markets.aggregate.avg_change_24h >= 0 ? "green" : "red"} />
-          <MetricBox label="Liquidation 24h" value="--" sub="Not provided by current source" icon={TrendingDown} tone="amber" />
-        </section>
-
         <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
           <div className="space-y-4">
-            <div className="hs2 MuiBox-root cg-style-bzykof rounded-lg border border-zinc-800 bg-[#111318] p-4">
-              <div className="grid gap-3 md:grid-cols-4">
-                <div className="rounded-md bg-[#181b21] p-3">
-                  <div className="text-xs text-zinc-500">Selected</div>
-                  <div className="mt-2 flex items-center gap-2 text-xl font-semibold text-white">
-                    {selectedRow ? <CoinIcon row={selectedRow} size="sm" /> : null}
-                    {selectedSymbol}
-                  </div>
-                </div>
-                <div className="rounded-md bg-[#181b21] p-3">
-                  <div className="text-xs text-zinc-500">Price</div>
-                  <div className="mt-2 text-xl font-semibold text-white">{selectedRow ? formatMoney(selectedRow.price) : "--"}</div>
-                </div>
-                <div className="rounded-md bg-[#181b21] p-3">
-                  <div className="text-xs text-zinc-500">24h Change</div>
-                  <div className={cn("mt-2 flex items-center gap-1 text-xl font-semibold", selectedRow ? toneClass(selectedRow.change_24h) : "text-zinc-300")}>
-                    {selectedRow ? selectedRow.change_24h >= 0 ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" /> : null}
-                    {selectedRow ? formatPercent(selectedRow.change_24h) : "--"}
-                  </div>
-                </div>
-                <div className="rounded-md bg-[#181b21] p-3">
-                  <div className="text-xs text-zinc-500">Funding / Bias</div>
-                  <div className="mt-2 text-xl font-semibold text-white">--</div>
-                  <div className="mt-1 text-xs text-zinc-500">{longShort}</div>
-                </div>
-              </div>
-            </div>
-
             <div className="rounded-lg border border-zinc-800 bg-[#111318] p-4">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                 <div>
@@ -325,7 +247,7 @@ export function Home() {
                     K-line Data
                   </div>
                   <div className="mt-1 text-xs text-zinc-500">
-                    {selectedSymbol} · {timeframe.toUpperCase()} · Binance REST with Coinbase secondary source
+                    {selectedSymbol} · {timeframe.toUpperCase()} · OKX perpetual market data
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -359,10 +281,13 @@ export function Home() {
           </div>
 
           <aside className="space-y-4">
-            <div className="rounded-lg border border-zinc-800 bg-[#111318] p-4">
-              <div className="mb-4 flex items-center justify-between">
-                <div className="text-sm font-semibold text-zinc-100">Market Heat</div>
-                <Database className="h-4 w-4 text-sky-300" />
+            <section className="rounded-lg border border-zinc-800 bg-[#111318] p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-zinc-100">Market Heat</div>
+                  <div className="mt-1 text-xs text-zinc-500">Top movers in the current watchlist</div>
+                </div>
+                <LineChart className="h-4 w-4 text-sky-300" />
               </div>
               <div className="space-y-3">
                 {markets.rows.slice(0, 6).map((row) => (
@@ -389,11 +314,17 @@ export function Home() {
                   </button>
                 ))}
               </div>
-            </div>
+            </section>
 
-            <div className="rounded-lg border border-zinc-800 bg-[#111318] p-4">
-              <div className="text-sm font-semibold text-zinc-100">Data Status</div>
-              <div className="mt-4 space-y-3 text-sm">
+            <section className="rounded-lg border border-zinc-800 bg-[#111318] p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-zinc-100">Data Status</div>
+                  <div className="mt-1 text-xs text-zinc-500">Current feed and chart state</div>
+                </div>
+                <Server className="h-4 w-4 text-zinc-400" />
+              </div>
+              <div className="space-y-3 text-sm">
                 <div className="flex items-center justify-between rounded-md bg-[#181b21] px-3 py-2">
                   <span className="text-zinc-400">Market source</span>
                   <span className="font-mono text-emerald-300">{markets.source}</span>
@@ -406,8 +337,12 @@ export function Home() {
                   <span className="text-zinc-400">Rows</span>
                   <span className="font-mono text-zinc-200">{markets.rows.length}</span>
                 </div>
+                <div className="flex items-center justify-between rounded-md bg-[#181b21] px-3 py-2">
+                  <span className="text-zinc-400">Updated</span>
+                  <span className="font-mono text-zinc-200">{new Date(markets.updated_at).toLocaleTimeString()}</span>
+                </div>
               </div>
-            </div>
+            </section>
           </aside>
         </section>
 

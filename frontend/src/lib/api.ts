@@ -387,11 +387,6 @@ export const api = {
     request<ShadowOrder>(`/shadow/orders/${encodeURIComponent(orderId)}/cancel`, {
       method: "POST",
     }),
-  updateShadowMarketPrice: (body: ShadowMarketPriceRequest) =>
-    request<ShadowMarketPriceResponse>("/shadow/market-price", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
   resetShadowAccount: () => request<ShadowAccountResponse>("/shadow/reset", { method: "POST" }),
   searchDirectMessageUsers: (query = "") => {
     const q = new URLSearchParams();
@@ -763,18 +758,6 @@ export interface ShadowPlaceOrderRequest {
   trigger_condition?: "GTE" | "LTE";
   trigger_order_type?: "MARKET" | "LIMIT";
   trigger_order_price?: number;
-}
-
-export interface ShadowMarketPriceRequest {
-  symbol: string;
-  price: number;
-}
-
-export interface ShadowMarketPriceResponse {
-  symbol: string;
-  price: number;
-  filled_orders: ShadowOrder[];
-  account: ShadowAccountResponse;
 }
 
 export interface PaperLimits {
