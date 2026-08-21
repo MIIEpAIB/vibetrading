@@ -26,6 +26,7 @@ type StrategyCategory = "trend" | "mean_reversion" | "grid" | "risk" | "portfoli
 type StrategyTab = "edit" | "backtest";
 type EditorPane = "code" | "description";
 type BacktestExchange = "okx_spot" | "okx_futures" | "binance_spot" | "binance_futures";
+type BacktestDataSource = "okx" | "ccxt" | "quantaxis" | "auto";
 type BacktestInterval = "1D" | "1H" | "1m";
 type BacktestMode = "simulation" | "live_grade";
 type TradeDirection = "long" | "short" | "auto";
@@ -63,6 +64,7 @@ interface BacktestFormState {
   endDate: string;
   interval: BacktestInterval;
   mode: BacktestMode;
+  dataSource: BacktestDataSource;
   exchange: BacktestExchange;
   symbol: string;
   quoteCurrency: "USDT";
@@ -96,11 +98,18 @@ const categoryOptions: Array<{ value: StrategyCategory }> = [
   { value: "utility" },
 ];
 
-const exchangeOptions: Array<{ value: BacktestExchange; source: string; labelZh: string; labelEn: string }> = [
-  { value: "okx_spot", source: "okx", labelZh: "OKX 现货", labelEn: "OKX Spot" },
-  { value: "okx_futures", source: "okx", labelZh: "OKX 期货", labelEn: "OKX Futures" },
-  { value: "binance_spot", source: "binance", labelZh: "币安现货", labelEn: "Binance Spot" },
-  { value: "binance_futures", source: "binance", labelZh: "币安期货", labelEn: "Binance Futures" },
+const dataSourceOptions: Array<{ value: BacktestDataSource; labelZh: string; labelEn: string }> = [
+  { value: "okx", labelZh: "OKX 历史K线", labelEn: "OKX OHLCV" },
+  { value: "quantaxis", labelZh: "QUANTAXIS 本地数据", labelEn: "QUANTAXIS Local" },
+  { value: "ccxt", labelZh: "CCXT 通用数据", labelEn: "CCXT Generic" },
+  { value: "auto", labelZh: "自动选择", labelEn: "Auto" },
+];
+
+const exchangeOptions: Array<{ value: BacktestExchange; labelZh: string; labelEn: string }> = [
+  { value: "okx_spot", labelZh: "OKX 现货", labelEn: "OKX Spot" },
+  { value: "okx_futures", labelZh: "OKX 期货", labelEn: "OKX Futures" },
+  { value: "binance_spot", labelZh: "币安现货", labelEn: "Binance Spot" },
+  { value: "binance_futures", labelZh: "币安期货", labelEn: "Binance Futures" },
 ];
 
 const intervalOptions: Array<{ value: BacktestInterval; labelZh: string; labelEn: string }> = [
@@ -268,6 +277,7 @@ function createBacktestFormState(): BacktestFormState {
     endDate: todayInputValue(),
     interval: "1D",
     mode: "simulation",
+    dataSource: "okx",
     exchange: "okx_spot",
     symbol: "BTC-USDT",
     quoteCurrency: "USDT",
@@ -411,6 +421,7 @@ export function StrategyEdit() {
       endTime: "结束时间",
       klinePeriod: "K线周期",
       mode: "模式",
+      dataSource: "数据源",
       platform: "平台(交易所)",
       symbol: "交易对",
       quoteCurrency: "计价货币",
@@ -467,6 +478,7 @@ export function StrategyEdit() {
       endTime: "End Time",
       klinePeriod: "K-line Period",
       mode: "Mode",
+      dataSource: "Data Source",
       platform: "Platform (Exchange)",
       symbol: "Trading Pair",
       quoteCurrency: "Quote Currency",
@@ -575,14 +587,14 @@ export function StrategyEdit() {
       await persistStrategy(strategy);
       const initialCapital = Number(backtestForm.initialCapital) || 50000;
       setBacktestInitialCapital(initialCapital);
-      const selectedExchange = exchangeOptions.find((option) => option.value === backtestForm.exchange) ?? exchangeOptions[0];
+      const selectedDataSource = dataSourceOptions.find((option) => option.value === backtestForm.dataSource) ?? dataSourceOptions[0];
       const fullBacktestParameters = {
         start_date: backtestForm.startDate,
         end_date: backtestForm.endDate,
         interval: backtestForm.interval,
         mode: backtestForm.mode,
         exchange: backtestForm.exchange,
-        source: selectedExchange.source,
+        source: selectedDataSource.value,
         symbol: backtestForm.symbol,
         quote_currency: backtestForm.quoteCurrency,
         initial_capital: initialCapital,
@@ -594,7 +606,7 @@ export function StrategyEdit() {
         end_date: backtestForm.endDate,
         symbol: backtestForm.symbol,
         interval: backtestForm.interval,
-        source: selectedExchange.source,
+        source: selectedDataSource.value,
         exchange: backtestForm.exchange,
         mode: backtestForm.mode,
         quote_currency: backtestForm.quoteCurrency,
@@ -653,9 +665,11 @@ export function StrategyEdit() {
     : [];
   const availableSymbols = exchangeSymbols[backtestForm.exchange];
   const selectedExchange = exchangeOptions.find((option) => option.value === backtestForm.exchange) ?? exchangeOptions[0];
+  const selectedDataSource = dataSourceOptions.find((option) => option.value === backtestForm.dataSource) ?? dataSourceOptions[0];
   const selectedInterval = intervalOptions.find((option) => option.value === backtestForm.interval) ?? intervalOptions[0];
   const selectedMode = modeOptions.find((option) => option.value === backtestForm.mode) ?? modeOptions[0];
   const exchangeLabel = language === "zh-CN" ? selectedExchange.labelZh : selectedExchange.labelEn;
+  const dataSourceLabel = language === "zh-CN" ? selectedDataSource.labelZh : selectedDataSource.labelEn;
   const intervalLabel = language === "zh-CN" ? selectedInterval.labelZh : selectedInterval.labelEn;
   const modeLabel = language === "zh-CN" ? selectedMode.labelZh : selectedMode.labelEn;
   const detailMetrics = nonEmptyEntries(backtestRun?.metrics);
@@ -854,7 +868,7 @@ export function StrategyEdit() {
               <div>
                 <h2 className="text-lg font-semibold">{copy.backtestTab}</h2>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  {backtestForm.symbol} · {intervalLabel} · {exchangeLabel} · {modeLabel}
+                  {backtestForm.symbol} · {intervalLabel} · {dataSourceLabel} · {exchangeLabel} · {modeLabel}
                 </p>
               </div>
             </div>
@@ -909,7 +923,21 @@ export function StrategyEdit() {
                 </label>
               </div>
 
-              <div className="grid gap-3 md:grid-cols-5">
+              <div className="grid gap-3 md:grid-cols-6">
+                <label className="block md:col-span-1">
+                  <span className="text-xs font-semibold uppercase text-muted-foreground">{copy.dataSource}</span>
+                  <select
+                    value={backtestForm.dataSource}
+                    onChange={(event) => updateBacktestForm({ dataSource: event.target.value as BacktestDataSource })}
+                    className="mt-1 h-10 w-full rounded-md border bg-background px-2 text-sm outline-none focus:ring-2 focus:ring-primary/25"
+                  >
+                    {dataSourceOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {language === "zh-CN" ? option.labelZh : option.labelEn}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <label className="block md:col-span-1">
                   <span className="text-xs font-semibold uppercase text-muted-foreground">{copy.platform}</span>
                   <select

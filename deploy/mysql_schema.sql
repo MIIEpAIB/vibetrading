@@ -148,10 +148,136 @@ CREATE TABLE IF NOT EXISTS strategy_versions (
   tags_json JSON NOT NULL,
   code MEDIUMTEXT NOT NULL,
   code_sha256 CHAR(64) NOT NULL,
+  parameter_schema_json JSON NOT NULL,
   created_at VARCHAR(64) NOT NULL,
   PRIMARY KEY (version_id),
   UNIQUE KEY uq_strategy_version (owner_user_id, strategy_id, version_no),
   KEY idx_strategy_versions_lookup (owner_user_id, strategy_id, version_no)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS strategy_deployments (
+  deployment_id VARCHAR(128) NOT NULL,
+  user_id BIGINT UNSIGNED NOT NULL,
+  target VARCHAR(16) NOT NULL,
+  status VARCHAR(32) NOT NULL,
+  strategy_id VARCHAR(128) NOT NULL,
+  strategy_version_no INT UNSIGNED NOT NULL,
+  strategy_snapshot_json JSON NOT NULL,
+  account_cookie VARCHAR(191) NOT NULL,
+  market VARCHAR(64) NOT NULL,
+  symbols_json JSON NOT NULL,
+  timeframe VARCHAR(32) NOT NULL,
+  parameters_json JSON NOT NULL,
+  risk_policy_json JSON NOT NULL,
+  broker_binding_id BIGINT UNSIGNED NULL,
+  created_at VARCHAR(64) NOT NULL,
+  updated_at VARCHAR(64) NOT NULL,
+  started_at VARCHAR(64) NULL,
+  paused_at VARCHAR(64) NULL,
+  stopped_at VARCHAR(64) NULL,
+  archived_at VARCHAR(64) NULL,
+  recovery_reason TEXT NOT NULL,
+  PRIMARY KEY (deployment_id),
+  UNIQUE KEY uq_strategy_deployment_account (account_cookie),
+  KEY idx_strategy_deployments_user_updated (user_id, updated_at),
+  KEY idx_strategy_deployments_strategy (user_id, strategy_id, strategy_version_no),
+  KEY idx_strategy_deployments_status (target, status),
+  CONSTRAINT fk_strategy_deployments_user
+    FOREIGN KEY (user_id) REFERENCES users(user_id)
+    ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS strategy_deployment_promotions (
+  promotion_id VARCHAR(128) NOT NULL,
+  user_id BIGINT UNSIGNED NOT NULL,
+  source_deployment_id VARCHAR(128) NOT NULL,
+  target_deployment_id VARCHAR(128) NOT NULL,
+  strategy_version_id VARCHAR(191) NOT NULL,
+  risk_snapshot_json JSON NOT NULL,
+  consent_ref VARCHAR(191) NOT NULL,
+  created_at VARCHAR(64) NOT NULL,
+  PRIMARY KEY (promotion_id),
+  UNIQUE KEY uq_strategy_deployment_promotion_target (target_deployment_id),
+  KEY idx_strategy_deployment_promotion_source (user_id, source_deployment_id),
+  CONSTRAINT fk_strategy_deployment_promotions_user
+    FOREIGN KEY (user_id) REFERENCES users(user_id)
+    ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS strategy_deployment_permissions (
+  permission_id VARCHAR(128) NOT NULL,
+  deployment_id VARCHAR(128) NOT NULL,
+  user_id BIGINT UNSIGNED NOT NULL,
+  role VARCHAR(32) NOT NULL,
+  granted_by BIGINT UNSIGNED NOT NULL,
+  created_at VARCHAR(64) NOT NULL,
+  revoked_at VARCHAR(64) NULL,
+  PRIMARY KEY (permission_id),
+  UNIQUE KEY uq_strategy_deployment_permission_user (deployment_id, user_id, role),
+  KEY idx_strategy_deployment_permission_user (user_id, revoked_at),
+  CONSTRAINT fk_strategy_deployment_permissions_user
+    FOREIGN KEY (user_id) REFERENCES users(user_id)
+    ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS strategy_runtime_leases (
+  lease_id VARCHAR(128) NOT NULL,
+  deployment_id VARCHAR(128) NOT NULL,
+  worker_id VARCHAR(128) NOT NULL,
+  lease_until VARCHAR(64) NOT NULL,
+  last_event_id VARCHAR(191) NOT NULL,
+  updated_at VARCHAR(64) NOT NULL,
+  PRIMARY KEY (lease_id),
+  UNIQUE KEY uq_strategy_runtime_lease_deployment (deployment_id),
+  CONSTRAINT fk_strategy_runtime_leases_deployment
+    FOREIGN KEY (deployment_id) REFERENCES strategy_deployments(deployment_id)
+    ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS strategy_runtime_tasks (
+  task_id VARCHAR(128) NOT NULL,
+  deployment_id VARCHAR(128) NOT NULL,
+  task_type VARCHAR(64) NOT NULL,
+  status VARCHAR(32) NOT NULL,
+  active TINYINT(1) NOT NULL DEFAULT 1,
+  qa_task_id VARCHAR(191) NOT NULL,
+  engine_name VARCHAR(128) NOT NULL,
+  payload_json JSON NOT NULL,
+  created_at VARCHAR(64) NOT NULL,
+  updated_at VARCHAR(64) NOT NULL,
+  cancelled_at VARCHAR(64) NULL,
+  PRIMARY KEY (task_id),
+  UNIQUE KEY uq_strategy_runtime_task_active (deployment_id, task_type, active),
+  KEY idx_strategy_runtime_tasks_deployment (deployment_id, status),
+  CONSTRAINT fk_strategy_runtime_tasks_deployment
+    FOREIGN KEY (deployment_id) REFERENCES strategy_deployments(deployment_id)
+    ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS strategy_runtime_events (
+  event_id VARCHAR(128) NOT NULL,
+  deployment_id VARCHAR(128) NOT NULL,
+  account_cookie VARCHAR(191) NULL,
+  event_scope VARCHAR(64) NOT NULL,
+  event_type VARCHAR(128) NOT NULL,
+  sequence_no BIGINT UNSIGNED NOT NULL,
+  idempotency_key VARCHAR(191) NOT NULL,
+  payload_json JSON NOT NULL,
+  created_at VARCHAR(64) NOT NULL,
+  PRIMARY KEY (event_id),
+  UNIQUE KEY uq_strategy_runtime_event_idempotency (deployment_id, event_scope, idempotency_key),
+  UNIQUE KEY uq_strategy_runtime_event_sequence (deployment_id, event_scope, sequence_no),
+  KEY idx_strategy_runtime_events_deployment (deployment_id, event_scope, sequence_no)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS strategy_event_offsets (
+  deployment_id VARCHAR(128) NOT NULL,
+  consumer_name VARCHAR(128) NOT NULL,
+  event_scope VARCHAR(64) NOT NULL,
+  last_event_id VARCHAR(128) NOT NULL,
+  last_sequence_no BIGINT UNSIGNED NOT NULL,
+  updated_at VARCHAR(64) NOT NULL,
+  PRIMARY KEY (deployment_id, consumer_name, event_scope)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS assistant_prompts (

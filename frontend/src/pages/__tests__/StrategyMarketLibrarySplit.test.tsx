@@ -96,10 +96,9 @@ vi.mock("@/lib/api", async () => {
         assumptions: ["OKX public OHLCV candles"],
         warnings: body.strategy_id === "crypto-trend-momentum" ? [] : ["proxy warning"],
       })),
-      listPaperDeployments: vi.fn().mockResolvedValue({ deployments: [] }),
-      createPaperDeployment: vi.fn().mockResolvedValue({ deployment: { deployment_id: "paper_1" } }),
-      startPaperDeployment: vi.fn().mockResolvedValue({ deployment: { deployment_id: "paper_1", status: "running" } }),
-      runPaperDeploymentTick: vi.fn().mockResolvedValue({ tick: { tick_id: "tick_1", outcome: "order_placed" } }),
+      listDeployments: vi.fn().mockResolvedValue({ deployments: [] }),
+      createDeployment: vi.fn().mockResolvedValue({ deployment: { deployment_id: "qadep_1", status: "DRAFT" } }),
+      readyDeployment: vi.fn().mockResolvedValue({ deployment: { deployment_id: "qadep_1", status: "READY" } }),
     },
   };
 });
@@ -130,8 +129,9 @@ describe("strategy market / library split", () => {
     vi.clearAllMocks();
     vi.mocked(api.listStrategies).mockReset().mockResolvedValue({ strategies: [] });
     vi.mocked(api.upsertStrategy).mockReset().mockResolvedValue({} as never);
-    vi.mocked(api.createPaperDeployment).mockReset().mockResolvedValue({ deployment: { deployment_id: "paper_1" } } as never);
-    vi.mocked(api.startPaperDeployment).mockReset().mockResolvedValue({ deployment: { deployment_id: "paper_1", status: "running" } } as never);
+    vi.mocked(api.listDeployments).mockReset().mockResolvedValue({ deployments: [] } as never);
+    vi.mocked(api.createDeployment).mockReset().mockResolvedValue({ deployment: { deployment_id: "qadep_1", status: "DRAFT" } } as never);
+    vi.mocked(api.readyDeployment).mockReset().mockResolvedValue({ deployment: { deployment_id: "qadep_1", status: "READY" } } as never);
     vi.mocked(api.runStrategyMarketBacktest).mockReset().mockImplementation((body: { strategy_id: string }) => Promise.resolve({
       strategy_id: body.strategy_id,
       status: "passed",
@@ -221,11 +221,14 @@ describe("strategy market / library split", () => {
 
     await user.click(screen.getByRole("button", { name: "跑模拟盘" }));
 
-    await waitFor(() => expect(api.createPaperDeployment).toHaveBeenCalledWith(expect.objectContaining({
+    await waitFor(() => expect(api.createDeployment).toHaveBeenCalledWith(expect.objectContaining({
       strategy_id: "quantclaw-ai-assistant",
-      limits: expect.objectContaining({ symbols: ["BTC_USDT"], order_type: "MARKET" }),
+      target: "SHADOW",
+      market: "CRYPTO",
+      symbols: ["BTC_USDT"],
+      risk_policy: expect.objectContaining({ order_type: "MARKET" }),
     })));
-    expect(api.startPaperDeployment).toHaveBeenCalledWith("paper_1");
+    expect(api.readyDeployment).toHaveBeenCalledWith("qadep_1");
   });
 
   it("backtests the professional grid strategy before deploying it to paper trading", async () => {
@@ -252,10 +255,11 @@ describe("strategy market / library split", () => {
       id: "professional-grid-trading",
       code: expect.stringContaining("class CryptoAdvancedGrid"),
     })));
-    expect(api.createPaperDeployment).toHaveBeenCalledWith(expect.objectContaining({
+    expect(api.createDeployment).toHaveBeenCalledWith(expect.objectContaining({
       strategy_id: "professional-grid-trading",
-      limits: expect.objectContaining({
-        symbols: ["BTC_USDT"],
+      target: "SHADOW",
+      symbols: ["BTC_USDT"],
+      risk_policy: expect.objectContaining({
         max_order_notional: 300,
         max_total_exposure: 2400,
         default_order_notional: 120,
@@ -304,10 +308,11 @@ describe("strategy market / library split", () => {
       id: "classic-turtle-trading",
       code: expect.stringContaining("\"max_drawdown_pause_pct\": 12"),
     }));
-    expect(api.createPaperDeployment).toHaveBeenCalledWith(expect.objectContaining({
+    expect(api.createDeployment).toHaveBeenCalledWith(expect.objectContaining({
       strategy_id: "classic-turtle-trading",
-      limits: expect.objectContaining({
-        symbols: ["BTC_USDT"],
+      target: "SHADOW",
+      symbols: ["BTC_USDT"],
+      risk_policy: expect.objectContaining({
         max_order_notional: 300,
         max_total_exposure: 2400,
         default_order_notional: 150,
@@ -595,7 +600,7 @@ describe("strategy market / library split", () => {
       interval: "4H",
       source: "okx",
     })));
-    expect(api.createPaperDeployment).not.toHaveBeenCalled();
+    expect(api.createDeployment).not.toHaveBeenCalled();
   });
 
   it("opens the owned strategy edit URL from the row action", async () => {
@@ -657,12 +662,15 @@ describe("strategy market / library split", () => {
 
     expect(await screen.findByText("模拟盘策略")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "模拟盘运行" }));
+    expect(await screen.findByText("部署策略")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "创建部署" }));
 
-    await waitFor(() => expect(api.createPaperDeployment).toHaveBeenCalledWith(expect.objectContaining({
+    await waitFor(() => expect(api.createDeployment).toHaveBeenCalledWith(expect.objectContaining({
       strategy_id: "owned-paper-1",
-      limits: expect.objectContaining({ symbols: ["BTC_USDT"], order_type: "MARKET" }),
+      target: "SHADOW",
+      symbols: ["BTC_USDT"],
+      risk_policy: expect.objectContaining({ order_type: "MARKET" }),
     })));
-    expect(api.startPaperDeployment).toHaveBeenCalledWith("paper_1");
-    expect(api.runPaperDeploymentTick).toHaveBeenCalledWith("paper_1");
+    expect(api.readyDeployment).toHaveBeenCalledWith("qadep_1");
   });
 });

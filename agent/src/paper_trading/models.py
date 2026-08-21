@@ -8,7 +8,7 @@ from typing import Any
 
 
 DEPLOYMENT_STATUSES = {"draft", "running", "paused", "archived"}
-EXECUTION_MODES = {"shadow", "broker_paper"}
+EXECUTION_MODES = {"shadow"}
 SIGNAL_ACTIONS = {"BUY", "SELL", "HOLD", "CLOSE"}
 RISK_DECISIONS = {"allowed", "rejected"}
 TICK_OUTCOMES = {"no_action", "failed", "rejected", "order_placed"}

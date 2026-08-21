@@ -3,7 +3,6 @@ import { Link, useNavigate } from "react-router-dom";
 import { BarChart3, BookmarkPlus, Code2, FileText, Loader2, WalletCards } from "lucide-react";
 import { toast } from "sonner";
 import { api, type RunData, type StrategyLibraryItem } from "@/lib/api";
-import { buildShadowImportDraft, saveShadowImportDraft } from "@/lib/shadowImport";
 import { AgentAvatar } from "./AgentAvatar";
 import { MetricsCard } from "./MetricsCard";
 import { MiniEquityChart } from "@/components/charts/MiniEquityChart";
@@ -116,25 +115,17 @@ export const RunCompleteCard = memo(function RunCompleteCard({ msg }: Props) {
     finally { setPineLoading(false); }
   }, [pineCode, msg.runId]);
 
-  const handleShadowImport = useCallback(async () => {
+  const handleOpenShadowDeployments = useCallback(async () => {
     if (!msg.runId && !msg.shadowId) return;
     setImportLoading(true);
     try {
-      const runData = msg.runId ? await api.getRun(msg.runId).catch(() => null) : null;
-      const draft = buildShadowImportDraft({
-        runId: msg.runId,
-        shadowId: msg.shadowId,
-        metrics: msg.metrics,
-        runData,
-      });
-      const key = saveShadowImportDraft(draft);
-      navigate(`/shadow-trading?import=${encodeURIComponent(key)}`);
+      navigate("/deployments?target=SHADOW");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : t("chat.shadowImportFailed"));
+      toast.error(error instanceof Error ? error.message : t("chat.shadowDeploymentOpenFailed"));
     } finally {
       setImportLoading(false);
     }
-  }, [msg.metrics, msg.runId, msg.shadowId, navigate, t]);
+  }, [msg.runId, msg.shadowId, navigate, t]);
 
   const handleLibraryImport = useCallback(async () => {
     if (!msg.runId || libraryImportLoading) return;
@@ -205,13 +196,13 @@ export const RunCompleteCard = memo(function RunCompleteCard({ msg }: Props) {
           {(msg.runId || msg.shadowId) && (
             <button
               type="button"
-              onClick={handleShadowImport}
+              onClick={handleOpenShadowDeployments}
               disabled={importLoading}
               className="text-sm text-cyan-600 dark:text-cyan-400 hover:underline inline-flex items-center gap-1.5 font-medium disabled:opacity-50"
-              title={t("chat.shadowImportTitle")}
+              title={t("chat.shadowDeploymentTitle")}
             >
               {importLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <WalletCards className="h-3.5 w-3.5" />}
-              {t("chat.importToShadow")}
+              {t("chat.openShadowDeployments")}
             </button>
           )}
           {msg.shadowId && (

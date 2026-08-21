@@ -34,11 +34,8 @@ const StrategyEdit = lazy(() =>
 const StrategyShare = lazy(() =>
   import("@/pages/StrategyShare").then((m) => ({ default: m.StrategyShare })),
 );
-const ShadowTrading = lazy(() =>
-  import("@/pages/ShadowTrading").then((m) => ({ default: m.ShadowTrading })),
-);
-const LiveTrading = lazy(() =>
-  import("@/pages/LiveTrading").then((m) => ({ default: m.LiveTrading })),
+const Deployments = lazy(() =>
+  import("@/pages/Deployments").then((m) => ({ default: m.Deployments })),
 );
 const Messages = lazy(() =>
   import("@/pages/Messages").then((m) => ({ default: m.Messages })),
@@ -118,8 +115,10 @@ export const router = createBrowserRouter([
           { path: "/strategies", element: wrap(StrategyLibrary) },
           { path: "/m/add-strategy", element: wrap(StrategyEdit) },
           { path: "/m/edit-strategy/:strategyId", element: wrap(StrategyEdit) },
-          { path: "/shadow-trading", element: wrap(ShadowTrading) },
-          { path: "/live-trading", element: wrap(LiveTrading) },
+          { path: "/deployments", element: wrap(Deployments) },
+          { path: "/deployments/:deploymentId", element: wrap(Deployments) },
+          { path: "/shadow-trading", element: <Navigate to="/deployments?target=SHADOW" replace /> },
+          { path: "/live-trading", element: <Navigate to="/deployments?target=LIVE" replace /> },
           { path: "/messages", element: wrap(Messages) },
           { path: "/personal-settings", element: wrap(PersonalSettings) },
           { path: "/runs/:runId", element: wrap(RunDetail) },

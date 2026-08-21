@@ -12,8 +12,10 @@ import ipaddress
 import json
 import logging
 import os
+import queue
 import re
 import signal
+import threading
 import time
 import csv
 import uuid
@@ -873,6 +875,7 @@ class StrategyVersionItem(BaseModel):
     tags: List[str] = Field(default_factory=list)
     code: str
     code_sha256: str
+    parameter_schema: Dict[str, Any] = Field(default_factory=dict)
     createdAt: str
 
 
@@ -950,46 +953,55 @@ class StrategyBacktestRequest(BaseModel):
     initial_capital: float = Field(100000.0, gt=0)
 
 
-class PaperDeploymentCreateRequest(BaseModel):
-    """Create a paper deployment from a saved strategy."""
+class QuantaxisRuntimeStatusResponse(BaseModel):
+    """QUANTAXIS runtime capability snapshot."""
+
+    available: bool
+    version: str = ""
+    quantaxis_path: str = ""
+    runtime_home: str = ""
+    modules: Dict[str, bool] = Field(default_factory=dict)
+    requires: Dict[str, str] = Field(default_factory=dict)
+    error: str = ""
+
+
+class QuantaxisDeploymentCreateRequest(BaseModel):
+    """Create a QUANTAXIS-native strategy deployment."""
 
     strategy_id: str = Field(..., min_length=1, max_length=128)
-    limits: Dict[str, Any] = Field(default_factory=dict)
-    execution_mode: str = Field("shadow", description="shadow or broker_paper")
-    connector_profile_id: str = Field("", max_length=128)
+    target: str = Field("SHADOW", pattern="^(SHADOW|LIVE|shadow|live)$")
+    version_no: Optional[int] = Field(None, ge=1)
+    market: str = Field("CRYPTO", min_length=1, max_length=64)
+    symbols: List[str] = Field(default_factory=list)
+    timeframe: str = Field("1h", min_length=1, max_length=32)
+    parameters: Dict[str, Any] = Field(default_factory=dict)
+    risk_policy: Dict[str, Any] = Field(default_factory=dict)
+    broker_binding_id: Optional[int] = None
 
 
-class PaperDeploymentActionResponse(BaseModel):
-    """Paper deployment action response."""
+class QuantaxisDeploymentActionResponse(BaseModel):
+    """QUANTAXIS deployment action response."""
 
     deployment: Dict[str, Any]
 
 
-class PaperDeploymentListResponse(BaseModel):
-    """Paper deployment list response."""
+class QuantaxisDeploymentListResponse(BaseModel):
+    """QUANTAXIS deployment list response."""
 
     deployments: List[Dict[str, Any]]
 
 
-class PaperDeploymentStatusResponse(BaseModel):
-    """Paper deployment status response."""
+class QuantaxisDeploymentPromoteRequest(BaseModel):
+    """Promote a shadow deployment into a new live deployment."""
 
-    deployment: Dict[str, Any]
-    latest_tick: Optional[Dict[str, Any]] = None
-    recent_ticks: List[Dict[str, Any]] = Field(default_factory=list)
-    recent_signals: List[Dict[str, Any]] = Field(default_factory=list)
-    recent_decisions: List[Dict[str, Any]] = Field(default_factory=list)
-    recent_orders: List[Dict[str, Any]] = Field(default_factory=list)
-    summary: Dict[str, Any] = Field(default_factory=dict)
+    broker_binding_id: int = Field(..., ge=1)
+    risk_policy: Dict[str, Any] = Field(default_factory=dict)
 
 
-class PaperTickResponse(BaseModel):
-    """Paper deployment manual tick response."""
+class QuantaxisDeploymentRecoverRequest(BaseModel):
+    """Recover a live deployment after broker reconciliation."""
 
-    tick: Dict[str, Any]
-    signal: Optional[Dict[str, Any]] = None
-    decision: Optional[Dict[str, Any]] = None
-    order_link: Optional[Dict[str, Any]] = None
+    broker: str = Field(..., min_length=1, max_length=64)
 
 
 # ---- Live trading channel: consent commit + kill switch ----
@@ -1323,12 +1335,12 @@ async def _run_startup_preflight() -> None:
     from src.preflight import run_preflight
 
     run_preflight(console)
-    from src.shadow_trading import shadow_trading_service
-    from src.shadow_market_feed import ShadowMarketFeed
-
-    global _shadow_market_feed
-    _shadow_market_feed = ShadowMarketFeed(shadow_trading_service)
-    _shadow_market_feed.start()
+    try:
+        result = _get_quantaxis_deployment_service().recover_startup(worker_id=f"api:{os.getpid()}")
+        if result.get("checked"):
+            logger.info("QUANTAXIS startup recovery completed: %s", result)
+    except Exception:
+        logger.warning("QUANTAXIS startup recovery skipped", exc_info=True)
 
 
 @app.on_event("shutdown")
@@ -3803,70 +3815,41 @@ def _shadow_http_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=404 if not_found else 400, detail=message)
 
 
+def _legacy_trading_state_removed() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="legacy local trading state has been removed; use /api/deployments and /api/accounts",
+    )
+
+
 @app.get("/shadow/account", response_model=ShadowAccountResponse)
 async def get_shadow_account(ctx: AuthContext = Depends(require_auth)):
-    """Return the caller's isolated virtual trading account."""
-    from src.shadow_trading import ShadowTradingError, shadow_trading_service
-
-    try:
-        return await shadow_trading_service.account_snapshot(_shadow_user_id(ctx))
-    except ShadowTradingError as exc:
-        raise _shadow_http_error(exc) from exc
+    """Legacy in-memory shadow account endpoint removed."""
+    raise _legacy_trading_state_removed()
 
 
 @app.get("/shadow/orders", response_model=List[ShadowOrderResponse])
 async def list_shadow_orders(ctx: AuthContext = Depends(require_auth)):
-    """List virtual orders for the caller."""
-    from src.shadow_trading import shadow_trading_service
-
-    return [order.to_dict() for order in await shadow_trading_service.list_orders(_shadow_user_id(ctx))]
+    """Legacy in-memory shadow orders endpoint removed."""
+    raise _legacy_trading_state_removed()
 
 
 @app.post("/shadow/orders", response_model=ShadowOrderResponse)
 async def place_shadow_order(payload: ShadowPlaceOrderRequest, ctx: AuthContext = Depends(require_auth)):
-    """Place a virtual market or limit order against the shadow ledger."""
-    from src.shadow_trading import AccountType, ShadowTradingError, shadow_trading_service
-
-    try:
-        order = await shadow_trading_service.place_order(
-            user_id=_shadow_user_id(ctx),
-            account_type=AccountType.VIRTUAL,
-            symbol=payload.symbol,
-            side=_parse_shadow_side(payload.side),
-            order_type=_parse_shadow_order_type(payload.order_type),
-            quantity=payload.quantity,
-            price=payload.price,
-            time_in_force=_parse_shadow_time_in_force(payload.time_in_force),
-            trigger_price=payload.trigger_price,
-            trigger_condition=_parse_shadow_trigger_condition(payload.trigger_condition),
-            trigger_order_type=_parse_shadow_order_type(payload.trigger_order_type),
-            trigger_order_price=payload.trigger_order_price,
-        )
-        return order.to_dict()
-    except ShadowTradingError as exc:
-        raise _shadow_http_error(exc) from exc
+    """Legacy in-memory shadow order placement endpoint removed."""
+    raise _legacy_trading_state_removed()
 
 
 @app.post("/shadow/orders/{order_id}/cancel", response_model=ShadowOrderResponse)
 async def cancel_shadow_order(order_id: str, ctx: AuthContext = Depends(require_auth)):
-    """Cancel a pending virtual limit order and release frozen funds."""
-    from src.shadow_trading import ShadowTradingError, shadow_trading_service
-
-    try:
-        order = await shadow_trading_service.cancel_order(_shadow_user_id(ctx), order_id)
-        return order.to_dict()
-    except ShadowTradingError as exc:
-        raise _shadow_http_error(exc) from exc
+    """Legacy in-memory shadow order cancellation endpoint removed."""
+    raise _legacy_trading_state_removed()
 
 
 @app.post("/shadow/reset", response_model=ShadowAccountResponse)
 async def reset_shadow_account(ctx: AuthContext = Depends(require_auth)):
-    """Reset the caller's virtual account to its initial ledger state."""
-    from src.shadow_trading import shadow_trading_service
-
-    user_id = _shadow_user_id(ctx)
-    await shadow_trading_service.reset_user(user_id)
-    return await shadow_trading_service.account_snapshot(user_id)
+    """Legacy in-memory shadow account reset endpoint removed."""
+    raise _legacy_trading_state_removed()
 
 
 @app.get(
@@ -4116,8 +4099,8 @@ def _get_existing_session_or_404(session_id: str):
 # ============================================================================
 
 _strategy_store = None
-_paper_store = None
-_paper_service = None
+_quantaxis_deployment_store = None
+_quantaxis_deployment_service = None
 
 
 def _get_strategy_store():
@@ -4138,41 +4121,45 @@ def _get_strategy_store():
     return _strategy_store
 
 
-def _paper_user_id(ctx: AuthContext) -> int:
-    """Resolve a stable owner id for paper deployments."""
+def _deployment_user_id(ctx: AuthContext) -> int:
+    """Resolve a stable owner id for strategy deployments."""
     return int(ctx.user_id) if ctx.user_id is not None else 0
 
 
-def _get_paper_store():
-    """Return the shared paper deployment store."""
-    global _paper_store
-    if _paper_store is None:
-        from src.paper_trading import SQLitePaperTradingStore
+def _get_quantaxis_deployment_store():
+    """Return the shared QUANTAXIS deployment metadata store."""
+    from src.persistence import mysql_configured
 
-        _paper_store = SQLitePaperTradingStore()
-    return _paper_store
+    if not mysql_configured():
+        raise HTTPException(status_code=501, detail="QUANTAXIS deployment metadata requires MySQL")
+    global _quantaxis_deployment_store
+    if _quantaxis_deployment_store is None:
+        from src.quantaxis_native import MySQLQuantaxisDeploymentStore
+
+        _quantaxis_deployment_store = MySQLQuantaxisDeploymentStore()
+    return _quantaxis_deployment_store
 
 
-def _get_paper_service():
-    """Return the shared paper deployment service."""
-    global _paper_service
-    if _paper_service is None:
-        from src.paper_trading import PaperTradingService
-        from src.shadow_trading import shadow_trading_service
+def _get_quantaxis_deployment_service():
+    """Return the shared QUANTAXIS-native deployment service."""
+    global _quantaxis_deployment_service
+    if _quantaxis_deployment_service is None:
+        from src.quantaxis_native import QuantaxisDeploymentService
 
-        _paper_service = PaperTradingService(
-            store=_get_paper_store(),
+        _quantaxis_deployment_service = QuantaxisDeploymentService(
+            store=_get_quantaxis_deployment_store(),
             strategy_store=_get_strategy_store(),
-            shadow_service=shadow_trading_service,
-            shadow_user_resolver=lambda user_id: "operator" if int(user_id) == 0 else f"user:{int(user_id)}",
         )
-    return _paper_service
+    return _quantaxis_deployment_service
 
 
-def _paper_http_error(exc: Exception) -> HTTPException:
-    message = str(exc) or "paper deployment request failed"
-    status_code = 404 if "not found" in message.lower() else 400
-    return HTTPException(status_code=status_code, detail=message)
+def _quantaxis_http_error(exc: Exception) -> HTTPException:
+    message = str(exc) or "QUANTAXIS deployment request failed"
+    if "not found" in message.lower():
+        return HTTPException(status_code=404, detail=message)
+    if "requires MySQL" in message:
+        return HTTPException(status_code=501, detail=message)
+    return HTTPException(status_code=400, detail=message)
 
 
 _MARKET_BACKTEST_INTERVALS = {"1m", "5m", "15m", "30m", "1H", "4H", "1D"}
@@ -4666,7 +4653,7 @@ def _strategy_signal_engine_code(record: Any, symbol: str) -> str:
         package = None
 
     if isinstance(package, dict):
-        signal = package.get("paper_signal") or package.get("signal") or {}
+        signal = package.get("shadow_signal") or package.get("paper_signal") or package.get("signal") or {}
         action = str(signal.get("action") or signal.get("side") or "HOLD").upper() if isinstance(signal, dict) else "HOLD"
         target = signal.get("target_weight") if isinstance(signal, dict) else None
         try:
@@ -4881,6 +4868,18 @@ async def run_strategy_backtest(
     """Run a real, server-side backtest for a saved personal strategy."""
     record = _strategy_or_404(strategy_id, user_id=ctx.user_id)
 
+    if record.id in _MARKET_BACKTEST_IDS:
+        return await _run_marketplace_backtest(
+            StrategyMarketBacktestRequest(
+                strategy_id=record.id,
+                start_date=payload.start_date,
+                end_date=payload.end_date,
+                symbol=payload.symbol,
+                interval=payload.interval,
+            ),
+            ctx,
+        )
+
     from backtest.loaders.registry import VALID_SOURCES
 
     symbol = _normalize_backtest_symbol(payload.symbol)
@@ -5027,89 +5026,307 @@ async def delete_strategy(strategy_id: str, ctx: AuthContext = Depends(require_a
     return {"status": "deleted", "id": strategy_id}
 
 
-@app.post("/paper/deployments", response_model=PaperDeploymentActionResponse)
-async def create_paper_deployment(payload: PaperDeploymentCreateRequest, ctx: AuthContext = Depends(require_auth)):
-    """Create a draft paper deployment from a saved strategy."""
-    from src.paper_trading import PaperTradingError
+@app.get("/api/quantaxis/runtime", response_model=QuantaxisRuntimeStatusResponse)
+async def get_quantaxis_runtime_status(_ctx: AuthContext = Depends(require_auth)):
+    """Return the QUANTAXIS-native runtime capability snapshot."""
+    return _get_quantaxis_deployment_service().runtime_status()
 
-    svc = _get_paper_service()
+
+@app.post("/api/deployments", response_model=QuantaxisDeploymentActionResponse)
+async def create_quantaxis_deployment(
+    payload: QuantaxisDeploymentCreateRequest,
+    ctx: AuthContext = Depends(require_auth),
+):
+    """Create a QUANTAXIS-native strategy deployment from an immutable strategy version."""
+    from src.quantaxis_native import QuantaxisTradingError
+
     try:
-        deployment = svc.create_deployment(
-            user_id=_paper_user_id(ctx),
+        deployment = _get_quantaxis_deployment_service().create_deployment(
+            user_id=_deployment_user_id(ctx),
             strategy_id=payload.strategy_id,
-            limits_payload=payload.limits,
-            execution_mode=payload.execution_mode,
-            connector_profile_id=payload.connector_profile_id,
+            target=payload.target,
+            version_no=payload.version_no,
+            market=payload.market,
+            symbols=payload.symbols,
+            timeframe=payload.timeframe,
+            parameters=payload.parameters,
+            risk_policy=payload.risk_policy,
+            broker_binding_id=payload.broker_binding_id,
         )
         return {"deployment": deployment.to_dict()}
-    except (PaperTradingError, ValueError) as exc:
-        raise _paper_http_error(exc) from exc
+    except (QuantaxisTradingError, ValueError) as exc:
+        raise _quantaxis_http_error(exc) from exc
 
 
-@app.get("/paper/deployments", response_model=PaperDeploymentListResponse)
-async def list_paper_deployments(ctx: AuthContext = Depends(require_auth)):
-    """List the caller's paper deployments."""
-    svc = _get_paper_service()
-    return {"deployments": [item.to_dict() for item in svc.list_deployments(user_id=_paper_user_id(ctx))]}
+@app.get("/api/deployments", response_model=QuantaxisDeploymentListResponse)
+async def list_quantaxis_deployments(ctx: AuthContext = Depends(require_auth)):
+    """List the caller's QUANTAXIS-native deployments."""
+    svc = _get_quantaxis_deployment_service()
+    return {"deployments": [item.to_dict() for item in svc.list_deployments(user_id=_deployment_user_id(ctx))]}
 
 
-@app.get("/paper/deployments/{deployment_id}", response_model=PaperDeploymentStatusResponse)
-async def get_paper_deployment_status(deployment_id: str, ctx: AuthContext = Depends(require_auth)):
-    """Return deployment state and recent paper activity."""
-    from src.paper_trading import PaperTradingError
+@app.get("/api/deployments/{deployment_id}", response_model=QuantaxisDeploymentActionResponse)
+async def get_quantaxis_deployment(deployment_id: str, ctx: AuthContext = Depends(require_auth)):
+    """Return one QUANTAXIS-native deployment."""
+    from src.quantaxis_native import QuantaxisTradingError
 
-    svc = _get_paper_service()
     try:
-        return svc.status(deployment_id, user_id=_paper_user_id(ctx))
-    except PaperTradingError as exc:
-        raise _paper_http_error(exc) from exc
-
-
-async def _paper_action(deployment_id: str, action: str, ctx: AuthContext) -> dict[str, Any]:
-    from src.paper_trading import PaperTradingError
-
-    svc = _get_paper_service()
-    try:
-        deployment = svc.set_status(deployment_id, user_id=_paper_user_id(ctx), action=action)
+        deployment = _get_quantaxis_deployment_service().get_deployment(deployment_id, user_id=_deployment_user_id(ctx))
         return {"deployment": deployment.to_dict()}
-    except PaperTradingError as exc:
-        raise _paper_http_error(exc) from exc
+    except QuantaxisTradingError as exc:
+        raise _quantaxis_http_error(exc) from exc
 
 
-@app.post("/paper/deployments/{deployment_id}/start", response_model=PaperDeploymentActionResponse)
-async def start_paper_deployment(deployment_id: str, ctx: AuthContext = Depends(require_auth)):
-    """Start a draft or paused paper deployment."""
-    return await _paper_action(deployment_id, "start", ctx)
+async def _quantaxis_deployment_action(deployment_id: str, action: str, ctx: AuthContext) -> dict[str, Any]:
+    from src.quantaxis_native import QuantaxisTradingError
 
-
-@app.post("/paper/deployments/{deployment_id}/pause", response_model=PaperDeploymentActionResponse)
-async def pause_paper_deployment(deployment_id: str, ctx: AuthContext = Depends(require_auth)):
-    """Pause a running paper deployment."""
-    return await _paper_action(deployment_id, "pause", ctx)
-
-
-@app.post("/paper/deployments/{deployment_id}/resume", response_model=PaperDeploymentActionResponse)
-async def resume_paper_deployment(deployment_id: str, ctx: AuthContext = Depends(require_auth)):
-    """Resume a paused paper deployment."""
-    return await _paper_action(deployment_id, "resume", ctx)
-
-
-@app.post("/paper/deployments/{deployment_id}/archive", response_model=PaperDeploymentActionResponse)
-async def archive_paper_deployment(deployment_id: str, ctx: AuthContext = Depends(require_auth)):
-    """Archive a paper deployment."""
-    return await _paper_action(deployment_id, "archive", ctx)
-
-
-@app.post("/paper/deployments/{deployment_id}/tick", response_model=PaperTickResponse)
-async def run_paper_deployment_tick(deployment_id: str, ctx: AuthContext = Depends(require_auth)):
-    """Run one manual paper deployment tick."""
-    from src.paper_trading import PaperTradingError
-
-    svc = _get_paper_service()
     try:
-        return await svc.run_tick(deployment_id, user_id=_paper_user_id(ctx))
-    except PaperTradingError as exc:
-        raise _paper_http_error(exc) from exc
+        deployment = _get_quantaxis_deployment_service().set_status(
+            deployment_id,
+            user_id=_deployment_user_id(ctx),
+            action=action,
+        )
+        return {"deployment": deployment.to_dict()}
+    except QuantaxisTradingError as exc:
+        raise _quantaxis_http_error(exc) from exc
+
+
+@app.post("/api/deployments/{deployment_id}/ready", response_model=QuantaxisDeploymentActionResponse)
+async def ready_quantaxis_deployment(deployment_id: str, ctx: AuthContext = Depends(require_auth)):
+    """Mark a draft deployment ready for QAEngine scheduling."""
+    return await _quantaxis_deployment_action(deployment_id, "ready", ctx)
+
+
+@app.post("/api/deployments/{deployment_id}/start", response_model=QuantaxisDeploymentActionResponse)
+async def start_quantaxis_deployment(deployment_id: str, ctx: AuthContext = Depends(require_auth)):
+    """Start a QUANTAXIS-native deployment."""
+    return await _quantaxis_deployment_action(deployment_id, "start", ctx)
+
+
+@app.post("/api/deployments/{deployment_id}/pause", response_model=QuantaxisDeploymentActionResponse)
+async def pause_quantaxis_deployment(deployment_id: str, ctx: AuthContext = Depends(require_auth)):
+    """Pause a QUANTAXIS-native deployment."""
+    return await _quantaxis_deployment_action(deployment_id, "pause", ctx)
+
+
+@app.post("/api/deployments/{deployment_id}/stop", response_model=QuantaxisDeploymentActionResponse)
+async def stop_quantaxis_deployment(deployment_id: str, ctx: AuthContext = Depends(require_auth)):
+    """Stop a QUANTAXIS-native deployment."""
+    return await _quantaxis_deployment_action(deployment_id, "stop", ctx)
+
+
+@app.post("/api/deployments/{deployment_id}/archive", response_model=QuantaxisDeploymentActionResponse)
+async def archive_quantaxis_deployment(deployment_id: str, ctx: AuthContext = Depends(require_auth)):
+    """Archive a QUANTAXIS-native deployment."""
+    return await _quantaxis_deployment_action(deployment_id, "archive", ctx)
+
+
+@app.post("/api/deployments/{deployment_id}/promote", response_model=QuantaxisDeploymentActionResponse)
+async def promote_quantaxis_deployment(
+    deployment_id: str,
+    payload: QuantaxisDeploymentPromoteRequest,
+    ctx: AuthContext = Depends(require_auth),
+):
+    """Create a new live deployment from a shadow deployment."""
+    from src.quantaxis_native import QuantaxisTradingError
+
+    try:
+        deployment = _get_quantaxis_deployment_service().promote_to_live(
+            deployment_id,
+            user_id=_deployment_user_id(ctx),
+            broker_binding_id=payload.broker_binding_id,
+            risk_policy=payload.risk_policy,
+        )
+        return {"deployment": deployment.to_dict()}
+    except QuantaxisTradingError as exc:
+        raise _quantaxis_http_error(exc) from exc
+
+
+@app.post("/api/deployments/{deployment_id}/recover", response_model=QuantaxisDeploymentActionResponse)
+async def recover_quantaxis_live_deployment(
+    deployment_id: str,
+    payload: QuantaxisDeploymentRecoverRequest,
+    ctx: AuthContext = Depends(require_auth),
+):
+    """Recover a live deployment after broker reconciliation proves safe."""
+    from src.quantaxis_native import QuantaxisTradingError
+
+    try:
+        deployment = _get_quantaxis_deployment_service().recover_live_deployment(
+            deployment_id,
+            user_id=_deployment_user_id(ctx),
+            broker=payload.broker,
+        )
+        return {"deployment": deployment.to_dict()}
+    except QuantaxisTradingError as exc:
+        raise _quantaxis_http_error(exc) from exc
+
+
+@app.get("/api/accounts/{account_cookie}/snapshot")
+async def get_quantaxis_account_snapshot(account_cookie: str, ctx: AuthContext = Depends(require_auth)):
+    """Return a QIFI account snapshot for a deployment account."""
+    from src.quantaxis_native import QuantaxisTradingError
+
+    try:
+        return _get_quantaxis_deployment_service().account_snapshot(account_cookie, user_id=_deployment_user_id(ctx))
+    except QuantaxisTradingError as exc:
+        raise _quantaxis_http_error(exc) from exc
+
+
+@app.get("/api/accounts/{account_cookie}/orders")
+async def list_quantaxis_account_orders(account_cookie: str, ctx: AuthContext = Depends(require_auth)):
+    """Return QIFI-derived account orders."""
+    from src.quantaxis_native import QuantaxisTradingError
+
+    try:
+        return _get_quantaxis_deployment_service().account_orders(account_cookie, user_id=_deployment_user_id(ctx))
+    except QuantaxisTradingError as exc:
+        raise _quantaxis_http_error(exc) from exc
+
+
+@app.get("/api/accounts/{account_cookie}/trades")
+async def list_quantaxis_account_trades(account_cookie: str, ctx: AuthContext = Depends(require_auth)):
+    """Return QIFI-derived account trades."""
+    from src.quantaxis_native import QuantaxisTradingError
+
+    try:
+        return _get_quantaxis_deployment_service().account_trades(account_cookie, user_id=_deployment_user_id(ctx))
+    except QuantaxisTradingError as exc:
+        raise _quantaxis_http_error(exc) from exc
+
+
+@app.get("/api/deployments/{deployment_id}/signals")
+async def list_quantaxis_deployment_signals(deployment_id: str, ctx: AuthContext = Depends(require_auth)):
+    """Return QAStrategy signal projections for a deployment."""
+    from src.quantaxis_native import QuantaxisTradingError
+
+    try:
+        return _get_quantaxis_deployment_service().deployment_signals(deployment_id, user_id=_deployment_user_id(ctx))
+    except QuantaxisTradingError as exc:
+        raise _quantaxis_http_error(exc) from exc
+
+
+@app.get("/api/deployments/{deployment_id}/events")
+async def list_quantaxis_deployment_events(deployment_id: str, ctx: AuthContext = Depends(require_auth)):
+    """Return QAPubSub runtime events for a deployment."""
+    from src.quantaxis_native import QuantaxisTradingError
+
+    try:
+        return _get_quantaxis_deployment_service().deployment_events(deployment_id, user_id=_deployment_user_id(ctx))
+    except QuantaxisTradingError as exc:
+        raise _quantaxis_http_error(exc) from exc
+
+
+def _sse_frame(data: dict[str, Any], *, event_id: str = "", event_type: str = "message") -> str:
+    lines: list[str] = []
+    if event_id:
+        lines.append(f"id: {event_id}")
+    if event_type:
+        lines.append(f"event: {event_type}")
+    payload = json.dumps(data, ensure_ascii=False, sort_keys=True)
+    lines.extend(f"data: {line}" for line in payload.splitlines() or ["{}"])
+    lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+@app.get("/api/deployments/{deployment_id}/events/stream")
+async def stream_quantaxis_deployment_events(
+    deployment_id: str,
+    request: Request,
+    after_sequence_no: int = Query(0, ge=0),
+    ctx: AuthContext = Depends(require_event_stream_auth),
+):
+    """SSE stream for deployment runtime events with sequence-based replay."""
+    from src.quantaxis_native import QuantaxisTradingError
+
+    _validate_path_param(deployment_id, "deployment_id")
+    user_id = _deployment_user_id(ctx)
+    svc = _get_quantaxis_deployment_service()
+    try:
+        svc.get_deployment(deployment_id, user_id=user_id)
+    except QuantaxisTradingError as exc:
+        raise _quantaxis_http_error(exc) from exc
+
+    async def event_generator():
+        deployment_sequence = int(after_sequence_no)
+        last_heartbeat = time.monotonic()
+        seen_event_ids: set[str] = set()
+        stop_event = threading.Event()
+        pubsub_events = None
+        try:
+            pubsub_events = svc.subscribe_pubsub_events(deployment_id, user_id=user_id, stop_event=stop_event)
+        except QuantaxisTradingError as exc:
+            yield _sse_frame(
+                {"error": str(exc), "deployment_id": deployment_id},
+                event_id="",
+                event_type="deployment.gateway_unavailable",
+            )
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    events = svc.runtime_events_after(
+                        deployment_id,
+                        user_id=user_id,
+                        after_sequence_no=deployment_sequence,
+                        limit=100,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    yield _sse_frame({"error": str(exc), "deployment_id": deployment_id}, event_id="", event_type="deployment.error")
+                    break
+                if pubsub_events is not None:
+                    while True:
+                        try:
+                            pubsub_event = pubsub_events.get_nowait()
+                        except queue.Empty:
+                            break
+                        try:
+                            events.append(svc.ingest_pubsub_event(deployment_id, user_id=user_id, event=pubsub_event))
+                        except Exception as exc:  # noqa: BLE001
+                            events.append({
+                                "event_id": "",
+                                "deployment_id": deployment_id,
+                                "event_scope": "deployment",
+                                "event_type": "deployment.gateway_error",
+                                "sequence_no": deployment_sequence,
+                                "payload": {"error": str(exc)},
+                            })
+                for event in events:
+                    event_id = str(event.get("event_id") or "")
+                    if event_id and event_id in seen_event_ids:
+                        continue
+                    if event_id:
+                        seen_event_ids.add(event_id)
+                    event_sequence = int(event.get("sequence_no") or 0)
+                    if str(event.get("event_scope") or "deployment") == "deployment":
+                        deployment_sequence = max(deployment_sequence, event_sequence)
+                    yield _sse_frame(event, event_id=event_id, event_type="deployment.event")
+                    svc.save_event_offset(
+                        deployment_id,
+                        user_id=user_id,
+                        consumer_name=f"sse:{ctx.user_id}",
+                        event_scope=str(event.get("event_scope") or "deployment"),
+                        last_event_id=event_id,
+                        last_sequence_no=event_sequence,
+                    )
+                now = time.monotonic()
+                if now - last_heartbeat >= 15:
+                    yield ": heartbeat\n\n"
+                    last_heartbeat = now
+                await asyncio.sleep(2)
+        finally:
+            stop_event.set()
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/sessions", response_model=SessionResponse, status_code=status.HTTP_201_CREATED)
@@ -6731,122 +6948,6 @@ async def _drive_runner(runner: Any) -> None:
         await asyncio.get_running_loop().run_in_executor(None, lambda: result)
 
 
-def _live_deployments_path() -> Path:
-    from src.live.paths import live_root
-
-    return live_root() / "deployments.json"
-
-
-def _load_live_deployments() -> list[dict[str, Any]]:
-    path = _live_deployments_path()
-    if not path.exists():
-        return []
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        logger.warning("failed to read live deployments store", exc_info=True)
-        return []
-    items = raw.get("deployments") if isinstance(raw, dict) else raw
-    if not isinstance(items, list):
-        return []
-    return [item for item in items if isinstance(item, dict)]
-
-
-def _save_live_deployments(deployments: list[dict[str, Any]]) -> None:
-    path = _live_deployments_path()
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    payload = json.dumps({"deployments": deployments}, ensure_ascii=False, indent=2)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    tmp.write_text(payload, encoding="utf-8")
-    os.replace(tmp, path)
-
-
-def _find_live_deployment(deployment_id: str, *, user_id: int | None = None) -> dict[str, Any] | None:
-    for item in _load_live_deployments():
-        if str(item.get("deployment_id")) != deployment_id:
-            continue
-        if user_id is not None and int(item.get("user_id", 0)) != int(user_id):
-            continue
-        return item
-    return None
-
-
-def _replace_live_deployment(updated: dict[str, Any]) -> dict[str, Any]:
-    deployments = _load_live_deployments()
-    found = False
-    for index, item in enumerate(deployments):
-        if str(item.get("deployment_id")) == str(updated.get("deployment_id")):
-            deployments[index] = updated
-            found = True
-            break
-    if not found:
-        deployments.append(updated)
-    _save_live_deployments(deployments)
-    return updated
-
-
-def _live_strategy_snapshot(record: Any) -> dict[str, Any]:
-    return {
-        "strategy_id": str(record.id),
-        "name": str(record.name),
-        "description": str(getattr(record, "description", "") or getattr(record, "strategyDescription", "") or ""),
-        "language": str(getattr(record, "language", "python") or "python"),
-        "category": str(getattr(record, "category", "") or ""),
-        "tags": list(getattr(record, "tags", []) or []),
-        "code": str(getattr(record, "code", "") or ""),
-        "source_updated_at": str(getattr(record, "updatedAt", "") or ""),
-        "version": f"{record.id}:{getattr(record, 'updatedAt', '')}",
-    }
-
-
-def _live_job_for_deployment(deployment: dict[str, Any]):
-    from src.live.runtime.scheduler import Job
-
-    interval_ms = int(deployment.get("interval_seconds") or 60) * 1000
-    return Job(
-        id=f"live-deploy-{deployment['deployment_id']}",
-        next_run_at=int(time.time() * 1000) + interval_ms,
-        schedule=f"interval:{interval_ms}",
-        payload={
-            "broker": deployment["broker"],
-            "deployment_id": deployment["deployment_id"],
-            "trigger": "hosted_strategy",
-            "strategy": deployment.get("strategy_snapshot") or {},
-            "limits": deployment.get("limits") or {},
-        },
-    )
-
-
-def _upsert_live_job(job: Any) -> None:
-    from src.live.runtime.jobstore import JobStore
-
-    store = JobStore()
-    try:
-        jobs = store.load()
-    except Exception:
-        logger.warning("live job store unavailable; replacing with hosted job set", exc_info=True)
-        jobs = []
-    jobs = [item for item in jobs if item.id != job.id]
-    jobs.append(job)
-    store.save(jobs)
-
-
-def _remove_live_job(job_id: str) -> bool:
-    from src.live.runtime.jobstore import JobStore
-
-    store = JobStore()
-    try:
-        jobs = store.load()
-    except Exception:
-        logger.warning("live job store unavailable; cannot remove %s", job_id, exc_info=True)
-        return False
-    kept = [item for item in jobs if item.id != job_id]
-    if len(kept) == len(jobs):
-        return False
-    store.save(kept)
-    return True
-
-
 async def _ensure_live_runner_started(broker: str, *, session_id: str | None = None) -> dict[str, Any]:
     from src.live.halt import halt_flag_set
     from src.trading.service import broker_supports_live_runner
@@ -6892,85 +6993,26 @@ async def _ensure_live_runner_started(broker: str, *, session_id: str | None = N
 
 @app.post("/live/deployments", response_model=LiveDeploymentActionResponse, dependencies=[Depends(require_operator_auth)])
 async def create_live_deployment(payload: LiveDeploymentCreateRequest, ctx: AuthContext = Depends(require_auth)):
-    """Create a hosted live strategy deployment without starting it."""
-    broker = payload.broker.strip().lower()
-    if not broker:
-        raise HTTPException(status_code=400, detail="broker must not be blank")
-    user_id = _paper_user_id(ctx)
-    record = _strategy_or_404(payload.strategy_id, user_id=user_id)
-    if not str(getattr(record, "code", "") or "").strip():
-        raise HTTPException(status_code=400, detail="strategy code is required for live deployment")
-    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-    deployment = {
-        "deployment_id": f"live_{uuid.uuid4().hex[:12]}",
-        "user_id": user_id,
-        "status": "draft",
-        "broker": broker,
-        "strategy_id": str(record.id),
-        "strategy_snapshot": _live_strategy_snapshot(record),
-        "interval_seconds": int(payload.interval_seconds),
-        "limits": dict(payload.limits or {}),
-        "session_id": payload.session_id or "",
-        "created_at": now,
-        "updated_at": now,
-        "started_at": None,
-        "paused_at": None,
-        "archived_at": None,
-    }
-    _replace_live_deployment(deployment)
-    return {"deployment": deployment, "runner": {}}
+    """Legacy JSON-backed hosted live deployment endpoint removed."""
+    raise _legacy_trading_state_removed()
 
 
 @app.get("/live/deployments", response_model=LiveDeploymentListResponse, dependencies=[Depends(require_operator_auth)])
 async def list_live_deployments(ctx: AuthContext = Depends(require_auth)):
-    """List hosted live strategy deployments for the caller."""
-    user_id = _paper_user_id(ctx)
-    return {
-        "deployments": [
-            item for item in _load_live_deployments() if int(item.get("user_id", 0)) == user_id
-        ]
-    }
+    """Legacy JSON-backed hosted live deployment endpoint removed."""
+    raise _legacy_trading_state_removed()
 
 
 @app.post("/live/deployments/{deployment_id}/start", response_model=LiveDeploymentActionResponse, dependencies=[Depends(require_operator_auth)])
 async def start_live_deployment(deployment_id: str, ctx: AuthContext = Depends(require_auth)):
-    """Start a hosted strategy by registering its durable runner job."""
-    deployment = _find_live_deployment(deployment_id, user_id=_paper_user_id(ctx))
-    if deployment is None:
-        raise HTTPException(status_code=404, detail="live deployment not found")
-    if deployment.get("status") == "archived":
-        raise HTTPException(status_code=400, detail="archived live deployments cannot be started")
-
-    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-    deployment = {**deployment, "status": "running", "updated_at": now, "started_at": deployment.get("started_at") or now, "paused_at": None}
-    runner_state = await _ensure_live_runner_started(str(deployment["broker"]), session_id=deployment.get("session_id") or None)
-    job = _live_job_for_deployment(deployment)
-    _upsert_live_job(job)
-    runner_obj = _runner_objects.get(str(deployment["broker"]))
-    if runner_obj is not None and hasattr(runner_obj, "add_job"):
-        runner_obj.add_job(job)
-    _replace_live_deployment(deployment)
-    return {"deployment": deployment, "runner": runner_state}
+    """Legacy JSON-backed hosted live deployment endpoint removed."""
+    raise _legacy_trading_state_removed()
 
 
 @app.post("/live/deployments/{deployment_id}/pause", response_model=LiveDeploymentActionResponse, dependencies=[Depends(require_operator_auth)])
 async def pause_live_deployment(deployment_id: str, ctx: AuthContext = Depends(require_auth)):
-    """Pause a hosted strategy by removing its durable runner job."""
-    deployment = _find_live_deployment(deployment_id, user_id=_paper_user_id(ctx))
-    if deployment is None:
-        raise HTTPException(status_code=404, detail="live deployment not found")
-    if deployment.get("status") != "running":
-        raise HTTPException(status_code=400, detail="only running live deployments can be paused")
-
-    job_id = f"live-deploy-{deployment_id}"
-    removed = _remove_live_job(job_id)
-    runner_obj = _runner_objects.get(str(deployment["broker"]))
-    if runner_obj is not None and hasattr(runner_obj, "remove_job"):
-        removed = bool(runner_obj.remove_job(job_id)) or removed
-    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-    deployment = {**deployment, "status": "paused", "updated_at": now, "paused_at": now}
-    _replace_live_deployment(deployment)
-    return {"deployment": deployment, "runner": {"broker": deployment["broker"], "job_removed": removed}}
+    """Legacy JSON-backed hosted live deployment endpoint removed."""
+    raise _legacy_trading_state_removed()
 
 
 @app.post("/live/runner/start", dependencies=[Depends(require_operator_auth)])

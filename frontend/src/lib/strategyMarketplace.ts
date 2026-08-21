@@ -572,7 +572,7 @@ export function buildMarketStrategySpec(strategy: StrategyCatalogItem) {
       engine: cryptoTemplate.engine,
       parameters: cryptoTemplate.parameters,
       rules: cryptoTemplate.rules,
-      paper_signal: {
+      shadow_signal: {
         symbol: cryptoTemplate.symbol,
         action: backtest.status === "passed" ? cryptoTemplate.action : "HOLD",
         notional: backtest.status === "passed" ? cryptoTemplate.notional : 0,
@@ -603,7 +603,7 @@ export function buildMarketStrategySpec(strategy: StrategyCatalogItem) {
     usage: strategy.usage ?? [],
     risk_notes: strategy.riskNotes ?? [],
     category: strategy.category,
-    paper_signal: {
+    shadow_signal: {
       symbol: backtest.symbol,
       action,
       notional: action === "HOLD" ? 0 : 100,
@@ -628,7 +628,7 @@ export function buildMarketStrategySpec(strategy: StrategyCatalogItem) {
   };
 }
 
-export function defaultPaperLimitsForMarketStrategy(strategy: StrategyCatalogItem) {
+export function defaultShadowRiskPolicyForMarketStrategy(strategy: StrategyCatalogItem) {
   const spec = buildMarketStrategySpec(strategy);
   const risk = spec.risk as {
     max_order_notional: number;
@@ -637,7 +637,7 @@ export function defaultPaperLimitsForMarketStrategy(strategy: StrategyCatalogIte
     min_cash_buffer: number;
   };
   return {
-    symbols: [spec.paper_signal.symbol],
+    symbols: [spec.shadow_signal.symbol],
     allowed_sides: ["BUY", "SELL"],
     max_order_notional: risk.max_order_notional,
     max_total_exposure: risk.max_total_exposure,
@@ -948,14 +948,14 @@ function buildProfessionalGridStrategySpec(strategy: StrategyCatalogItem, backte
       pause: "Emit HOLD when price leaves range, volatility exceeds guardrail, or backtest gate fails.",
       inventory: "Do not add inventory above maxInventoryNotional; flatten on stop-loss breach.",
     },
-    paper_signal: {
+    shadow_signal: {
       symbol: config.symbol,
       action,
       notional: action === "HOLD" ? 0 : config.baseOrderNotional,
       confidence: backtest.status === "passed" ? 0.82 : 0.4,
       reason: action === "HOLD"
         ? "professional grid backtest gate did not pass"
-        : "professional grid backtest passed; seed one grid unit in paper account",
+        : "professional grid backtest passed; seed one grid unit in the QUANTAXIS shadow account",
       data_timestamp: new Date().toISOString(),
       grid: {
         lower: config.lower,
@@ -1015,14 +1015,14 @@ function buildClassicTurtleStrategySpec(strategy: StrategyCatalogItem, backtest:
       stop: "Flatten when price moves 2ATR against the latest unit or when the opposite exit channel breaks.",
       drawdown: "Pause new entries when strategy drawdown exceeds maxDrawdownPausePct; exits remain active.",
     },
-    paper_signal: {
+    shadow_signal: {
       symbol: config.symbol,
       action,
       notional: action === "HOLD" ? 0 : config.baseOrderNotional,
       confidence: backtest.status === "passed" ? 0.78 : 0.42,
       reason: action === "HOLD"
         ? "classic turtle backtest gate did not pass"
-        : "classic turtle breakout system passed; seed one ATR risk unit in paper account",
+        : "classic turtle breakout system passed; seed one ATR risk unit in the QUANTAXIS shadow account",
       data_timestamp: new Date().toISOString(),
       target_weight: action === "HOLD" ? 0 : 0.15,
       turtle: {
@@ -1038,7 +1038,7 @@ function buildClassicTurtleStrategySpec(strategy: StrategyCatalogItem, backtest:
     implementation: {
       signal_engine: "Server marketplace backtest uses real OKX OHLCV and a pandas SignalEngine with Donchian breakout, ATR sizing, pyramiding, stop, and drawdown pause.",
       supported_actions: ["BUY", "SELL", "HOLD"],
-      output: "Target weight series clipped to +/- risk budget for the backtest engine; paper deployment emits explicit action/notional.",
+      output: "Target weight series clipped to +/- risk budget for the backtest engine; shadow deployment emits explicit action/notional.",
     },
     backtest,
     backtest_gate: {

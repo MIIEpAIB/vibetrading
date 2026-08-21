@@ -1,0 +1,18 @@
+Metadata-Version: 2.1
+Name: qaenv
+Version: 0.0.4
+Summary: QUANTAXIS:Quantitative Financial Strategy Framework
+Home-page: https://github.com/yutiansut/qaenvironment
+Author: yutiansut
+Author-email: yutiansut@qq.com
+License: MIT
+Keywords: quantaxis,quant,finance,Backtest,Framework
+Platform: UNKNOWN
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python
+Classifier: Intended Audience :: Developers
+Classifier: Operating System :: OS Independent
+
+QA Environment
+
+

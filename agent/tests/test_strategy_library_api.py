@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from types import SimpleNamespace
 from datetime import datetime
 
@@ -26,8 +27,7 @@ def test_strategy_library_api_requires_mysql(monkeypatch) -> None:
     assert "MySQL" in excinfo.value.detail
 
 
-@pytest.mark.asyncio
-async def test_strategy_library_api_logs_unexpected_failures(monkeypatch, caplog) -> None:
+def test_strategy_library_api_logs_unexpected_failures(monkeypatch, caplog) -> None:
     def _boom():
         raise RuntimeError("boom")
 
@@ -35,7 +35,7 @@ async def test_strategy_library_api_logs_unexpected_failures(monkeypatch, caplog
     caplog.set_level("ERROR")
 
     with pytest.raises(RuntimeError):
-        await api_server.list_strategy_library(SimpleNamespace(user_id=123))
+        asyncio.run(api_server.list_strategy_library(SimpleNamespace(user_id=123)))
 
     assert any("Strategy library request failed" in record.message for record in caplog.records)
 
@@ -198,8 +198,7 @@ def test_strategy_record_maps_legacy_json_language_to_javascript() -> None:
     assert record.language == "javascript"
 
 
-@pytest.mark.asyncio
-async def test_publish_strategy_submits_public_snapshot_for_review(monkeypatch) -> None:
+def test_publish_strategy_submits_public_snapshot_for_review(monkeypatch) -> None:
     record = StrategyRecord.from_payload(
         {
             "id": "breakout",
@@ -248,7 +247,7 @@ async def test_publish_strategy_submits_public_snapshot_for_review(monkeypatch) 
     monkeypatch.setattr(api_server, "_strategy_or_404", lambda strategy_id, *, user_id: record)
     monkeypatch.setattr(api_server, "_get_strategy_store", lambda: FakeStore())
 
-    result = await api_server.publish_strategy("breakout", SimpleNamespace(user_id=123))
+    result = asyncio.run(api_server.publish_strategy("breakout", SimpleNamespace(user_id=123)))
 
     assert result["publicId"] == "pub_test"
     assert result["reviewStatus"] == "submitted"
@@ -334,11 +333,10 @@ def test_python_strategy_syntax_error_stops_before_backtest(monkeypatch) -> None
     assert "line 2" in excinfo.value.detail
 
 
-@pytest.mark.asyncio
-async def test_classic_turtle_personal_backtest_uses_saved_code(monkeypatch) -> None:
+def test_custom_personal_backtest_uses_saved_code(monkeypatch) -> None:
     monkeypatch.setenv("VIBE_TRADING_ALLOW_UNSANDBOXED_PYTHON_STRATEGIES", "1")
     record = SimpleNamespace(
-        id="classic-turtle-trading",
+        id="custom-signal-engine",
         code=(
             "class SignalEngine:\n"
             "    def generate(self, data_map):\n"
@@ -356,7 +354,7 @@ async def test_classic_turtle_personal_backtest_uses_saved_code(monkeypatch) -> 
     async def fake_execute_backtest_run(**kwargs):
         captured.update(kwargs)
         return api_server.StrategyMarketBacktestResponse(
-            strategy_id="classic-turtle-trading",
+            strategy_id="custom-signal-engine",
             status="passed",
             run_id="strategy_test",
             run_directory="/tmp/strategy_test",
@@ -377,20 +375,82 @@ async def test_classic_turtle_personal_backtest_uses_saved_code(monkeypatch) -> 
     monkeypatch.setattr(api_server, "_run_marketplace_backtest", fake_market_backtest)
     monkeypatch.setattr(api_server, "_execute_backtest_run", fake_execute_backtest_run)
 
-    result = await api_server.run_strategy_backtest(
-        "classic-turtle-trading",
-        api_server.StrategyBacktestRequest(
-            start_date="2024-01-01",
-            end_date="2024-02-01",
-            symbol="BTC-USDT",
-            interval="4H",
-            source="okx",
-            initial_capital=50000,
-        ),
-        SimpleNamespace(user_id=123),
+    result = asyncio.run(
+        api_server.run_strategy_backtest(
+            "custom-signal-engine",
+            api_server.StrategyBacktestRequest(
+                start_date="2024-01-01",
+                end_date="2024-02-01",
+                symbol="BTC-USDT",
+                interval="4H",
+                source="okx",
+                initial_capital=50000,
+            ),
+            SimpleNamespace(user_id=123),
+        )
     )
 
     assert result.run_id == "strategy_test"
-    assert captured["context"] == {"user_id": 123, "strategy_id": "classic-turtle-trading"}
+    assert captured["context"] == {"user_id": 123, "strategy_id": "custom-signal-engine"}
     assert captured["config"]["initial_cash"] == 50000.0
     assert "class SignalEngine" in str(captured["signal_code"])
+
+
+def test_market_strategy_personal_backtest_uses_market_template(monkeypatch) -> None:
+    record = SimpleNamespace(
+        id="professional-grid-trading",
+        code="import ccxt\nclass CryptoAdvancedGrid:\n    pass\n",
+        language="python",
+    )
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(api_server, "_strategy_or_404", lambda strategy_id, *, user_id: record)
+
+    async def fake_market_backtest(payload, ctx):
+        captured["payload"] = payload
+        captured["ctx"] = ctx
+        return api_server.StrategyMarketBacktestResponse(
+            strategy_id="professional-grid-trading",
+            status="passed",
+            run_id="market_template_test",
+            run_directory="/tmp/market_template_test",
+            symbol="BTC-USDT",
+            timeframe="1H",
+            period="2024-01-01 - 2024-02-01",
+            totalReturnPct=1.0,
+            annualizedReturnPct=12.0,
+            maxDrawdownPct=2.0,
+            sharpe=1.5,
+            winRatePct=55.0,
+            tradeCount=3,
+            engine="real_professional_grid_v1",
+            assumptions=[],
+            warnings=[],
+        )
+
+    async def fake_execute_backtest_run(**kwargs):
+        raise AssertionError("market strategy should not execute saved exchange script directly")
+
+    monkeypatch.setattr(api_server, "_run_marketplace_backtest", fake_market_backtest)
+    monkeypatch.setattr(api_server, "_execute_backtest_run", fake_execute_backtest_run)
+
+    result = asyncio.run(
+        api_server.run_strategy_backtest(
+            "professional-grid-trading",
+            api_server.StrategyBacktestRequest(
+                start_date="2024-01-01",
+                end_date="2024-02-01",
+                symbol="BTC-USDT",
+                interval="1H",
+                source="okx",
+                initial_capital=50000,
+            ),
+            SimpleNamespace(user_id=123),
+        )
+    )
+
+    payload = captured["payload"]
+    assert result.run_id == "market_template_test"
+    assert payload.strategy_id == "professional-grid-trading"
+    assert payload.interval == "1H"
+    assert payload.symbol == "BTC-USDT"

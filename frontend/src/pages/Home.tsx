@@ -1,13 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  CandlestickChart,
-  LineChart,
-  RefreshCw,
-  Search,
-  Server,
-} from "lucide-react";
-import { KLineChartPanel } from "@/components/charts/KLineChartPanel";
-import { api, type CryptoKlineBar, type CryptoMarketRow, type CryptoMarketsResponse } from "@/lib/api";
+import { LineChart, RefreshCw, Search, Server } from "lucide-react";
+import { api, type CryptoMarketRow, type CryptoMarketsResponse } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 type CoinSeed = {
@@ -61,9 +54,7 @@ const EMPTY_MARKETS: CryptoMarketsResponse = {
   },
 };
 
-const TIMEFRAMES = ["5m", "15m", "1h", "1d"] as const;
 const MARKET_REFRESH_MS = 15_000;
-const KLINE_REFRESH_MS = 3_500;
 
 function formatMoney(value: number): string {
   const abs = Math.abs(value);
@@ -118,29 +109,13 @@ function CoinIcon({ row, size = "md" }: { row: CryptoMarketRow; size?: "sm" | "m
   );
 }
 
-function KlinePanel({
-  symbol,
-  timeframe,
-  bars,
-}: {
-  symbol: string;
-  timeframe: string;
-  bars: CryptoKlineBar[];
-}) {
-  return <KLineChartPanel symbol={symbol} timeframe={timeframe} bars={bars} height={420} className="rounded-md bg-[#0d0f13]" />;
-}
-
 export function Home() {
   const [markets, setMarkets] = useState<CryptoMarketsResponse>(EMPTY_MARKETS);
   const [selectedSymbol, setSelectedSymbol] = useState("BTC/USDT");
-  const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>("5m");
-  const [bars, setBars] = useState<CryptoKlineBar[]>([]);
   const [marketLoading, setMarketLoading] = useState(false);
-  const [klineLoading, setKlineLoading] = useState(false);
   const [query, setQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
   const marketRequestVersionRef = useRef(0);
-  const klineRequestVersionRef = useRef(0);
   const selectedSymbolRef = useRef(selectedSymbol);
 
   useEffect(() => {
@@ -183,32 +158,6 @@ export function Home() {
     return () => window.clearInterval(timer);
   }, [loadMarkets]);
 
-  const loadKlines = useCallback(async () => {
-    const requestVersion = klineRequestVersionRef.current + 1;
-    klineRequestVersionRef.current = requestVersion;
-    setKlineLoading(true);
-    try {
-      const payload = await api.getCryptoKlines(selectedSymbol, timeframe, 180);
-      if (klineRequestVersionRef.current !== requestVersion) return;
-      setBars(payload.status === "ok" ? payload.bars : []);
-    } catch {
-      if (klineRequestVersionRef.current !== requestVersion) return;
-      setBars([]);
-    } finally {
-      if (klineRequestVersionRef.current === requestVersion) {
-        setKlineLoading(false);
-      }
-    }
-  }, [selectedSymbol, timeframe]);
-
-  useEffect(() => {
-    void loadKlines();
-    const timer = window.setInterval(() => {
-      void loadKlines();
-    }, KLINE_REFRESH_MS);
-    return () => window.clearInterval(timer);
-  }, [loadKlines]);
-
   const filteredRows = useMemo(() => {
     const clean = query.trim().toLowerCase();
     if (!clean) return markets.rows;
@@ -239,45 +188,64 @@ export function Home() {
 
         <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
           <div className="space-y-4">
-            <div className="rounded-lg border border-zinc-800 bg-[#111318] p-4">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <section className="rounded-lg border border-zinc-800 bg-[#111318] p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
                 <div>
-                  <div className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
-                    <CandlestickChart className="h-4 w-4 text-orange-300" />
-                    K-line Data
-                  </div>
-                  <div className="mt-1 text-xs text-zinc-500">
-                    {selectedSymbol} · {timeframe.toUpperCase()} · OKX perpetual market data
-                  </div>
+                  <div className="text-sm font-semibold text-zinc-100">Market Heat</div>
+                  <div className="mt-1 text-xs text-zinc-500">Top movers in the current watchlist</div>
                 </div>
-                <div className="flex items-center gap-2">
-                  {klineLoading ? (
-                    <RefreshCw className="h-4 w-4 animate-spin text-zinc-500" />
-                  ) : (
-                    <LineChart className="h-4 w-4 text-emerald-400" />
-                  )}
-                  <div className="flex rounded-md border border-zinc-800 bg-[#0d0f13] p-1">
-                    {TIMEFRAMES.map((item) => (
-                      <button
-                        key={item}
-                        type="button"
-                        onClick={() => setTimeframe(item)}
-                        className={cn(
-                          "h-7 rounded px-3 text-xs font-medium transition",
-                          timeframe === item ? "bg-orange-500 text-white" : "text-zinc-400 hover:text-zinc-100",
-                        )}
-                      >
-                        {item.toUpperCase()}
-                      </button>
-                    ))}
-                  </div>
+                <LineChart className="h-4 w-4 text-sky-300" />
+              </div>
+              <div className="space-y-3">
+                {markets.rows.slice(0, 6).map((row) => (
+                  <button
+                    key={row.symbol}
+                    type="button"
+                    onClick={() => setSelectedSymbol(row.symbol)}
+                    className={cn(
+                      "grid w-full grid-cols-[72px_1fr_auto] items-center gap-3 rounded-md border px-3 py-2 text-left transition",
+                      selectedSymbol === row.symbol ? "border-orange-500/40 bg-orange-500/10" : "border-zinc-800 bg-[#181b21] hover:border-zinc-700",
+                    )}
+                  >
+                    <span className="flex items-center gap-2 text-xs font-semibold text-zinc-100">
+                      <CoinIcon row={row} size="sm" />
+                      {row.base}
+                    </span>
+                    <span className="h-1.5 overflow-hidden rounded-full bg-zinc-800">
+                      <span
+                        className={cn("block h-full rounded-full", row.change_24h >= 0 ? "bg-emerald-400" : "bg-red-400")}
+                        style={{ width: `${Math.min(100, Math.max(8, Math.abs(row.change_24h) * 12))}%` }}
+                      />
+                    </span>
+                    <span className={cn("font-mono text-xs", toneClass(row.change_24h))}>{formatPercent(row.change_24h)}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section className="rounded-lg border border-zinc-800 bg-[#111318] p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-zinc-100">Data Status</div>
+                  <div className="mt-1 text-xs text-zinc-500">Current feed and chart state</div>
+                </div>
+                <Server className="h-4 w-4 text-zinc-400" />
+              </div>
+              <div className="space-y-3 text-sm">
+                <div className="flex items-center justify-between rounded-md bg-[#181b21] px-3 py-2">
+                  <span className="text-zinc-400">Market source</span>
+                  <span className="font-mono text-emerald-300">{markets.source}</span>
+                </div>
+                <div className="flex items-center justify-between rounded-md bg-[#181b21] px-3 py-2">
+                  <span className="text-zinc-400">Rows</span>
+                  <span className="font-mono text-zinc-200">{markets.rows.length}</span>
+                </div>
+                <div className="flex items-center justify-between rounded-md bg-[#181b21] px-3 py-2">
+                  <span className="text-zinc-400">Updated</span>
+                  <span className="font-mono text-zinc-200">{new Date(markets.updated_at).toLocaleTimeString()}</span>
                 </div>
               </div>
-              <KlinePanel symbol={selectedSymbol} timeframe={timeframe} bars={bars} />
-              {!bars.length && !klineLoading ? (
-                <div className="mt-2 text-xs text-amber-200">No live K-line data returned. Chart is intentionally empty.</div>
-              ) : null}
-            </div>
+            </section>
           </div>
 
           <aside className="space-y-4">
@@ -328,10 +296,6 @@ export function Home() {
                 <div className="flex items-center justify-between rounded-md bg-[#181b21] px-3 py-2">
                   <span className="text-zinc-400">Market source</span>
                   <span className="font-mono text-emerald-300">{markets.source}</span>
-                </div>
-                <div className="flex items-center justify-between rounded-md bg-[#181b21] px-3 py-2">
-                  <span className="text-zinc-400">K-line bars</span>
-                  <span className="font-mono text-sky-300">{bars.length}</span>
                 </div>
                 <div className="flex items-center justify-between rounded-md bg-[#181b21] px-3 py-2">
                   <span className="text-zinc-400">Rows</span>

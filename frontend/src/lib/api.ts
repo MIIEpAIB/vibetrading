@@ -204,34 +204,57 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  createPaperDeployment: (body: CreatePaperDeploymentRequest) =>
-    request<PaperDeploymentActionResponse>("/paper/deployments", {
+  getQuantaxisRuntime: () => request<QuantaxisRuntimeStatus>("/api/quantaxis/runtime"),
+  createDeployment: (body: QuantaxisDeploymentCreateRequest) =>
+    request<QuantaxisDeploymentActionResponse>("/api/deployments", {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  listPaperDeployments: () => request<PaperDeploymentListResponse>("/paper/deployments"),
-  getPaperDeploymentStatus: (deploymentId: string) =>
-    request<PaperDeploymentStatusResponse>(`/paper/deployments/${encodeURIComponent(deploymentId)}`),
-  startPaperDeployment: (deploymentId: string) =>
-    request<PaperDeploymentActionResponse>(`/paper/deployments/${encodeURIComponent(deploymentId)}/start`, {
+  listDeployments: () => request<QuantaxisDeploymentListResponse>("/api/deployments"),
+  getDeployment: (deploymentId: string) =>
+    request<QuantaxisDeploymentActionResponse>(`/api/deployments/${encodeURIComponent(deploymentId)}`),
+  readyDeployment: (deploymentId: string) =>
+    request<QuantaxisDeploymentActionResponse>(`/api/deployments/${encodeURIComponent(deploymentId)}/ready`, {
       method: "POST",
     }),
-  pausePaperDeployment: (deploymentId: string) =>
-    request<PaperDeploymentActionResponse>(`/paper/deployments/${encodeURIComponent(deploymentId)}/pause`, {
+  startDeployment: (deploymentId: string) =>
+    request<QuantaxisDeploymentActionResponse>(`/api/deployments/${encodeURIComponent(deploymentId)}/start`, {
       method: "POST",
     }),
-  resumePaperDeployment: (deploymentId: string) =>
-    request<PaperDeploymentActionResponse>(`/paper/deployments/${encodeURIComponent(deploymentId)}/resume`, {
+  pauseDeployment: (deploymentId: string) =>
+    request<QuantaxisDeploymentActionResponse>(`/api/deployments/${encodeURIComponent(deploymentId)}/pause`, {
       method: "POST",
     }),
-  archivePaperDeployment: (deploymentId: string) =>
-    request<PaperDeploymentActionResponse>(`/paper/deployments/${encodeURIComponent(deploymentId)}/archive`, {
+  stopDeployment: (deploymentId: string) =>
+    request<QuantaxisDeploymentActionResponse>(`/api/deployments/${encodeURIComponent(deploymentId)}/stop`, {
       method: "POST",
     }),
-  runPaperDeploymentTick: (deploymentId: string) =>
-    request<PaperTickResponse>(`/paper/deployments/${encodeURIComponent(deploymentId)}/tick`, {
+  archiveDeployment: (deploymentId: string) =>
+    request<QuantaxisDeploymentActionResponse>(`/api/deployments/${encodeURIComponent(deploymentId)}/archive`, {
       method: "POST",
     }),
+  promoteDeployment: (deploymentId: string, body: QuantaxisDeploymentPromoteRequest) =>
+    request<QuantaxisDeploymentActionResponse>(`/api/deployments/${encodeURIComponent(deploymentId)}/promote`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  recoverDeployment: (deploymentId: string, body: QuantaxisDeploymentRecoverRequest) =>
+    request<QuantaxisDeploymentActionResponse>(`/api/deployments/${encodeURIComponent(deploymentId)}/recover`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  getQuantaxisAccountSnapshot: (accountCookie: string) =>
+    request<QuantaxisAccountSnapshot>(`/api/accounts/${encodeURIComponent(accountCookie)}/snapshot`),
+  listQuantaxisAccountOrders: (accountCookie: string) =>
+    request<QuantaxisOrdersResponse>(`/api/accounts/${encodeURIComponent(accountCookie)}/orders`),
+  listQuantaxisAccountTrades: (accountCookie: string) =>
+    request<QuantaxisTradesResponse>(`/api/accounts/${encodeURIComponent(accountCookie)}/trades`),
+  listDeploymentSignals: (deploymentId: string) =>
+    request<QuantaxisSignalsResponse>(`/api/deployments/${encodeURIComponent(deploymentId)}/signals`),
+  listDeploymentEvents: (deploymentId: string) =>
+    request<QuantaxisEventsResponse>(`/api/deployments/${encodeURIComponent(deploymentId)}/events`),
+  deploymentEventsSseUrl: (deploymentId: string, afterSequenceNo = 0) =>
+    withAuthQuery(`${BASE}/api/deployments/${encodeURIComponent(deploymentId)}/events/stream?after_sequence_no=${encodeURIComponent(String(afterSequenceNo))}`),
   sseUrl: (sid: string, options?: { replay?: "active" }) => {
     let url = withAuthQuery(`${BASE}/sessions/${sid}/events`);
     if (options?.replay) url = appendQueryParam(url, "replay", options.replay);
@@ -334,21 +357,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ broker }),
     }, operatorAuthHeaders),
-  createLiveDeployment: (body: CreateLiveDeploymentRequest) =>
-    request<LiveDeploymentActionResponse>("/live/deployments", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }, operatorAuthHeaders),
-  listLiveDeployments: () =>
-    request<LiveDeploymentListResponse>("/live/deployments", undefined, operatorAuthHeaders),
-  startLiveDeployment: (deploymentId: string) =>
-    request<LiveDeploymentActionResponse>(`/live/deployments/${encodeURIComponent(deploymentId)}/start`, {
-      method: "POST",
-    }, operatorAuthHeaders),
-  pauseLiveDeployment: (deploymentId: string) =>
-    request<LiveDeploymentActionResponse>(`/live/deployments/${encodeURIComponent(deploymentId)}/pause`, {
-      method: "POST",
-    }, operatorAuthHeaders),
   // Start/stop the persistent runner (SPEC §7.5). Privileged surface actions, not agent tools.
   startLiveRunner: (broker: string) =>
     request<LiveRunnerResponse>("/live/runner/start", {
@@ -376,18 +384,6 @@ export const api = {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     return `${protocol}//${window.location.host}${path}`;
   },
-  getShadowAccount: () => request<ShadowAccountResponse>("/shadow/account"),
-  listShadowOrders: () => request<ShadowOrder[]>("/shadow/orders"),
-  placeShadowOrder: (body: ShadowPlaceOrderRequest) =>
-    request<ShadowOrder>("/shadow/orders", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
-  cancelShadowOrder: (orderId: string) =>
-    request<ShadowOrder>(`/shadow/orders/${encodeURIComponent(orderId)}/cancel`, {
-      method: "POST",
-    }),
-  resetShadowAccount: () => request<ShadowAccountResponse>("/shadow/reset", { method: "POST" }),
   searchDirectMessageUsers: (query = "") => {
     const q = new URLSearchParams();
     if (query.trim()) q.set("query", query.trim());
@@ -655,68 +651,6 @@ export interface CryptoKlinesResponse {
   bars: CryptoKlineBar[];
 }
 
-export interface ShadowWallet {
-  user_id: string;
-  account_type: "VIRTUAL" | "REAL" | string;
-  asset_name: string;
-  balance: number;
-  frozen: number;
-  equity: number;
-}
-
-export interface ShadowOrder {
-  order_id: string;
-  user_id: string;
-  account_type: "VIRTUAL" | "REAL" | string;
-  symbol: string;
-  side: "BUY" | "SELL";
-  type: "MARKET" | "LIMIT" | "TRIGGER";
-  price: number;
-  quantity: number;
-  time_in_force?: "GTC" | "IOC" | "FOK" | "POST_ONLY" | string;
-  status: "PENDING" | "PARTIALLY_FILLED" | "FILLED" | "CANCELED" | "EXPIRED" | "REJECTED";
-  executed_price: number;
-  average_price?: number;
-  filled_quantity?: number;
-  remaining_quantity?: number;
-  executed_value?: number;
-  reserved_asset: string;
-  reserved_amount: number;
-  fee_asset?: string;
-  fee_paid?: number;
-  trigger_price?: number;
-  trigger_condition?: "GTE" | "LTE" | string;
-  trigger_order_type?: "MARKET" | "LIMIT" | string;
-  trigger_order_price?: number;
-  triggered_at?: number;
-  rejection_reason?: string;
-  timestamp: number;
-  updated_at: number;
-}
-
-export interface ShadowAccountResponse {
-  account_cookie: string;
-  portfolio_cookie: string;
-  account_type: string;
-  cash: number;
-  frozen: number;
-  market_value: number;
-  total_asset: number;
-  accounts: Record<string, {
-    account_cookie: string;
-    asset: string;
-    balance: number;
-    frozen: number;
-    available: number;
-    equity: number;
-  }>;
-  positions: Record<string, Record<string, unknown>>;
-  orders: QIFIOrder[];
-  trades: QIFITrade[];
-  market_prices: Record<string, number>;
-  updated_at: string;
-}
-
 export interface QIFIOrder {
   order_id: string;
   account_cookie: string;
@@ -747,30 +681,6 @@ export interface QIFITrade {
   metadata: Record<string, unknown>;
 }
 
-export interface ShadowPlaceOrderRequest {
-  symbol: string;
-  side: "BUY" | "SELL";
-  order_type: "MARKET" | "LIMIT" | "TRIGGER";
-  quantity: number;
-  price?: number;
-  time_in_force?: "GTC" | "IOC" | "FOK" | "POST_ONLY";
-  trigger_price?: number;
-  trigger_condition?: "GTE" | "LTE";
-  trigger_order_type?: "MARKET" | "LIMIT";
-  trigger_order_price?: number;
-}
-
-export interface PaperLimits {
-  symbols: string[];
-  allowed_sides: Array<"BUY" | "SELL" | string>;
-  max_order_notional: number;
-  max_total_exposure: number;
-  max_trades_per_day: number;
-  min_cash_buffer: number;
-  default_order_notional: number;
-  order_type: "MARKET" | "LIMIT" | string;
-}
-
 export interface StrategySnapshot {
   strategy_id: string;
   name: string;
@@ -781,121 +691,6 @@ export interface StrategySnapshot {
   code: string;
   source_updated_at: string;
   version: string;
-}
-
-export interface PaperDeployment {
-  deployment_id: string;
-  user_id: number;
-  status: "draft" | "running" | "paused" | "archived" | string;
-  strategy_id: string;
-  strategy_snapshot: StrategySnapshot;
-  limits: PaperLimits;
-  execution_mode?: "shadow" | "broker_paper" | string;
-  connector_profile_id?: string;
-  created_at: string;
-  updated_at: string;
-  started_at?: string | null;
-  paused_at?: string | null;
-  archived_at?: string | null;
-  last_tick_at?: string | null;
-}
-
-export interface PaperSignal {
-  signal_id: string;
-  deployment_id: string;
-  user_id: number;
-  strategy_version: string;
-  symbol: string;
-  action: "BUY" | "SELL" | "HOLD" | string;
-  reason: string;
-  data_timestamp: string;
-  created_at: string;
-  confidence?: number | null;
-  target_weight?: number | null;
-  quantity?: number | null;
-  notional?: number | null;
-  limit_price?: number | null;
-  metadata: Record<string, unknown>;
-}
-
-export interface PaperRiskDecision {
-  decision_id: string;
-  deployment_id: string;
-  signal_id: string;
-  user_id: number;
-  decision: "allowed" | "rejected" | string;
-  reason: string;
-  created_at: string;
-  breached_limit: string;
-  order_notional: number;
-  price: number;
-  quantity: number;
-}
-
-export interface PaperOrderLink {
-  link_id: string;
-  deployment_id: string;
-  signal_id: string;
-  decision_id: string;
-  user_id: number;
-  shadow_order_id: string;
-  shadow_status: ShadowOrder["status"] | string;
-  created_at: string;
-  rejection_reason: string;
-  execution_mode?: "shadow" | "broker_paper" | string;
-  connector_profile_id?: string;
-  broker_order_id?: string;
-  broker_payload?: Record<string, unknown>;
-}
-
-export interface PaperTick {
-  tick_id: string;
-  deployment_id: string;
-  user_id: number;
-  outcome: "no_action" | "failed" | "rejected" | "order_placed" | string;
-  created_at: string;
-  reason: string;
-  signal_id?: string | null;
-  decision_id?: string | null;
-  shadow_order_id?: string | null;
-}
-
-export interface CreatePaperDeploymentRequest {
-  strategy_id: string;
-  limits: Partial<PaperLimits>;
-  execution_mode?: "shadow" | "broker_paper";
-  connector_profile_id?: string;
-}
-
-export interface PaperDeploymentActionResponse {
-  deployment: PaperDeployment;
-}
-
-export interface PaperDeploymentListResponse {
-  deployments: PaperDeployment[];
-}
-
-export interface PaperDeploymentStatusResponse {
-  deployment: PaperDeployment;
-  latest_tick?: PaperTick | null;
-  recent_ticks: PaperTick[];
-  recent_signals: PaperSignal[];
-  recent_decisions: PaperRiskDecision[];
-  recent_orders: PaperOrderLink[];
-  summary: {
-    tick_count?: number;
-    order_count?: number;
-    rejected_decision_count?: number;
-    filled_order_count?: number;
-    [key: string]: number | undefined;
-  };
-}
-
-export interface PaperTickResponse {
-  tick: PaperTick;
-  signal?: PaperSignal | null;
-  decision?: PaperRiskDecision | null;
-  order_link?: PaperOrderLink | null;
 }
 
 export interface LLMSettings {
@@ -1416,7 +1211,131 @@ export interface StrategyVersionItem {
   tags: string[];
   code: string;
   code_sha256: string;
+  parameter_schema?: Record<string, unknown>;
   createdAt: string;
+}
+
+export type QuantaxisDeploymentTarget = "SHADOW" | "LIVE";
+export type QuantaxisDeploymentStatus =
+  | "DRAFT"
+  | "READY"
+  | "RUNNING"
+  | "PAUSED"
+  | "STOPPED"
+  | "RECOVERY_REQUIRED"
+  | "ARCHIVED"
+  | string;
+
+export interface QuantaxisRuntimeStatus {
+  available: boolean;
+  version: string;
+  quantaxis_path: string;
+  runtime_home: string;
+  modules: Record<string, boolean>;
+  requires: Record<string, string>;
+  durable_store_configured?: boolean;
+  qapubsub_configured?: boolean;
+  error: string;
+}
+
+export interface QuantaxisStrategySnapshot {
+  strategy_id: string;
+  version_no: number;
+  owner_user_id: number;
+  name: string;
+  description: string;
+  strategy_description: string;
+  language: string;
+  category: string;
+  tags: string[];
+  code: string;
+  code_sha256: string;
+  created_at: string;
+  parameter_schema?: Record<string, unknown>;
+}
+
+export interface QuantaxisDeployment {
+  deployment_id: string;
+  user_id: number;
+  target: QuantaxisDeploymentTarget;
+  status: QuantaxisDeploymentStatus;
+  strategy_snapshot: QuantaxisStrategySnapshot;
+  account_cookie: string;
+  market: string;
+  symbols: string[];
+  timeframe: string;
+  parameters: Record<string, unknown>;
+  risk_policy: Record<string, unknown>;
+  broker_binding_id?: number | null;
+  created_at: string;
+  updated_at: string;
+  started_at?: string | null;
+  paused_at?: string | null;
+  stopped_at?: string | null;
+  archived_at?: string | null;
+  recovery_reason?: string;
+}
+
+export interface QuantaxisDeploymentCreateRequest {
+  strategy_id: string;
+  target: QuantaxisDeploymentTarget;
+  version_no?: number;
+  market: string;
+  symbols: string[];
+  timeframe: string;
+  parameters?: Record<string, unknown>;
+  risk_policy?: Record<string, unknown>;
+  broker_binding_id?: number | null;
+}
+
+export interface QuantaxisDeploymentActionResponse {
+  deployment: QuantaxisDeployment;
+}
+
+export interface QuantaxisDeploymentListResponse {
+  deployments: QuantaxisDeployment[];
+}
+
+export interface QuantaxisDeploymentPromoteRequest {
+  broker_binding_id: number;
+  risk_policy?: Record<string, unknown>;
+}
+
+export interface QuantaxisDeploymentRecoverRequest {
+  broker: string;
+}
+
+export interface QuantaxisAccountSnapshot {
+  account_cookie: string;
+  cash?: number;
+  frozen?: number;
+  market_value?: number;
+  total_asset?: number;
+  positions?: Record<string, unknown>;
+  orders?: QIFIOrder[];
+  trades?: QIFITrade[];
+  updated_at?: string;
+  [key: string]: unknown;
+}
+
+export interface QuantaxisOrdersResponse {
+  account_cookie: string;
+  orders: QIFIOrder[];
+}
+
+export interface QuantaxisTradesResponse {
+  account_cookie: string;
+  trades: QIFITrade[];
+}
+
+export interface QuantaxisSignalsResponse {
+  deployment_id?: string;
+  signals: Record<string, unknown>[];
+}
+
+export interface QuantaxisEventsResponse {
+  deployment_id?: string;
+  events: Record<string, unknown>[];
 }
 
 export interface PublicStrategyMarketItem {
@@ -1728,47 +1647,6 @@ export interface LiveBrokerStatus {
 export interface LiveStatus {
   brokers: LiveBrokerStatus[];
   global_halted: boolean;
-}
-
-export interface CreateLiveDeploymentRequest {
-  strategy_id: string;
-  broker: string;
-  interval_seconds: number;
-  session_id?: string;
-  limits?: Record<string, unknown>;
-}
-
-export interface LiveDeployment {
-  deployment_id: string;
-  user_id?: number;
-  status: "draft" | "running" | "paused" | "archived" | string;
-  broker: string;
-  strategy_id: string;
-  strategy_snapshot?: {
-    strategy_id?: string;
-    name?: string;
-    language?: string;
-    category?: string;
-    version?: string;
-    source_updated_at?: string;
-  };
-  interval_seconds?: number;
-  limits?: Record<string, unknown>;
-  session_id?: string;
-  created_at?: string;
-  updated_at?: string;
-  started_at?: string | null;
-  paused_at?: string | null;
-  archived_at?: string | null;
-}
-
-export interface LiveDeploymentActionResponse {
-  deployment: LiveDeployment;
-  runner?: Record<string, unknown>;
-}
-
-export interface LiveDeploymentListResponse {
-  deployments: LiveDeployment[];
 }
 
 /** Response of `POST /live/runner/start|stop`. */

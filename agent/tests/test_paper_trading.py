@@ -60,43 +60,10 @@ def _service(code: str) -> PaperTradingService:
     )
 
 
-def _service_with_broker(code: str, calls: list[dict]) -> PaperTradingService:
-    wallet = WalletManager()
-    shadow = ShadowTradingService(wallet_manager=wallet, engine=VirtualMatchingEngine(wallet))
-    strategy = _Strategy(
-        id="json-buy",
-        name="JSON Buy",
-        description="",
-        language="python",
-        category="trend",
-        status="testing",
-        tags=["paper"],
-        code=code,
-        createdAt="2026-06-26T00:00:00Z",
-        updatedAt="2026-06-26T00:00:00Z",
-    )
-
-    def executor(**kwargs):
-        calls.append(dict(kwargs))
-        return {
-            "status": "ok",
-            "order_id": "broker_123",
-            "order_status": "accepted",
-            "symbol": kwargs["symbol"],
-        }
-
-    return PaperTradingService(
-        store=InMemoryPaperTradingStore(),
-        strategy_store=_StrategyStore([strategy]),
-        shadow_service=shadow,
-        broker_order_executor=executor,
-    )
-
-
 def _buy_spec(symbol: str = "BTC_USDT", notional: float = 250.0) -> str:
     return (
         "{"
-        f'"paper_signal": {{"symbol": "{symbol}", "action": "BUY", '
+        f'"shadow_signal": {{"symbol": "{symbol}", "action": "BUY", '
         f'"notional": {notional}, "reason": "test buy"}}'
         "}"
     )
@@ -153,54 +120,10 @@ def test_tick_records_signal_decision_order_link() -> None:
     assert result["order_link"]["shadow_status"] == "FILLED"
 
 
-def test_broker_paper_tick_places_connector_order() -> None:
-    calls: list[dict] = []
-    svc = _service_with_broker(_buy_spec(notional=250.0), calls)
-    deployment = svc.create_deployment(
-        user_id=7,
-        strategy_id="json-buy",
-        limits_payload={"symbols": ["BTC_USDT"], "max_order_notional": 500, "default_order_notional": 100},
-        execution_mode="broker_paper",
-        connector_profile_id="binance-paper-trade",
-    )
-    svc.set_status(deployment.deployment_id, user_id=7, action="start")
-
-    result = _run_tick(svc, deployment.deployment_id, user_id=7)
-
-    assert result["tick"]["outcome"] == "order_placed"
-    assert calls == [
-        {
-            "profile_id": "binance-paper-trade",
-            "symbol": "BTC-USDT",
-            "side": "buy",
-            "quantity": pytest.approx(result["decision"]["quantity"]),
-            "order_type": "MARKET",
-            "limit_price": None,
-        }
-    ]
-    assert result["order_link"]["execution_mode"] == "broker_paper"
-    assert result["order_link"]["connector_profile_id"] == "binance-paper-trade"
-    assert result["order_link"]["broker_order_id"] == "broker_123"
-    assert result["order_link"]["shadow_status"] == "ACCEPTED"
-
-
-def test_broker_paper_rejects_non_trade_profile() -> None:
+def test_broker_paper_execution_mode_is_removed() -> None:
     svc = _service(_buy_spec())
 
-    with pytest.raises(PaperTradingError, match="support paper order placement"):
-        svc.create_deployment(
-            user_id=7,
-            strategy_id="json-buy",
-            limits_payload={"symbols": ["BTC_USDT"]},
-            execution_mode="broker_paper",
-            connector_profile_id="binance-paper-sdk",
-        )
-
-
-def test_broker_paper_rejects_live_profile() -> None:
-    svc = _service(_buy_spec())
-
-    with pytest.raises(PaperTradingError, match="only accepts paper"):
+    with pytest.raises(PaperTradingError, match="execution_mode must be shadow"):
         svc.create_deployment(
             user_id=7,
             strategy_id="json-buy",

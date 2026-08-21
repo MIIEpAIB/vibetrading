@@ -8,6 +8,7 @@ import {
   Download,
   FileCode2,
   FolderTree,
+  Loader2,
   MoreHorizontal,
   Pencil,
   Play,
@@ -25,10 +26,9 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { api, ApiError, type StrategyLibraryItem } from "@/lib/api";
+import { api, ApiError, type StrategyLibraryItem, type StrategyVersionItem } from "@/lib/api";
 import { adminUrl } from "@/lib/adminUrl";
 import { StrategyCodeEditor } from "@/components/strategy/StrategyCodeEditor";
-import { PAPER_EXECUTION_OPTIONS, executionOptionValue, paperExecutionPayload } from "@/lib/paperExecution";
 import { buildClassicTurtlePythonStrategyCode, getStrategyRouteId } from "@/lib/strategyMarketplace";
 import { useTranslation } from "@/i18n/I18nProvider";
 
@@ -58,6 +58,18 @@ type MoreMenuState = {
   strategy: StrategyItem;
   top: number;
   left: number;
+};
+
+type DeploymentWizardState = {
+  strategy: StrategyItem;
+  target: "SHADOW" | "LIVE";
+  versionNo: string;
+  market: string;
+  symbols: string;
+  timeframe: string;
+  parametersJson: string;
+  riskPolicyJson: string;
+  brokerBindingId: string;
 };
 
 const languageOptions: Array<{ value: StrategyLanguage; label: string }> = [
@@ -253,7 +265,7 @@ function downloadJson(fileName: string, data: unknown) {
   URL.revokeObjectURL(url);
 }
 
-function paperLimitsForStrategy(strategy: StrategyItem) {
+function shadowRiskPolicyForStrategy(strategy: StrategyItem) {
   const fallbackRisk = {
     max_order_notional: 500,
     max_total_exposure: 5000,
@@ -265,7 +277,7 @@ function paperLimitsForStrategy(strategy: StrategyItem) {
   try {
     const parsed = JSON.parse(strategy.code) as unknown;
     if (isRecord(parsed)) {
-      const signal = isRecord(parsed.paper_signal) ? parsed.paper_signal : null;
+      const signal = isRecord(parsed.shadow_signal) ? parsed.shadow_signal : null;
       const rawSymbol = typeof signal?.symbol === "string" ? signal.symbol : "";
       if (rawSymbol.trim()) symbol = rawSymbol.replace("-", "_").replace("/", "_").toUpperCase();
       if (isRecord(parsed.risk)) {
@@ -278,7 +290,7 @@ function paperLimitsForStrategy(strategy: StrategyItem) {
       }
     }
   } catch {
-    // Plain Python strategies use the conservative default paper limits.
+    // Plain Python strategies use the conservative default shadow risk policy.
   }
   return {
     symbols: [symbol],
@@ -290,6 +302,39 @@ function paperLimitsForStrategy(strategy: StrategyItem) {
     default_order_notional: Math.min(100, risk.max_order_notional),
     order_type: "MARKET",
   };
+}
+
+function deploymentWizardForStrategy(strategy: StrategyItem, target: "SHADOW" | "LIVE"): DeploymentWizardState {
+  const inferred = shadowRiskPolicyForStrategy(strategy);
+  return {
+    strategy,
+    target,
+    versionNo: "",
+    market: "CRYPTO",
+    symbols: inferred.symbols.join(","),
+    timeframe: "1h",
+    parametersJson: "{}",
+    riskPolicyJson: JSON.stringify({
+      allowed_sides: inferred.allowed_sides,
+      max_order_notional: inferred.max_order_notional,
+      max_total_exposure: inferred.max_total_exposure,
+      max_trades_per_day: inferred.max_trades_per_day,
+      min_cash_buffer: inferred.min_cash_buffer,
+      default_order_notional: inferred.default_order_notional,
+      order_type: inferred.order_type,
+    }, null, 2),
+    brokerBindingId: "",
+  };
+}
+
+function parseJsonObject(value: string, label: string): Record<string, unknown> {
+  const trimmed = value.trim();
+  if (!trimmed) return {};
+  const parsed = JSON.parse(trimmed) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${label} must be a JSON object`);
+  }
+  return parsed as Record<string, unknown>;
 }
 
 function buildAssistantPrompt(prompt: string, strategy?: StrategyItem | null) {
@@ -327,10 +372,12 @@ export function StrategyLibrary() {
   const [runningId, setRunningId] = useState<string | null>(null);
   const [paperRunningId, setPaperRunningId] = useState<string | null>(null);
   const [publishingId, setPublishingId] = useState<string | null>(null);
-  const [paperExecution, setPaperExecution] = useState("shadow");
   const [moreMenu, setMoreMenu] = useState<MoreMenuState | null>(null);
   const [editorId, setEditorId] = useState<string | null>(null);
   const [savingEditor, setSavingEditor] = useState(false);
+  const [deploymentWizard, setDeploymentWizard] = useState<DeploymentWizardState | null>(null);
+  const [deploymentVersions, setDeploymentVersions] = useState<StrategyVersionItem[]>([]);
+  const [submittingDeployment, setSubmittingDeployment] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -448,7 +495,20 @@ export function StrategyLibrary() {
       paperRun: "模拟盘运行",
       paperRunning: "启动中",
       paperExists: "该策略已在模拟盘运行",
-      paperExecution: "模拟盘执行",
+      deployStrategy: "部署策略",
+      deployTarget: "部署目标",
+      deployVersion: "版本号",
+      latestVersion: "最新版本",
+      market: "市场",
+      symbols: "标的",
+      timeframe: "K线周期",
+      parameters: "参数 JSON",
+      riskPolicy: "风控 JSON",
+      brokerBinding: "Broker 绑定 ID",
+      versionHash: "版本 Hash",
+      parameterSchema: "参数 Schema",
+      createDeployment: "创建部署",
+      deploymentCreated: "部署已创建",
       liveRun: "实盘",
       liveTitle: "实盘配置",
       liveDescription: "填写你自己的交易所 API 配置。保存后会使用对应的 live profile；真实下单仍受 mandate 和 kill switch 保护。",
@@ -512,7 +572,20 @@ export function StrategyLibrary() {
       paperRun: "Run Paper",
       paperRunning: "Starting",
       paperExists: "This strategy is already running in paper trading",
-      paperExecution: "Paper execution",
+      deployStrategy: "Deploy Strategy",
+      deployTarget: "Target",
+      deployVersion: "Version",
+      latestVersion: "Latest version",
+      market: "Market",
+      symbols: "Symbols",
+      timeframe: "Timeframe",
+      parameters: "Parameters JSON",
+      riskPolicy: "Risk JSON",
+      brokerBinding: "Broker Binding ID",
+      versionHash: "Version Hash",
+      parameterSchema: "Parameter Schema",
+      createDeployment: "Create Deployment",
+      deploymentCreated: "Deployment created",
       liveRun: "Live",
       liveTitle: "Live Trading Config",
       liveDescription: "Enter your own exchange API credentials. Saving uses the matching live profile; real orders remain guarded by mandate and kill switch.",
@@ -558,6 +631,9 @@ export function StrategyLibrary() {
   const shareButtonDisabled = (strategy: StrategyItem) => (
     publishingId === strategy.id || strategy.shareStatus === "submitted" || strategy.shareStatus === "published"
   );
+  const selectedDeploymentVersion = deploymentWizard
+    ? deploymentVersions.find((item) => String(item.version) === deploymentWizard.versionNo) ?? deploymentVersions[0] ?? null
+    : null;
 
   const updateStrategy = (id: string, patch: Partial<StrategyItem>) => {
     const updatedAt = new Date().toISOString();
@@ -686,32 +762,63 @@ export function StrategyLibrary() {
     }
   };
 
-  const handleRunPaper = async (strategy: StrategyItem) => {
+  const openDeploymentWizard = async (strategy: StrategyItem, target: "SHADOW" | "LIVE") => {
+    setMoreMenu(null);
     setPaperRunningId(strategy.id);
     try {
-      await api.upsertStrategy(toApiStrategy(strategy));
-      const existing = await api.listPaperDeployments();
+      if (remoteReadyRef.current) {
+        await api.upsertStrategy(toApiStrategy(strategy));
+      }
+      const existing = await api.listDeployments();
       const existingDeployment = existing.deployments.find((deployment) => (
-        deployment.strategy_id === strategy.id && deployment.status !== "archived"
+        deployment.strategy_snapshot.strategy_id === strategy.id
+        && deployment.target === target
+        && deployment.status !== "ARCHIVED"
       ));
       if (existingDeployment) {
         toast.message(copy.paperExists);
-        navigate(`/shadow-trading?paper=${encodeURIComponent(existingDeployment.deployment_id)}`);
+        navigate(`/deployments/${encodeURIComponent(existingDeployment.deployment_id)}`);
         return;
       }
-      const result = await api.createPaperDeployment({
-        strategy_id: strategy.id,
-        limits: paperLimitsForStrategy(strategy),
-        ...paperExecutionPayload(paperExecution),
-      });
-      await api.startPaperDeployment(result.deployment.deployment_id);
-      await api.runPaperDeploymentTick(result.deployment.deployment_id).catch(() => undefined);
-      toast.success(language === "zh-CN" ? "已启动模拟盘运行" : "Paper trading started");
-      navigate(`/shadow-trading?paper=${encodeURIComponent(result.deployment.deployment_id)}`);
+      setDeploymentVersions([]);
+      setDeploymentWizard(deploymentWizardForStrategy(strategy, target));
+      setDeploymentVersions(await api.listStrategyVersions(strategy.id).catch(() => []));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : language === "zh-CN" ? "启动模拟盘失败" : "Failed to start paper trading");
+      toast.error(error instanceof Error ? error.message : language === "zh-CN" ? "打开部署向导失败" : "Failed to open deployment wizard");
     } finally {
       setPaperRunningId(null);
+    }
+  };
+
+  const submitDeploymentWizard = async () => {
+    if (!deploymentWizard) return;
+    setSubmittingDeployment(true);
+    setPaperRunningId(deploymentWizard.strategy.id);
+    try {
+      const symbols = deploymentWizard.symbols
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+      const result = await api.createDeployment({
+        strategy_id: deploymentWizard.strategy.id,
+        target: deploymentWizard.target,
+        version_no: deploymentWizard.versionNo ? Number(deploymentWizard.versionNo) : undefined,
+        market: deploymentWizard.market,
+        symbols,
+        timeframe: deploymentWizard.timeframe,
+        parameters: parseJsonObject(deploymentWizard.parametersJson, "Parameters"),
+        risk_policy: parseJsonObject(deploymentWizard.riskPolicyJson, "Risk policy"),
+        broker_binding_id: deploymentWizard.target === "LIVE" ? Number(deploymentWizard.brokerBindingId) : undefined,
+      });
+      await api.readyDeployment(result.deployment.deployment_id).catch(() => undefined);
+      toast.success(copy.deploymentCreated);
+      setDeploymentWizard(null);
+      navigate(`/deployments/${encodeURIComponent(result.deployment.deployment_id)}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : language === "zh-CN" ? "创建部署失败" : "Failed to create deployment");
+    } finally {
+      setPaperRunningId(null);
+      setSubmittingDeployment(false);
     }
   };
 
@@ -727,7 +834,7 @@ export function StrategyLibrary() {
         navigate("/personal-settings#exchange-api-bindings");
         return;
       }
-      navigate(`/live-trading?strategy=${encodeURIComponent(strategy.id)}`);
+      await openDeploymentWizard(strategy, "LIVE");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : language === "zh-CN" ? "打开实盘交易失败" : "Failed to open live trading");
     }
@@ -860,20 +967,6 @@ export function StrategyLibrary() {
               className="h-10 w-full rounded-md border bg-background pl-9 pr-3 text-sm outline-none transition focus:ring-2 focus:ring-primary/25"
             />
           </div>
-          <label className="mt-3 flex max-w-md flex-col gap-1 text-xs font-semibold text-muted-foreground sm:mt-0">
-            {copy.paperExecution}
-            <select
-              value={paperExecution}
-              onChange={(event) => setPaperExecution(event.target.value)}
-              className="h-10 rounded-md border bg-background px-3 text-sm font-medium text-foreground outline-none transition focus:ring-2 focus:ring-primary/25"
-            >
-              {PAPER_EXECUTION_OPTIONS.map((option) => (
-                <option key={executionOptionValue(option)} value={executionOptionValue(option)}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
         </div>
       </div>
 
@@ -932,7 +1025,7 @@ export function StrategyLibrary() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => handleRunPaper(strategy)}
+                          onClick={() => void openDeploymentWizard(strategy, "SHADOW")}
                           disabled={paperRunningId === strategy.id}
                           className="inline-flex items-center gap-1.5 rounded-md border bg-background px-2.5 py-1.5 text-xs font-semibold transition hover:bg-muted disabled:opacity-50"
                         >
@@ -1180,6 +1273,128 @@ export function StrategyLibrary() {
               ? copy.backtesting
               : copy.run}
           </button>
+        </div>,
+        document.body,
+      )}
+
+      {deploymentWizard && createPortal(
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4 py-6">
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-auto rounded-lg border bg-card shadow-xl">
+            <div className="flex items-start justify-between gap-3 border-b px-5 py-4">
+              <div>
+                <h2 className="text-lg font-semibold">{copy.deployStrategy}</h2>
+                <p className="mt-1 text-sm text-muted-foreground">{deploymentWizard.strategy.name}</p>
+              </div>
+              <button type="button" onClick={() => setDeploymentWizard(null)} className="rounded-md p-1.5 text-muted-foreground hover:bg-muted">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="grid gap-4 px-5 py-4 sm:grid-cols-2">
+              <label className="text-xs font-semibold text-muted-foreground">
+                {copy.deployTarget}
+                <select
+                  value={deploymentWizard.target}
+                  onChange={(event) => setDeploymentWizard({ ...deploymentWizard, target: event.target.value as "SHADOW" | "LIVE" })}
+                  className="mt-1 h-10 w-full rounded-md border bg-background px-3 text-sm text-foreground"
+                >
+                  <option value="SHADOW">SHADOW</option>
+                  <option value="LIVE">LIVE</option>
+                </select>
+              </label>
+              <label className="text-xs font-semibold text-muted-foreground">
+                {copy.deployVersion}
+                <select
+                  value={deploymentWizard.versionNo}
+                  onChange={(event) => setDeploymentWizard({ ...deploymentWizard, versionNo: event.target.value })}
+                  className="mt-1 h-10 w-full rounded-md border bg-background px-3 text-sm text-foreground"
+                >
+                  <option value="">{copy.latestVersion}</option>
+                  {deploymentVersions.map((version) => (
+                    <option key={version.version} value={version.version}>
+                      v{version.version} · {version.code_sha256.slice(0, 12)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="rounded-md border bg-background p-3 text-xs sm:col-span-2">
+                <div className="font-semibold text-muted-foreground">{copy.versionHash}</div>
+                <div className="mt-1 break-all font-mono text-foreground">{selectedDeploymentVersion?.code_sha256 || "--"}</div>
+              </div>
+              <label className="text-xs font-semibold text-muted-foreground">
+                {copy.market}
+                <input
+                  value={deploymentWizard.market}
+                  onChange={(event) => setDeploymentWizard({ ...deploymentWizard, market: event.target.value })}
+                  className="mt-1 h-10 w-full rounded-md border bg-background px-3 text-sm text-foreground"
+                />
+              </label>
+              <label className="text-xs font-semibold text-muted-foreground">
+                {copy.timeframe}
+                <input
+                  value={deploymentWizard.timeframe}
+                  onChange={(event) => setDeploymentWizard({ ...deploymentWizard, timeframe: event.target.value })}
+                  className="mt-1 h-10 w-full rounded-md border bg-background px-3 text-sm text-foreground"
+                />
+              </label>
+              <label className="text-xs font-semibold text-muted-foreground sm:col-span-2">
+                {copy.symbols}
+                <input
+                  value={deploymentWizard.symbols}
+                  onChange={(event) => setDeploymentWizard({ ...deploymentWizard, symbols: event.target.value })}
+                  className="mt-1 h-10 w-full rounded-md border bg-background px-3 text-sm text-foreground"
+                />
+              </label>
+              {deploymentWizard.target === "LIVE" ? (
+                <label className="text-xs font-semibold text-muted-foreground sm:col-span-2">
+                  {copy.brokerBinding}
+                  <input
+                    value={deploymentWizard.brokerBindingId}
+                    onChange={(event) => setDeploymentWizard({ ...deploymentWizard, brokerBindingId: event.target.value })}
+                    inputMode="numeric"
+                    className="mt-1 h-10 w-full rounded-md border bg-background px-3 text-sm text-foreground"
+                  />
+                </label>
+              ) : null}
+              <label className="text-xs font-semibold text-muted-foreground">
+                {copy.parameters}
+                <textarea
+                  value={deploymentWizard.parametersJson}
+                  onChange={(event) => setDeploymentWizard({ ...deploymentWizard, parametersJson: event.target.value })}
+                  rows={8}
+                  className="mt-1 w-full rounded-md border bg-background px-3 py-2 font-mono text-xs text-foreground"
+                />
+              </label>
+              <label className="text-xs font-semibold text-muted-foreground">
+                {copy.riskPolicy}
+                <textarea
+                  value={deploymentWizard.riskPolicyJson}
+                  onChange={(event) => setDeploymentWizard({ ...deploymentWizard, riskPolicyJson: event.target.value })}
+                  rows={8}
+                  className="mt-1 w-full rounded-md border bg-background px-3 py-2 font-mono text-xs text-foreground"
+                />
+              </label>
+              <div className="rounded-md border bg-background p-3 text-xs sm:col-span-2">
+                <div className="font-semibold text-muted-foreground">{copy.parameterSchema}</div>
+                <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap font-mono text-foreground">
+                  {JSON.stringify(selectedDeploymentVersion?.parameter_schema ?? {}, null, 2)}
+                </pre>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 border-t px-5 py-4">
+              <button type="button" onClick={() => setDeploymentWizard(null)} className="rounded-md border px-3 py-2 text-sm font-semibold hover:bg-muted">
+                {copy.cancel}
+              </button>
+              <button
+                type="button"
+                onClick={() => void submitDeploymentWizard()}
+                disabled={submittingDeployment}
+                className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50"
+              >
+                {submittingDeployment ? <Loader2 className="h-4 w-4 animate-spin" /> : <RadioTower className="h-4 w-4" />}
+                {copy.createDeployment}
+              </button>
+            </div>
+          </div>
         </div>,
         document.body,
       )}

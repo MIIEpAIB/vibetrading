@@ -1,21 +1,52 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import {
   Activity,
   BarChart3,
   Clock3,
   Database,
+  CandlestickChart,
   RefreshCw,
+  LineChart,
   TrendingDown,
   TrendingUp,
   WalletCards,
 } from "lucide-react";
 import { StrategyReturnChart } from "@/components/charts/StrategyReturnChart";
-import { api, type EquityPoint, type QIFIOrder, type ShadowAccountResponse } from "@/lib/api";
+import { KLineChartPanel } from "@/components/charts/KLineChartPanel";
+import { api, type CryptoKlineBar, type EquityPoint, type QIFIOrder, type QuantaxisAccountSnapshot } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const QUOTE_ASSETS = new Set(["USD", "USDT", "USDC", "BUSD", "DAI"]);
 const REFRESH_MS = 10_000;
 const INITIAL_VIRTUAL_CAPITAL = 100_000;
+const KLINE_REFRESH_MS = 3_500;
+const DASHBOARD_TIMEFRAMES = ["5m", "15m", "1h", "1d"] as const;
+const DASHBOARD_SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"] as const;
+
+interface AccountAsset {
+  asset: string;
+  balance: number;
+  frozen: number;
+}
+
+interface DashboardAccount {
+  account_cookie: string;
+  cash: number;
+  frozen: number;
+  market_value: number;
+  total_asset: number;
+  accounts: Record<string, AccountAsset>;
+  orders: QIFIOrder[];
+  market_prices: Record<string, number>;
+  updated_at?: string;
+}
+
+interface KlineState {
+  symbol: (typeof DASHBOARD_SYMBOLS)[number];
+  timeframe: (typeof DASHBOARD_TIMEFRAMES)[number];
+  bars: CryptoKlineBar[];
+  loading: boolean;
+}
 
 function formatMoney(value: number): string {
   const abs = Math.abs(value);
@@ -52,7 +83,7 @@ function assetPrice(asset: string, marketPrices: Record<string, number>): number
   );
 }
 
-function accountValue(assetAccount: ShadowAccountResponse["accounts"][string], marketPrices: Record<string, number>): number {
+function accountValue(assetAccount: AccountAsset, marketPrices: Record<string, number>): number {
   const price = assetPrice(assetAccount.asset, marketPrices);
   return (assetAccount.balance + assetAccount.frozen) * price;
 }
@@ -71,7 +102,7 @@ function splitSymbol(symbol: string): [string, string] {
   return [base, quote];
 }
 
-function buildEquitySeries(account: ShadowAccountResponse): EquityPoint[] {
+function buildEquitySeries(account: DashboardAccount): EquityPoint[] {
   const filledOrders = [...account.orders]
     .filter((order) => order.status === "FILLED" || order.status === "PARTIALLY_FILLED")
     .sort((a, b) => Date.parse(a.datetime) - Date.parse(b.datetime));
@@ -131,6 +162,108 @@ function buildEquitySeries(account: ShadowAccountResponse): EquityPoint[] {
   return points;
 }
 
+function numberValue(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function accountAssets(snapshot: QuantaxisAccountSnapshot): Record<string, AccountAsset> {
+  const raw = snapshot.accounts;
+  if (raw && typeof raw === "object") {
+    const values = Object.entries(raw as Record<string, Record<string, unknown>>);
+    const mapped = values.reduce<Record<string, AccountAsset>>((acc, [key, value]) => {
+      const asset = String(value.asset || value.currency || key || "CASH").toUpperCase();
+      acc[asset] = {
+        asset,
+        balance: numberValue(value.balance ?? value.available ?? value.cash),
+        frozen: numberValue(value.frozen ?? value.frozen_margin),
+      };
+      return acc;
+    }, {});
+    if (Object.keys(mapped).length) return mapped;
+  }
+  return {
+    CASH: {
+      asset: "CASH",
+      balance: numberValue(snapshot.cash),
+      frozen: numberValue(snapshot.frozen),
+    },
+  };
+}
+
+function dashboardAccount(snapshot: QuantaxisAccountSnapshot, orders: QIFIOrder[]): DashboardAccount {
+  return {
+    account_cookie: snapshot.account_cookie,
+    cash: numberValue(snapshot.cash),
+    frozen: numberValue(snapshot.frozen),
+    market_value: numberValue(snapshot.market_value),
+    total_asset: numberValue(snapshot.total_asset),
+    accounts: accountAssets(snapshot),
+    orders,
+    market_prices: {},
+    updated_at: String(snapshot.updated_at || ""),
+  };
+}
+
+function KlineSection({ state, setState }: { state: KlineState; setState: Dispatch<SetStateAction<KlineState>> }) {
+  return (
+    <section className="rounded-lg border border-zinc-800 bg-[#111318] p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
+            <CandlestickChart className="h-4 w-4 text-orange-300" />
+            Market Candles
+          </div>
+          <div className="mt-1 text-xs text-zinc-500">
+            {state.symbol} · {state.timeframe.toUpperCase()} · live crypto bars
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {state.loading ? (
+            <RefreshCw className="h-4 w-4 animate-spin text-zinc-500" />
+          ) : (
+            <LineChart className="h-4 w-4 text-emerald-400" />
+          )}
+          <div className="flex rounded-md border border-zinc-800 bg-[#0d0f13] p-1">
+            {DASHBOARD_TIMEFRAMES.map((item) => (
+              <button
+                key={item}
+                type="button"
+                onClick={() => setState((current) => ({ ...current, timeframe: item }))}
+                className={cn(
+                  "h-7 rounded px-3 text-xs font-medium transition",
+                  state.timeframe === item ? "bg-orange-500 text-white" : "text-zinc-400 hover:text-zinc-100",
+                )}
+              >
+                {item.toUpperCase()}
+              </button>
+            ))}
+          </div>
+          <div className="flex rounded-md border border-zinc-800 bg-[#0d0f13] p-1">
+            {DASHBOARD_SYMBOLS.map((item) => (
+              <button
+                key={item}
+                type="button"
+                onClick={() => setState((current) => ({ ...current, symbol: item }))}
+                className={cn(
+                  "h-7 rounded px-3 text-xs font-medium transition",
+                  state.symbol === item ? "bg-sky-500 text-white" : "text-zinc-400 hover:text-zinc-100",
+                )}
+              >
+                {item.split("/")[0]}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+      <KLineChartPanel symbol={state.symbol} timeframe={state.timeframe} bars={state.bars} height={420} className="rounded-md bg-[#0d0f13]" />
+      {!state.bars.length && !state.loading ? (
+        <div className="mt-2 text-xs text-amber-200">No live K-line data returned. Chart is intentionally empty.</div>
+      ) : null}
+    </section>
+  );
+}
+
 function StatCard({
   label,
   value,
@@ -165,19 +298,33 @@ function StatCard({
 }
 
 export function Dashboard() {
-  const [account, setAccount] = useState<ShadowAccountResponse | null>(null);
+  const [account, setAccount] = useState<DashboardAccount | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [kline, setKline] = useState<KlineState>({ symbol: "BTC/USDT", timeframe: "5m", bars: [], loading: false });
   const requestVersionRef = useRef(0);
+  const klineRequestVersionRef = useRef(0);
 
   const loadAccount = useCallback(async () => {
     const requestVersion = requestVersionRef.current + 1;
     requestVersionRef.current = requestVersion;
     setRefreshing(true);
     try {
-      const payload = await api.getShadowAccount();
+      const deployments = await api.listDeployments();
+      const deployment = deployments.deployments.find((item) => item.target === "SHADOW" && item.status !== "ARCHIVED")
+        ?? deployments.deployments.find((item) => item.target === "SHADOW")
+        ?? deployments.deployments[0];
+      if (!deployment) {
+        if (requestVersionRef.current !== requestVersion) return;
+        setAccount(null);
+        return;
+      }
+      const [snapshot, orders] = await Promise.all([
+        api.getQuantaxisAccountSnapshot(deployment.account_cookie),
+        api.listQuantaxisAccountOrders(deployment.account_cookie),
+      ]);
       if (requestVersionRef.current !== requestVersion) return;
-      setAccount(payload);
+      setAccount(dashboardAccount(snapshot, orders.orders));
     } catch {
       if (requestVersionRef.current !== requestVersion) return;
       setAccount(null);
@@ -189,6 +336,20 @@ export function Dashboard() {
     }
   }, []);
 
+  const loadKlines = useCallback(async (symbol = kline.symbol, timeframe = kline.timeframe) => {
+    const requestVersion = klineRequestVersionRef.current + 1;
+    klineRequestVersionRef.current = requestVersion;
+    setKline((current) => ({ ...current, loading: true }));
+    try {
+      const payload = await api.getCryptoKlines(symbol, timeframe, 180);
+      if (klineRequestVersionRef.current !== requestVersion) return;
+      setKline((current) => ({ ...current, bars: payload.status === "ok" ? payload.bars : [], loading: false }));
+    } catch {
+      if (klineRequestVersionRef.current !== requestVersion) return;
+      setKline((current) => ({ ...current, bars: [], loading: false }));
+    }
+  }, [kline.symbol, kline.timeframe]);
+
   useEffect(() => {
     void loadAccount();
     const timer = window.setInterval(() => {
@@ -196,6 +357,14 @@ export function Dashboard() {
     }, REFRESH_MS);
     return () => window.clearInterval(timer);
   }, [loadAccount]);
+
+  useEffect(() => {
+    void loadKlines(kline.symbol, kline.timeframe);
+    const timer = window.setInterval(() => {
+      void loadKlines(kline.symbol, kline.timeframe);
+    }, KLINE_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [loadKlines, kline.symbol, kline.timeframe]);
 
   const accounts = account?.accounts ?? {};
   const orders = account?.orders ?? [];
@@ -278,6 +447,7 @@ export function Dashboard() {
 
         <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
           <div className="space-y-4">
+            <KlineSection state={kline} setState={setKline} />
             <div className="rounded-lg border border-zinc-800 bg-[#111318] p-4">
               <div className="mb-3 flex items-center justify-between gap-3">
                 <div>
@@ -367,7 +537,7 @@ export function Dashboard() {
                 </div>
                 <div className="flex items-center justify-between rounded-md bg-[#181b21] px-3 py-2">
                   <span className="text-zinc-400">Last update</span>
-                  <span className="font-mono text-zinc-300">{account ? new Date().toLocaleString() : "--"}</span>
+                  <span className="font-mono text-zinc-300">{account?.updated_at ? formatDate(account.updated_at) : "--"}</span>
                 </div>
               </div>
             </div>

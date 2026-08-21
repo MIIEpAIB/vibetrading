@@ -48,6 +48,20 @@ def _row_text(value: Any) -> str:
     return str(value or "")
 
 
+def _normalize_parameter_schema(item: dict[str, Any]) -> dict[str, Any]:
+    raw = item.get("parameter_schema")
+    if raw is None:
+        raw = item.get("parameterSchema")
+    if raw is None:
+        raw = item.get("parameter_schema_json")
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, (str, bytes)) and raw:
+        parsed = _json_loads(raw, {})
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
 def _normalize_language(value: Any) -> str:
     language = str(value or "python").strip()
     if language == "json":
@@ -281,7 +295,7 @@ class MySQLStrategyStore:
                     """
                     SELECT version_no, strategy_id, owner_user_id, name, description,
                            strategy_description, language, category, tags_json, code,
-                           code_sha256, created_at
+                           code_sha256, parameter_schema_json, created_at
                     FROM strategy_versions
                     WHERE strategy_id = %s AND owner_user_id = %s
                     ORDER BY version_no DESC
@@ -302,10 +316,35 @@ class MySQLStrategyStore:
                 "tags": list(_json_loads(row["tags_json"], [])),
                 "code": row["code"],
                 "code_sha256": row["code_sha256"],
+                "parameter_schema": _json_loads(row.get("parameter_schema_json"), {}),
                 "createdAt": _row_text(row["created_at"]),
             }
             for row in rows
         ]
+
+    def ensure_current_strategy_versions(self) -> int:
+        """Backfill immutable versions for existing mutable strategy rows."""
+        with self._lock, self._transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM strategy_library ORDER BY user_id, id")
+                rows = cur.fetchall()
+                for row in rows:
+                    record = self._from_row(row)
+                    MySQLStrategyStore._record_strategy_version_with_cursor(
+                        cur,
+                        {
+                            "strategy_id": record.id,
+                            "owner_user_id": int(row.get("user_id") or 0),
+                            "name": record.name,
+                            "description": record.description,
+                            "strategy_description": record.strategyDescription,
+                            "language": record.language,
+                            "category": record.category,
+                            "tags": record.tags,
+                            "code": record.code,
+                        },
+                    )
+        return len(rows)
 
     def delete_strategy(self, strategy_id: str, user_id: int | None = None) -> bool:
         with self._lock, self._transaction() as conn:
@@ -835,10 +874,11 @@ class MySQLStrategyStore:
         owner_user_id = int(item.get("owner_user_id") or 0)
         code = str(item.get("code") or item.get("code_snapshot") or "")
         code_sha256 = hashlib.sha256(code.encode("utf-8")).hexdigest()
+        parameter_schema = _normalize_parameter_schema(item)
         cur.execute(
             """
             SELECT version_no, code_sha256, description, strategy_description,
-                   name, language, category, tags_json
+                   name, language, category, tags_json, parameter_schema_json
             FROM strategy_versions
             WHERE strategy_id = %s AND owner_user_id = %s
             ORDER BY version_no DESC
@@ -855,6 +895,7 @@ class MySQLStrategyStore:
             and latest["language"] == str(item.get("language") or "")
             and latest["category"] == str(item.get("category") or "")
             and list(_json_loads(latest["tags_json"], [])) == list(item.get("tags") or [])
+            and _json_loads(latest.get("parameter_schema_json"), {}) == parameter_schema
         ):
             return
         version_no = int(latest["version_no"]) + 1 if latest else 1
@@ -863,9 +904,9 @@ class MySQLStrategyStore:
             INSERT INTO strategy_versions (
                 strategy_id, owner_user_id, version_no, name, description,
                 strategy_description, language, category, tags_json, code,
-                code_sha256, created_at
+                code_sha256, parameter_schema_json, created_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 strategy_id,
@@ -879,6 +920,7 @@ class MySQLStrategyStore:
                 _json_dumps(list(item.get("tags") or [])),
                 code,
                 code_sha256,
+                _json_dumps(parameter_schema),
                 _now_iso(),
             ),
         )
@@ -916,6 +958,7 @@ class MySQLStrategyStore:
                 tags_json JSON NOT NULL,
                 code MEDIUMTEXT NOT NULL,
                 code_sha256 CHAR(64) NOT NULL,
+                parameter_schema_json JSON NOT NULL,
                 created_at VARCHAR(64) NOT NULL,
                 PRIMARY KEY (version_id),
                 UNIQUE KEY uq_strategy_version (owner_user_id, strategy_id, version_no),
@@ -923,6 +966,7 @@ class MySQLStrategyStore:
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """
         )
+        MySQLStrategyStore._ensure_column(cur, "strategy_versions", "parameter_schema_json", "JSON NULL")
 
     @staticmethod
     def _ensure_index(cur: Any, table: str, index_name: str, columns: str) -> None:

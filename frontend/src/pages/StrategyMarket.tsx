@@ -15,11 +15,10 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, type StrategyLibraryItem, type StrategyMarketAdminItem } from "@/lib/api";
-import { PAPER_EXECUTION_OPTIONS, executionOptionValue, paperExecutionPayload } from "@/lib/paperExecution";
 import { useTranslation } from "@/i18n/I18nProvider";
 import {
   createMarketOwnedStrategy,
-  defaultPaperLimitsForMarketStrategy,
+  defaultShadowRiskPolicyForMarketStrategy,
   getMarketOwnershipTag,
   getStrategyRouteId,
   type MarketBacktestSummary,
@@ -66,7 +65,7 @@ const MARKET_COPY = {
     kicker: "Strategy Market",
     title: "Browse platform strategies and save a copy into your own library.",
     subtitle:
-      "Built-in strategies are free to inspect and favorite. Paid strategies can be purchased locally, then appear in your owned library for editing, export, and paper deployment.",
+      "Built-in strategies are free to inspect and favorite. Paid strategies can be purchased locally, then appear in your owned library for editing, export, and QUANTAXIS shadow deployment.",
     openLibrary: "Open my library",
     sectionHint: "Saved items move into your private strategy library.",
     saved: "Saved",
@@ -350,7 +349,6 @@ export function StrategyMarket() {
   const [backtestingId, setBacktestingId] = useState<string | null>(null);
   const [deployingId, setDeployingId] = useState<string | null>(null);
   const [marketCatalog, setMarketCatalog] = useState<StrategyCatalogItem[]>([]);
-  const [paperExecution, setPaperExecution] = useState("shadow");
 
   useEffect(() => {
     let cancelled = false;
@@ -479,7 +477,7 @@ export function StrategyMarket() {
   const handleDeployPaper = async () => {
     if (!backtestSelection) return;
     if (backtestSelection.summary.status !== "passed") {
-      toast.error(language === "zh-CN" ? "回测未通过，不能转入模拟盘" : "Backtest did not pass; paper deployment is blocked");
+      toast.error(language === "zh-CN" ? "回测未通过，不能转入模拟盘" : "Backtest did not pass; shadow deployment is blocked");
       return;
     }
     setDeployingId(backtestSelection.item.id);
@@ -487,14 +485,19 @@ export function StrategyMarket() {
       const strategy = createMarketOwnedStrategy(backtestSelection.item, "favorite");
       await api.upsertStrategy(strategy);
       setOwnedStrategies((current) => upsertOwnedStrategy(current, strategy));
-      const result = await api.createPaperDeployment({
+      const limits = defaultShadowRiskPolicyForMarketStrategy(backtestSelection.item);
+      const result = await api.createDeployment({
         strategy_id: strategy.id,
-        limits: defaultPaperLimitsForMarketStrategy(backtestSelection.item),
-        ...paperExecutionPayload(paperExecution),
+        target: "SHADOW",
+        market: "CRYPTO",
+        symbols: limits.symbols,
+        timeframe: "1h",
+        parameters: {},
+        risk_policy: limits,
       });
-      await api.startPaperDeployment(result.deployment.deployment_id);
-      toast.success(language === "zh-CN" ? "已启动模拟盘" : "Paper trading started");
-      navigate(`/shadow-trading?paper=${encodeURIComponent(result.deployment.deployment_id)}`);
+      await api.readyDeployment(result.deployment.deployment_id).catch(() => undefined);
+      toast.success(language === "zh-CN" ? "已创建模拟盘部署" : "Shadow deployment created");
+      navigate(`/deployments/${encodeURIComponent(result.deployment.deployment_id)}`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : language === "zh-CN" ? "启动模拟盘失败" : "Failed to start paper trading");
     } finally {
@@ -633,20 +636,6 @@ export function StrategyMarket() {
                   ? (language === "zh-CN" ? "启动中" : "Starting")
                   : (language === "zh-CN" ? "跑模拟盘" : "Run paper")}
               </button>
-              <label className="flex min-w-[13rem] flex-col gap-1 text-xs font-semibold text-muted-foreground">
-                {language === "zh-CN" ? "模拟盘执行" : "Paper execution"}
-                <select
-                  value={paperExecution}
-                  onChange={(event) => setPaperExecution(event.target.value)}
-                  className="h-10 rounded-md border bg-background px-3 text-sm font-medium text-foreground outline-none transition focus:ring-2 focus:ring-primary/25"
-                >
-                  {PAPER_EXECUTION_OPTIONS.map((option) => (
-                    <option key={executionOptionValue(option)} value={executionOptionValue(option)}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
             </div>
             <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
               {[

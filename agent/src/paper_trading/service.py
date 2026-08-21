@@ -63,28 +63,6 @@ def _finite_positive(value: float | None) -> bool:
     return value is not None and math.isfinite(float(value)) and float(value) > 0
 
 
-def _default_broker_order_executor(
-    *,
-    profile_id: str,
-    symbol: str,
-    side: str,
-    quantity: float,
-    order_type: str,
-    limit_price: float | None,
-) -> dict[str, Any]:
-    from src.trading.service import place_order
-
-    return place_order(
-        symbol,
-        profile_id,
-        side=side,
-        quantity=quantity,
-        order_type=order_type.lower(),
-        limit_price=limit_price,
-        time_in_force="day",
-    )
-
-
 class PaperTradingService:
     """Create, manage, and tick paper deployments."""
 
@@ -95,13 +73,11 @@ class PaperTradingService:
         strategy_store: StrategyStoreLike,
         shadow_service: ShadowTradingServiceLike,
         shadow_user_resolver: Any | None = None,
-        broker_order_executor: Any | None = None,
     ) -> None:
         self.store = store
         self.strategy_store = strategy_store
         self.shadow_service = shadow_service
         self.shadow_user_resolver = shadow_user_resolver or (lambda user_id: f"user:{user_id}")
-        self.broker_order_executor = broker_order_executor or _default_broker_order_executor
 
     def create_deployment(
         self,
@@ -263,27 +239,12 @@ class PaperTradingService:
     def _validate_execution_target(self, execution_mode: str, connector_profile_id: str) -> tuple[str, str]:
         mode = str(execution_mode or "shadow").strip().lower()
         if mode not in EXECUTION_MODES:
-            raise PaperTradingError("execution_mode must be shadow or broker_paper")
-        profile_id = str(connector_profile_id or "").strip().lower()
-        if mode == "shadow":
-            return mode, ""
-        if not profile_id:
-            raise PaperTradingError("broker paper execution requires connector_profile_id")
-        try:
-            from src.trading.profiles import profile_by_id
-
-            profile = profile_by_id(profile_id)
-        except Exception as exc:  # noqa: BLE001
-            raise PaperTradingError(str(exc)) from exc
-        if profile.environment != "paper":
-            raise PaperTradingError("broker paper execution only accepts paper connector profiles")
-        if profile.readonly or profile.transport != "broker_sdk" or "orders.place" not in profile.capabilities:
-            raise PaperTradingError("connector_profile_id must support paper order placement")
-        return mode, profile.id
+            raise PaperTradingError("execution_mode must be shadow")
+        return mode, ""
 
     def _generate_signal(self, deployment: PaperDeployment) -> PaperSignal:
         package = self._load_strategy_package(deployment.strategy_snapshot)
-        raw = package.get("paper_signal") or package.get("signal") or package
+        raw = package.get("shadow_signal") or package.get("signal") or package
         if isinstance(raw, list):
             raw = raw[0] if raw else {"action": "HOLD", "reason": "empty signal list"}
         if not isinstance(raw, dict):
@@ -484,8 +445,6 @@ class PaperTradingService:
         signal: PaperSignal,
         decision: PaperRiskDecision,
     ) -> Any:
-        if deployment.execution_mode == "broker_paper":
-            return await self._place_broker_paper_order(deployment, signal, decision)
         return await self._place_shadow_order(deployment, signal, decision)
 
     async def _place_shadow_order(
@@ -505,39 +464,6 @@ class PaperTradingService:
             quantity=decision.quantity,
             price=price,
         )
-
-    async def _place_broker_paper_order(
-        self,
-        deployment: PaperDeployment,
-        signal: PaperSignal,
-        decision: PaperRiskDecision,
-    ) -> dict[str, Any]:
-        _mode, profile_id = self._validate_execution_target(
-            deployment.execution_mode,
-            deployment.connector_profile_id,
-        )
-        order_type = str(deployment.limits.order_type or "MARKET").strip().upper()
-        limit_price = decision.price if order_type == "LIMIT" else None
-        try:
-            from src.trading.profiles import profile_by_id
-
-            profile = profile_by_id(profile_id)
-            symbol = _connector_symbol(profile.connector, signal.symbol)
-            result = self.broker_order_executor(
-                profile_id=profile_id,
-                symbol=symbol,
-                side=signal.action.lower(),
-                quantity=decision.quantity,
-                order_type=order_type,
-                limit_price=limit_price,
-            )
-        except Exception as exc:  # noqa: BLE001
-            result = {"status": "error", "error": str(exc)}
-        return {
-            **(result if isinstance(result, dict) else {"status": "error", "raw": result}),
-            "execution_mode": "broker_paper",
-            "connector_profile_id": profile_id,
-        }
 
     def _link_order(
         self,
@@ -725,13 +651,6 @@ def _optional_float(value: Any) -> float | None:
 def _wallet_balance(account: dict[str, Any], asset: str) -> float:
     asset = asset.upper()
     return float((account.get("accounts") or {}).get(asset, {}).get("balance") or 0.0)
-
-
-def _connector_symbol(connector: str, symbol: str) -> str:
-    normalized = normalize_symbol(symbol)
-    if connector in {"binance", "okx"}:
-        return normalized.replace("_", "-")
-    return normalized
 
 
 def _order_status(order: Any) -> str:

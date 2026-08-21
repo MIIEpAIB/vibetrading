@@ -21,8 +21,8 @@ const NAV = [
   { to: "/library", icon: BookOpen, labelKey: "nav.library" },
   { to: "/community", icon: Users, labelKey: "nav.community" },
   { to: "/api-docs", icon: Code2, labelKey: "nav.apiDocs" },
-  { to: "/shadow-trading", icon: WalletCards, labelKey: "nav.shadowTrading" },
-  { to: "/live-trading", icon: RadioTower, labelKey: "nav.liveTrading" },
+  { to: "/deployments?target=SHADOW", icon: WalletCards, labelKey: "nav.shadowTrading" },
+  { to: "/deployments?target=LIVE", icon: RadioTower, labelKey: "nav.liveTrading" },
   { to: "/messages", icon: MessageSquare, labelKey: "nav.messages" },
   { to: "/personal-settings", icon: UserCog, labelKey: "nav.personalSettings" },
   { to: "/alpha-zoo", icon: Layers, labelKey: "nav.alphaZoo" },
@@ -109,6 +109,7 @@ export function Layout() {
         <nav className={cn("space-y-0.5", collapsed ? "p-1" : "p-2")}>
           {NAV.map(({ to, icon: Icon, labelKey }) => {
             const text = t(labelKey);
+            const routePath = to.split("?")[0];
             return (
               <Link
                 key={to}
@@ -116,7 +117,7 @@ export function Layout() {
                 className={cn(
                   "flex items-center rounded-md text-sm transition-colors",
                   collapsed ? "justify-center p-2" : "gap-3 px-3 py-2",
-                  pathname === to || pathname.startsWith(`${to}/`)
+                  pathname === routePath || pathname.startsWith(`${routePath}/`)
                     ? "bg-primary/10 text-primary font-medium"
                     : "text-muted-foreground hover:bg-muted hover:text-foreground"
                 )}
