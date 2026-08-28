@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import threading
 
 from dataclasses import replace
@@ -8,6 +9,7 @@ from dataclasses import replace
 import pytest
 
 from src.quantaxis_native.adapters import (
+    QuantaxisAdapterError,
     QifiProjectionAdapter,
     QuantaxisDurableStoreConfig,
     QuantaxisEngineAdapter,
@@ -15,7 +17,7 @@ from src.quantaxis_native.adapters import (
     QuantaxisShadowExecutionAdapter,
     BrokerLiveExecutionAdapter,
 )
-from src.quantaxis_native.loader import load_quantaxis_modules, runtime_status
+from src.quantaxis_native.loader import load_quantaxis_modules, runtime_status, _patch_pika_plain_credentials
 from src.quantaxis_native.migration import migrate_quantaxis_native_metadata
 from src.quantaxis_native.models import DeploymentStatus, DeploymentTarget, QuantaxisDeployment, StrategyVersionSnapshot
 from src.quantaxis_native.service import QuantaxisDeploymentService, QuantaxisTradingError
@@ -110,6 +112,19 @@ def test_qaenv_shim_exports_connection_defaults() -> None:
     assert clickhouse_ip
 
 
+def test_qaenv_shim_prefers_authenticated_mongo_uri(monkeypatch) -> None:
+    monkeypatch.setenv("QUANTAXIS_MONGOURI", "mongodb://user:pass@mongo:27017/quantaxis?authSource=admin")
+    monkeypatch.setenv("MONGODB", "mongo")
+    sys.modules.pop("qaenv", None)
+
+    try:
+        from qaenv import mongo_uri
+
+        assert mongo_uri == "mongodb://user:pass@mongo:27017/quantaxis?authSource=admin"
+    finally:
+        sys.modules.pop("qaenv", None)
+
+
 def test_clickhouse_driver_shim_exports_client_and_helpers() -> None:
     from clickhouse_driver import Client
     from clickhouse_driver.util.helpers import column_chunks
@@ -179,6 +194,16 @@ def test_pika_shim_exports_connection_bits() -> None:
     assert hasattr(pika, "PlainCredentials")
 
 
+def test_pika_shim_accepts_connection_heartbeat() -> None:
+    import pika
+
+    params = pika.ConnectionParameters(host="mq", heartbeat=600, blocked_connection_timeout=30)
+
+    assert params.host == "mq"
+    assert params.heartbeat == 600
+    assert params.blocked_connection_timeout == 30
+
+
 def test_quantaxis_loader_redirects_home_to_runtime_dir(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("QUANTAXIS_PATH", "/opt/QUANTAXIS")
     monkeypatch.setenv("VIBE_QUANTAXIS_HOME", str(tmp_path))
@@ -189,6 +214,25 @@ def test_quantaxis_loader_redirects_home_to_runtime_dir(monkeypatch, tmp_path) -
     ensure_quantaxis_namespace()
 
     assert str(tmp_path) == os.environ["HOME"]
+
+
+def test_quantaxis_loader_patches_plain_credentials_compatibility(monkeypatch) -> None:
+    import pika
+
+    class LegacyPlainCredentials:
+        def __init__(self, username: str, password: str) -> None:
+            self.username = username
+            self.password = password
+            self.erase_on_connect = False
+
+    monkeypatch.setattr(pika, "PlainCredentials", LegacyPlainCredentials)
+
+    _patch_pika_plain_credentials()
+    creds = pika.PlainCredentials("u", "p", erase_on_connect=True)
+
+    assert creds.username == "u"
+    assert creds.password == "p"
+    assert creds.erase_on_connect is True
 
 
 def test_runtime_status_reports_available(monkeypatch, tmp_path) -> None:
@@ -222,6 +266,7 @@ def test_deployment_service_creates_immutable_snapshot_and_promotes() -> None:
     assert shadow.strategy_snapshot.version_no == 2
     assert shadow.strategy_snapshot.parameter_schema == {"fast": {"type": "integer"}}
     assert shadow.account_cookie.startswith("qa:shadow:7:")
+    assert shadow.risk_policy["initial_cash"] == 100000.0
 
     ready = service.set_status(shadow.deployment_id, user_id=7, action="ready")
     assert ready.status == DeploymentStatus.READY
@@ -252,6 +297,27 @@ def test_deployment_service_creates_immutable_snapshot_and_promotes() -> None:
         created_at="2026-08-20T00:00:00Z",
     )
     assert duplicate["event_id"] == store.events[-1]["event_id"]
+
+
+def test_deployment_service_backfills_shadow_initial_cash_on_read() -> None:
+    store = _MemoryDeploymentStore()
+    service = QuantaxisDeploymentService(store=store, strategy_store=_StrategyStore())
+    deployment = QuantaxisDeployment.create(
+        user_id=7,
+        target=DeploymentTarget.SHADOW,
+        strategy_snapshot=StrategyVersionSnapshot.from_version_row(_StrategyStore().list_strategy_versions("s1", user_id=7)[0]),
+        market="crypto",
+        symbols=("BTC-USDT",),
+        timeframe="1h",
+        parameters={"initial_capital": 250000},
+        risk_policy={"max_order_notional": 100},
+    )
+    store.create(deployment)
+
+    loaded = service.get_deployment(deployment.deployment_id, user_id=7)
+
+    assert loaded.risk_policy["initial_cash"] == 250000.0
+    assert store.items[deployment.deployment_id].risk_policy["initial_cash"] == 250000.0
 
 
 def test_deployment_rejects_strategy_that_mutates_account_boundary() -> None:
@@ -342,6 +408,285 @@ def test_deployment_signals_run_through_restricted_qastrategy_runtime(monkeypatc
     assert signal["intent"]["side"] == "BUY"
     assert signal["intent"]["price"] == 101.0
     assert any(event["event_scope"] == "signal" and event["event_type"] == "strategy.signal" for event in store.events)
+
+
+def test_restricted_runtime_coerces_legacy_generate_signals_price_event(monkeypatch) -> None:
+    class FakeQAStrategyBase:
+        pass
+
+    class FakeModules:
+        strategy_cta_base = FakeQAStrategyBase
+
+    monkeypatch.setattr("src.quantaxis_native.strategy_runtime.load_quantaxis_modules", lambda: FakeModules)
+    runtime = RestrictedQAStrategyRuntime()
+    snapshot = StrategyVersionSnapshot(
+        strategy_id="classic-turtle-trading",
+        version_no=1,
+        owner_user_id=7,
+        name="Classic Turtle",
+        description="",
+        strategy_description="",
+        language="python",
+        category="trend",
+        tags=(),
+        code='''import pandas as pd
+
+
+def generate_signals(data):
+    close = data["close"].astype(float)
+    return (close > 0).astype(float)
+''',
+        code_sha256="sha",
+        created_at="2026-08-20T00:00:00Z",
+    )
+    deployment = QuantaxisDeployment.create(
+        user_id=7,
+        target=DeploymentTarget.SHADOW,
+        strategy_snapshot=snapshot,
+        market="crypto",
+        symbols=("BTC_USDT",),
+        timeframe="1m",
+        parameters={},
+        risk_policy={},
+    )
+
+    result = runtime.evaluate_tick(
+        replace(deployment, status=DeploymentStatus.RUNNING),
+        market_event={"event_id": "bar-1", "symbol": "BTC_USDT", "price": 67000.0},
+        account_snapshot={},
+    )
+
+    assert result["signal"] == {
+        "action": "HOLD",
+        "signal": 1.0,
+        "reason": "legacy vector signal evaluated without order intent",
+    }
+    assert result["intent"] is None
+
+
+def test_restricted_runtime_coerces_wrapped_qastrategy_price_event(monkeypatch) -> None:
+    class FakeQAStrategyBase:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+    class FakeModules:
+        strategy_cta_base = FakeQAStrategyBase
+
+    monkeypatch.setattr("src.quantaxis_native.strategy_runtime.load_quantaxis_modules", lambda: FakeModules)
+    runtime = RestrictedQAStrategyRuntime()
+    snapshot = StrategyVersionSnapshot(
+        strategy_id="classic-turtle-trading",
+        version_no=1,
+        owner_user_id=7,
+        name="Classic Turtle",
+        description="",
+        strategy_description="",
+        language="python",
+        category="trend",
+        tags=(),
+        code='''import pandas as pd
+
+
+def generate_signals(data):
+    close = data["close"].astype(float)
+    return (close > 0).astype(float)
+
+
+class SignalEngine:
+    def generate(self, data_map):
+        out = {}
+        for code, df in data_map.items():
+            out[code] = generate_signals(df)
+        return out
+
+
+class QAStrategy(QAStrategyCtaBase):
+    def on_tick(self, context):
+        frame = pd.DataFrame(context["history"])
+        symbol = str(context["market_event"].get("symbol") or "default")
+        signal = SignalEngine().generate({symbol: frame})
+        return {"action": "HOLD", "signal": signal[symbol].iloc[-1]}
+''',
+        code_sha256="sha",
+        created_at="2026-08-20T00:00:00Z",
+    )
+    deployment = QuantaxisDeployment.create(
+        user_id=7,
+        target=DeploymentTarget.SHADOW,
+        strategy_snapshot=snapshot,
+        market="crypto",
+        symbols=("BTC_USDT",),
+        timeframe="1m",
+        parameters={},
+        risk_policy={},
+    )
+
+    result = runtime.evaluate_tick(
+        replace(deployment, status=DeploymentStatus.RUNNING),
+        market_event={"event_id": "bar-1", "symbol": "BTC_USDT", "price": 67000.0},
+        account_snapshot={},
+    )
+
+    assert result["signal"]["action"] == "HOLD"
+    assert result["signal"]["signal"] == 1.0
+    assert result["intent"] is None
+
+
+def test_restricted_runtime_falls_back_when_legacy_wrapper_passes_dict_to_signal_engine(monkeypatch) -> None:
+    class FakeQAStrategyBase:
+        pass
+
+    class FakeModules:
+        strategy_cta_base = FakeQAStrategyBase
+
+    monkeypatch.setattr("src.quantaxis_native.strategy_runtime.load_quantaxis_modules", lambda: FakeModules)
+    runtime = RestrictedQAStrategyRuntime()
+    snapshot = StrategyVersionSnapshot(
+        strategy_id="classic-turtle-trading",
+        version_no=1,
+        owner_user_id=7,
+        name="Classic Turtle",
+        description="",
+        strategy_description="",
+        language="python",
+        category="trend",
+        tags=(),
+        code='''import pandas as pd
+
+
+def generate_signals(data):
+    close = data["close"].astype(float)
+    return (close > 0).astype(float)
+
+
+class SignalEngine:
+    def generate(self, data_map):
+        out = {}
+        for code, df in data_map.items():
+            out[code] = generate_signals(df)
+        return out
+
+
+class QAStrategy(QAStrategyCtaBase):
+    def on_tick(self, context):
+        signal = SignalEngine().generate({"BTC_USDT": context["market_event"]})
+        return {"action": "HOLD", "signal": signal["BTC_USDT"].iloc[-1]}
+''',
+        code_sha256="sha",
+        created_at="2026-08-20T00:00:00Z",
+    )
+    deployment = QuantaxisDeployment.create(
+        user_id=7,
+        target=DeploymentTarget.SHADOW,
+        strategy_snapshot=snapshot,
+        market="crypto",
+        symbols=("BTC_USDT",),
+        timeframe="1m",
+        parameters={},
+        risk_policy={},
+    )
+
+    result = runtime.evaluate_tick(
+        replace(deployment, status=DeploymentStatus.RUNNING),
+        market_event={"event_id": "bar-1", "symbol": "BTC_USDT", "close": 67000.0},
+        account_snapshot={},
+    )
+
+    assert result["signal"] == {
+        "action": "HOLD",
+        "signal": {"BTC_USDT": 1.0},
+        "reason": "legacy vector signal evaluated without order intent",
+    }
+    assert result["intent"] is None
+
+
+def test_restricted_runtime_reports_missing_ohlcv_field_instead_of_key_error(monkeypatch) -> None:
+    class FakeQAStrategyBase:
+        pass
+
+    class FakeModules:
+        strategy_cta_base = FakeQAStrategyBase
+
+    monkeypatch.setattr("src.quantaxis_native.strategy_runtime.load_quantaxis_modules", lambda: FakeModules)
+    runtime = RestrictedQAStrategyRuntime()
+    snapshot = StrategyVersionSnapshot(
+        strategy_id="legacy-trend",
+        version_no=1,
+        owner_user_id=7,
+        name="Legacy Trend",
+        description="",
+        strategy_description="",
+        language="python",
+        category="trend",
+        tags=(),
+        code='''class QAStrategy(QAStrategyCtaBase):
+    def on_tick(self, context):
+        return {"action": "HOLD", "signal": context["market_event"]["close"]}
+''',
+        code_sha256="sha",
+        created_at="2026-08-20T00:00:00Z",
+    )
+    deployment = QuantaxisDeployment.create(
+        user_id=7,
+        target=DeploymentTarget.SHADOW,
+        strategy_snapshot=snapshot,
+        market="crypto",
+        symbols=("BTC_USDT",),
+        timeframe="1m",
+        parameters={},
+        risk_policy={},
+    )
+
+    result = runtime.evaluate_tick(
+        replace(deployment, status=DeploymentStatus.RUNNING),
+        market_event={"event_id": "bar-1", "symbol": "BTC_USDT"},
+        account_snapshot={},
+    )
+
+    assert result["signal"] == {"action": "HOLD", "reason": "missing market data field: close"}
+    assert result["intent"] is None
+
+
+def test_default_crypto_market_event_uses_latest_kline(monkeypatch) -> None:
+    def fake_get_klines(symbol: str, timeframe: str, limit: int) -> dict[str, object]:
+        return {
+            "status": "ok",
+            "symbol": "BTC/USDT",
+            "timeframe": timeframe,
+            "bars": [
+                {
+                    "time": "2026-08-25T09:00:00Z",
+                    "timestamp": 1787658000000,
+                    "symbol": "BTC/USDT",
+                    "open": 66900.0,
+                    "high": 67100.0,
+                    "low": 66800.0,
+                    "close": 67000.0,
+                    "volume": 12.5,
+                },
+            ],
+        }
+
+    monkeypatch.setattr("src.crypto_market.get_klines", fake_get_klines)
+    deployment = QuantaxisDeployment.create(
+        user_id=7,
+        target=DeploymentTarget.SHADOW,
+        strategy_snapshot=StrategyVersionSnapshot.from_version_row(_StrategyStore().list_strategy_versions("s1", user_id=7)[0]),
+        market="crypto",
+        symbols=("BTC_USDT",),
+        timeframe="1h",
+        parameters={},
+        risk_policy={},
+    )
+
+    event = QuantaxisDeploymentService._default_market_event(deployment)
+
+    assert event["symbol"] == "BTC/USDT"
+    assert event["timeframe"] == "1h"
+    assert event["close"] == 67000.0
+    assert event["price"] == 67000.0
+    assert event["open"] == 66900.0
+    assert event["volume"] == 12.5
 
 
 def test_live_deployment_requires_broker_binding() -> None:
@@ -556,6 +901,82 @@ def test_startup_recovery_rehydrates_shadow_and_restores_task(monkeypatch) -> No
     assert any(event["event_type"] == "deployment.recovered" for event in store.events)
 
 
+def test_startup_recovery_resumes_maintenance_stopped_shadow(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.quantaxis_native.service.runtime_status",
+        lambda: {
+            "available": True,
+            "requires": {"mongo": "mongodb://mongo:27017", "qifi_password": "configured"},
+        },
+    )
+    store = _MemoryDeploymentStore()
+    engine = _FakeEngineAdapter()
+    service = QuantaxisDeploymentService(
+        store=store,
+        strategy_store=_StrategyStore(),
+        qifi_adapter=_FakeQifiAdapter(),
+        pubsub_adapter=_NoopPubSub(),
+        engine_adapter=engine,
+    )
+    deployment = service.create_deployment(
+        user_id=7,
+        strategy_id="s1",
+        target="SHADOW",
+        version_no=2,
+        market="crypto",
+        symbols=["BTC-USDT"],
+        timeframe="1h",
+        parameters={},
+        risk_policy={"initial_cash": 100000},
+    )
+    store.update(replace(deployment, status=DeploymentStatus.STOPPED, stopped_at=None))
+
+    result = service.recover_startup(worker_id="worker-1")
+
+    recovered = service.get_deployment(deployment.deployment_id, user_id=7)
+    assert result == {"checked": 1, "recovery_required": 0, "resumed": 1}
+    assert recovered.status == DeploymentStatus.RUNNING
+    assert engine.registered[0]["deployment_id"] == deployment.deployment_id
+
+
+def test_startup_recovery_does_not_resume_user_stopped_shadow(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.quantaxis_native.service.runtime_status",
+        lambda: {
+            "available": True,
+            "requires": {"mongo": "mongodb://mongo:27017", "qifi_password": "configured"},
+        },
+    )
+    store = _MemoryDeploymentStore()
+    engine = _FakeEngineAdapter()
+    service = QuantaxisDeploymentService(
+        store=store,
+        strategy_store=_StrategyStore(),
+        qifi_adapter=_FakeQifiAdapter(),
+        pubsub_adapter=_NoopPubSub(),
+        engine_adapter=engine,
+    )
+    deployment = service.create_deployment(
+        user_id=7,
+        strategy_id="s1",
+        target="SHADOW",
+        version_no=2,
+        market="crypto",
+        symbols=["BTC-USDT"],
+        timeframe="1h",
+        parameters={},
+        risk_policy={"initial_cash": 100000},
+    )
+    store.update(replace(deployment, status=DeploymentStatus.STOPPED, stopped_at="2026-08-20T00:00:00Z"))
+
+    result = service.recover_startup(worker_id="worker-1")
+
+    recovered = service.get_deployment(deployment.deployment_id, user_id=7)
+    assert result == {"checked": 0, "recovery_required": 0, "resumed": 0}
+    assert recovered.status == DeploymentStatus.STOPPED
+    assert engine.registered == []
+
+
 def test_startup_recovery_requires_action_when_qifi_rehydrate_fails(monkeypatch) -> None:
     monkeypatch.setattr(
         "src.quantaxis_native.service.runtime_status",
@@ -589,6 +1010,82 @@ def test_startup_recovery_requires_action_when_qifi_rehydrate_fails(monkeypatch)
     assert result == {"checked": 1, "recovery_required": 1, "resumed": 0}
     assert recovered.status == DeploymentStatus.RECOVERY_REQUIRED
     assert "qifi unavailable" in recovered.recovery_reason
+
+
+def test_shadow_recovery_button_path_rehydrates_and_resumes(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.quantaxis_native.service.runtime_status",
+        lambda: {
+            "available": True,
+            "requires": {"mongo": "mongodb://mongo:27017", "qifi_password": "configured"},
+        },
+    )
+    store = _MemoryDeploymentStore()
+    engine = _FakeEngineAdapter()
+    service = QuantaxisDeploymentService(
+        store=store,
+        strategy_store=_StrategyStore(),
+        qifi_adapter=_FakeQifiAdapter(),
+        pubsub_adapter=_NoopPubSub(),
+        engine_adapter=engine,
+    )
+    deployment = service.create_deployment(
+        user_id=7,
+        strategy_id="s1",
+        target="SHADOW",
+        version_no=2,
+        market="crypto",
+        symbols=["BTC-USDT"],
+        timeframe="1h",
+        parameters={},
+        risk_policy={"initial_cash": 100000},
+    )
+    store.update(replace(deployment, status=DeploymentStatus.RECOVERY_REQUIRED, recovery_reason="qifi unavailable"))
+
+    recovered = service.recover_shadow_deployment(deployment.deployment_id, user_id=7, worker_id="api:1")
+
+    assert recovered.status == DeploymentStatus.RUNNING
+    assert recovered.recovery_reason == ""
+    assert engine.registered[0]["deployment_id"] == deployment.deployment_id
+    assert store.tasks["qrtask:" + deployment.deployment_id + ":tick"]["status"] == "registered"
+    assert any(event["event_type"] == "deployment.recovered" for event in store.events)
+
+
+def test_shadow_recovery_button_path_resumes_stopped_deployment(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.quantaxis_native.service.runtime_status",
+        lambda: {
+            "available": True,
+            "requires": {"mongo": "mongodb://mongo:27017", "qifi_password": "configured"},
+        },
+    )
+    store = _MemoryDeploymentStore()
+    engine = _FakeEngineAdapter()
+    service = QuantaxisDeploymentService(
+        store=store,
+        strategy_store=_StrategyStore(),
+        qifi_adapter=_FakeQifiAdapter(),
+        pubsub_adapter=_NoopPubSub(),
+        engine_adapter=engine,
+    )
+    deployment = service.create_deployment(
+        user_id=7,
+        strategy_id="s1",
+        target="SHADOW",
+        version_no=2,
+        market="crypto",
+        symbols=["BTC-USDT"],
+        timeframe="1h",
+        parameters={},
+        risk_policy={"initial_cash": 100000},
+    )
+    store.update(replace(deployment, status=DeploymentStatus.STOPPED, stopped_at="2026-08-20T00:00:00Z"))
+
+    recovered = service.recover_shadow_deployment(deployment.deployment_id, user_id=7, worker_id="api:1")
+
+    assert recovered.status == DeploymentStatus.RUNNING
+    assert recovered.stopped_at is None
+    assert engine.registered[0]["deployment_id"] == deployment.deployment_id
 
 
 def test_live_recovery_reconciles_broker_before_resume(monkeypatch) -> None:
@@ -1121,6 +1618,59 @@ def test_qifi_adapter_submits_order_through_quantaxis_account(monkeypatch) -> No
     assert result["snapshot"]["orders"] == [{"order_id": "coid-1", "instrument_id": "BTC_USDT", "volume": 2, "limit_price": 100.0, "towards": 1, "seqno": 7}]
 
 
+def test_qifi_adapter_rejects_quantities_that_quantaxis_would_truncate(monkeypatch) -> None:
+    deployment = _deployment(risk_policy={"initial_cash": 100000})
+
+    class FakeQifiAccount:
+        def initial(self) -> None:
+            pass
+
+    class FakeModules:
+        qifi_account = FakeQifiAccount
+
+    monkeypatch.setattr("src.quantaxis_native.adapters.load_quantaxis_modules", lambda: FakeModules)
+    adapter = QifiProjectionAdapter(config=_durable_config())
+
+    with pytest.raises(QuantaxisAdapterError, match="at least 1"):
+        adapter.submit_order_intent(
+            deployment,
+            client_order_id="coid-1",
+            symbol="btc-usdt",
+            side="BUY",
+            quantity=0.5,
+            price=100,
+        )
+
+    with pytest.raises(QuantaxisAdapterError, match="integer lot"):
+        adapter.submit_order_intent(
+            deployment,
+            client_order_id="coid-2",
+            symbol="btc-usdt",
+            side="BUY",
+            quantity=1.5,
+            price=100,
+        )
+
+
+def test_shadow_execution_rejects_fractional_quantity_before_quantaxis_market_load(monkeypatch) -> None:
+    deployment = _deployment(risk_policy={"initial_cash": 100000})
+    monkeypatch.setattr(
+        "src.quantaxis_native.adapters.load_quantaxis_modules",
+        lambda: pytest.fail("QAMarket should not load for invalid quantity"),
+    )
+    adapter = QuantaxisShadowExecutionAdapter(qifi_adapter=_FakeQifiAdapter())
+
+    with pytest.raises(QuantaxisAdapterError, match="at least 1"):
+        adapter.execute_order_intent(
+            deployment,
+            client_order_id="coid-1",
+            symbol="btc-usdt",
+            side="BUY",
+            quantity=0.5,
+            price=100,
+        )
+
+
 def test_shadow_execution_adapter_uses_qamarket_rules_and_qifi() -> None:
     deployment = _deployment(risk_policy={"initial_cash": 100000})
     qifi = _FakeQifiAdapter()
@@ -1294,6 +1844,87 @@ def test_service_submits_qifi_order_intent_and_publishes_order(monkeypatch) -> N
     assert any(event["event_scope"] == "order" and event["event_type"] == "order.changed" for event in store.events)
 
 
+def test_service_submits_shadow_test_signals_through_full_event_path(monkeypatch) -> None:
+    monkeypatch.setattr("src.quantaxis_native.service.runtime_status", lambda: {"available": True})
+    monkeypatch.setattr("src.quantaxis_native.service.load_quantaxis_modules", lambda: object())
+    store = _MemoryDeploymentStore()
+    qifi = _FakeQifiAdapter()
+    service = QuantaxisDeploymentService(
+        store=store,
+        strategy_store=_StrategyStore(),
+        qifi_adapter=qifi,
+        pubsub_adapter=_NoopPubSub(),
+        shadow_execution_adapter=QuantaxisShadowExecutionAdapter(qifi_adapter=qifi),
+    )
+    deployment = service.create_deployment(
+        user_id=7,
+        strategy_id="s1",
+        target="SHADOW",
+        version_no=2,
+        market="crypto",
+        symbols=["BTC-USDT"],
+        timeframe="1h",
+        parameters={},
+        risk_policy={"initial_cash": 100000, "max_order_notional": 1000},
+    )
+    store.update(replace(deployment, status=DeploymentStatus.RUNNING))
+
+    for signal_type in ("BUY_OPEN", "SELL_CLOSE", "SELL_OPEN", "BUY_CLOSE"):
+        result = service.submit_shadow_test_signal(
+            deployment.deployment_id,
+            user_id=7,
+            signal_type=signal_type,
+            symbol="BTC_USDT",
+            quantity=1,
+            price=100,
+        )
+        assert result["signal"]["intent"]["side"] == signal_type
+
+    assert [item["side"] for item in qifi.submitted[-4:]] == ["BUY_OPEN", "SELL_CLOSE", "SELL_OPEN", "BUY_CLOSE"]
+    assert {event["event_scope"] for event in store.events} >= {"signal", "order", "trade", "account"}
+
+
+def test_service_skips_shadow_test_signal_when_it_exceeds_max_notional(monkeypatch) -> None:
+    monkeypatch.setattr("src.quantaxis_native.service.runtime_status", lambda: {"available": True})
+    monkeypatch.setattr("src.quantaxis_native.service.load_quantaxis_modules", lambda: object())
+    store = _MemoryDeploymentStore()
+    qifi = _FakeQifiAdapter()
+    service = QuantaxisDeploymentService(
+        store=store,
+        strategy_store=_StrategyStore(),
+        qifi_adapter=qifi,
+        pubsub_adapter=_NoopPubSub(),
+    )
+    deployment = service.create_deployment(
+        user_id=7,
+        strategy_id="s1",
+        target="SHADOW",
+        version_no=2,
+        market="crypto",
+        symbols=["BTC-USDT"],
+        timeframe="1h",
+        parameters={},
+        risk_policy={"initial_cash": 100000, "max_order_notional": 1000},
+    )
+    store.update(replace(deployment, status=DeploymentStatus.RUNNING))
+
+    result = service.submit_shadow_test_signal(
+        deployment.deployment_id,
+        user_id=7,
+        signal_type="BUY_OPEN",
+        symbol="BTC_USDT",
+        quantity=1,
+        price=67000,
+    )
+
+    assert result["execution"]["status"] == "skipped"
+    assert result["execution"]["reason"] == "order notional exceeds deployment max_order_notional; execution skipped"
+    assert qifi.submitted == []
+    assert any(event["event_scope"] == "signal" for event in store.events)
+    skipped = next(event for event in store.events if event["event_type"] == "order.skipped")
+    assert skipped["payload"]["intent"]["price"] == 67000.0
+
+
 def test_service_executes_shadow_order_through_qamarket_qifi(monkeypatch) -> None:
     monkeypatch.setattr("src.quantaxis_native.service.runtime_status", lambda: {"available": True})
     monkeypatch.setattr("src.quantaxis_native.service.load_quantaxis_modules", lambda: object())
@@ -1382,6 +2013,85 @@ def test_service_executes_shadow_tick_through_shared_strategy_pipeline(monkeypat
     assert qifi.submitted[0]["symbol"] == "BTC_USDT"
     assert qifi.submitted[0]["fill_immediately"] is True
     assert {event["event_scope"] for event in store.events} >= {"market", "signal", "order", "trade", "account"}
+    offset = store.get_event_offset(
+        deployment_id=deployment.deployment_id,
+        consumer_name="worker:tick:worker-1",
+        event_scope="market",
+    )
+    assert offset["last_event_id"] == "bar-1"
+
+
+def test_service_skips_shadow_tick_intent_below_qifi_lot_without_failing(monkeypatch) -> None:
+    monkeypatch.setattr("src.quantaxis_native.service.runtime_status", lambda: {"available": True})
+    monkeypatch.setattr("src.quantaxis_native.service.load_quantaxis_modules", lambda: object())
+    monkeypatch.setattr(
+        "src.quantaxis_native.adapters.load_quantaxis_modules",
+        lambda: pytest.fail("QAMarket should not load for invalid quantity"),
+    )
+
+    class FakeQAStrategyBase:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+    class FakeModules:
+        strategy_cta_base = FakeQAStrategyBase
+
+    class FractionalQAStrategyStore(_StrategyStore):
+        def list_strategy_versions(self, strategy_id: str, user_id: int | None = None):
+            rows = super().list_strategy_versions(strategy_id, user_id=user_id)
+            return [
+                {
+                    **rows[0],
+                    "code": (
+                        "class Strategy(QAStrategyCtaBase):\n"
+                        "    def on_tick(self, context):\n"
+                        "        event = context['market_event']\n"
+                        "        return {\n"
+                        "            'action': 'BUY',\n"
+                        "            'symbol': event['symbol'],\n"
+                        "            'quantity': 0.5,\n"
+                        "            'price': event['close'],\n"
+                        "            'reason': 'fractional crypto size',\n"
+                        "        }\n"
+                    ),
+                }
+            ]
+
+    monkeypatch.setattr("src.quantaxis_native.strategy_runtime.load_quantaxis_modules", lambda: FakeModules)
+    store = _MemoryDeploymentStore()
+    qifi = _FakeQifiAdapter()
+    service = QuantaxisDeploymentService(
+        store=store,
+        strategy_store=FractionalQAStrategyStore(),
+        qifi_adapter=qifi,
+        pubsub_adapter=_NoopPubSub(),
+    )
+    deployment = service.create_deployment(
+        user_id=7,
+        strategy_id="s1",
+        target="SHADOW",
+        version_no=2,
+        market="crypto",
+        symbols=["BTC-USDT"],
+        timeframe="1h",
+        parameters={},
+        risk_policy={"initial_cash": 100000, "max_order_notional": 1000},
+    )
+    store.update(replace(deployment, status=DeploymentStatus.RUNNING))
+
+    result = service.execute_deployment_tick(
+        deployment.deployment_id,
+        user_id=7,
+        market_event={"event_id": "bar-1", "symbol": "BTC_USDT", "close": 101, "datetime": "2026-08-20 09:30:00"},
+        worker_id="worker-1",
+    )
+
+    assert result["execution"]["status"] == "skipped"
+    assert result["execution"]["reason"] == "quantity is below the QIFI minimum executable lot; execution skipped"
+    assert qifi.submitted == []
+    assert any(event["event_scope"] == "signal" for event in store.events)
+    skipped = next(event for event in store.events if event["event_type"] == "order.skipped")
+    assert skipped["payload"]["intent"]["quantity"] == 0.5
     offset = store.get_event_offset(
         deployment_id=deployment.deployment_id,
         consumer_name="worker:tick:worker-1",

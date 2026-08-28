@@ -442,6 +442,8 @@ docker compose up --build
 
 Docker 默认将后端发布在 `127.0.0.1:8899`，并以非 root 容器用户运行应用。如果你有意将 API 暴露到本机之外，请设置强 `API_AUTH_KEY`，并让客户端发送 `Authorization: Bearer <key>`。
 
+用户注册和登录不走 QUANTAXIS QIFI。它们使用项目自己的 MySQL 认证表；QIFI 只用于部署账户快照和 paper trading 状态。
+
 ### Path B: Local install
 
 ```bash

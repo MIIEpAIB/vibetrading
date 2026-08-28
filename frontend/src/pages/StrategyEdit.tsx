@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { AlertTriangle, ArrowLeft, Check, ExternalLink, FileCode2, Play } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Check, Database, ExternalLink, FileCode2, Play } from "lucide-react";
 import { toast } from "sonner";
 import {
   api,
@@ -19,6 +19,7 @@ import {
   getStrategyRouteId,
   resolveStrategyRouteId,
 } from "@/lib/strategyMarketplace";
+import { quantaxisStarterCode, toQuantaxisStrategyCode } from "@/lib/quantaxisStrategy";
 
 type StrategyLanguage = "javascript" | "python" | "cpp" | "rust" | "pine";
 type StrategyStatus = "draft" | "testing" | "live" | "archived";
@@ -191,16 +192,7 @@ const exchangeSymbols: Record<BacktestExchange, string[]> = {
   ],
 };
 
-const starterCode = `# Strategy idea
-# Replace this draft with your entry, exit, sizing, and risk rules.
-
-def generate_signals(data):
-    close = data["close"]
-    fast = close.rolling(20).mean()
-    slow = close.rolling(60).mean()
-    signal = (fast > slow).astype(int)
-    return signal.diff().fillna(0)
-`;
+const starterCode = quantaxisStarterCode;
 
 function createId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -343,7 +335,7 @@ function catalogItemToStrategy(item: StrategyMarketAdminItem): StrategyLibraryIt
     category: item.category || "utility",
     status: "draft",
     tags: item.tags ?? [],
-    code: item.code_snapshot || "",
+    code: toQuantaxisStrategyCode(item.code_snapshot || "", item.name || item.id),
     createdAt: item.published_at || item.updated_at || now,
     updatedAt: item.updated_at || now,
   };
@@ -364,6 +356,7 @@ export function StrategyEdit() {
   const [remoteReady, setRemoteReady] = useState(false);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
+  const [quantaxisRunning, setQuantaxisRunning] = useState(false);
   const [backtestResult, setBacktestResult] = useState<StrategyMarketBacktestResponse | null>(null);
   const [backtestRun, setBacktestRun] = useState<RunData | null>(null);
   const [backtestRunLoading, setBacktestRunLoading] = useState(false);
@@ -395,6 +388,9 @@ export function StrategyEdit() {
       saved: "已保存",
       run: "开始回测",
       running: "回测中",
+      quantaxisRun: "QUANTAXIS 回测",
+      quantaxisRunning: "QUANTAXIS 执行中",
+      backtestGuide: "模拟回测会返回 Sharpe、收益曲线、交易次数等报表；QUANTAXIS 回测会创建一个 SHADOW 部署，用来查看运行事件、信号和账户数据。",
       result: "回测结果",
       detail: "详细结果",
       openRun: "打开运行详情",
@@ -452,6 +448,9 @@ export function StrategyEdit() {
       saved: "Saved",
       run: "Run Backtest",
       running: "Backtesting",
+      quantaxisRun: "QUANTAXIS Backtest",
+      quantaxisRunning: "Running QUANTAXIS",
+      backtestGuide: "Simulated backtest returns reports such as Sharpe, equity curve, and trade count; QUANTAXIS backtest creates a SHADOW deployment for runtime events, signals, and account data.",
       result: "Backtest Result",
       detail: "Detailed Result",
       openRun: "Open run detail",
@@ -515,8 +514,9 @@ export function StrategyEdit() {
         if (cancelled) return;
         setRemoteReady(true);
         const loaded = findStrategyByRouteId(payload.strategies, routeStrategyId, resolvedStrategyId);
-        const catalogItem = catalogPayload.items.find((item) => item.id === resolvedStrategyId || item.id === routeStrategyId);
-        setStrategy(loaded ? normalizeOwnedStrategy(loaded) : catalogItem ? catalogItemToStrategy(catalogItem) : null);
+        const catalogItem = catalogPayload.items.find((item) => item.id === resolvedStrategyId || item.id === routeStrategyId || getStrategyRouteId(item.id) === routeStrategyId);
+        const selected = loaded ? normalizeOwnedStrategy(loaded) : catalogItem ? catalogItemToStrategy(catalogItem) : null;
+        setStrategy(selected ? { ...selected, code: toQuantaxisStrategyCode(selected.code, selected.name) } : null);
       })
       .catch((error) => {
         if (cancelled) return;
@@ -629,6 +629,57 @@ export function StrategyEdit() {
     }
   };
 
+  const handleQuantaxisBacktest = async () => {
+    if (!strategy) return;
+    setQuantaxisRunning(true);
+    try {
+      await persistStrategy(strategy);
+      const initialCapital = Number(backtestForm.initialCapital) || 50000;
+      const quantaxisSymbol = backtestForm.symbol.replace(/-/g, "_");
+      const selectedExchange = exchangeOptions.find((option) => option.value === backtestForm.exchange) ?? exchangeOptions[0];
+      const selectedDataSource = dataSourceOptions.find((option) => option.value === backtestForm.dataSource) ?? dataSourceOptions[0];
+      const result = await api.createDeployment({
+        strategy_id: strategy.id,
+        target: "SHADOW",
+        market: "CRYPTO",
+        symbols: [quantaxisSymbol],
+        timeframe: backtestForm.interval.toLowerCase(),
+        parameters: {
+          quantaxis_backtest: true,
+          strategy_id: strategy.id,
+          symbol: quantaxisSymbol,
+          timeframe: backtestForm.interval,
+          source: selectedDataSource.value,
+          exchange: backtestForm.exchange,
+          exchange_label: language === "zh-CN" ? selectedExchange.labelZh : selectedExchange.labelEn,
+          mode: backtestForm.mode,
+          initial_capital: initialCapital,
+          trading_currency: backtestForm.tradingCurrency,
+          quote_currency: backtestForm.quoteCurrency,
+          ...backtestForm.parameters,
+        },
+        risk_policy: {
+          initial_cash: initialCapital,
+          symbols: [quantaxisSymbol],
+          allowed_sides: ["BUY", "SELL"],
+          max_order_notional: Math.max(Number(backtestForm.parameters.orderValue) || 100, 100),
+          max_total_exposure: initialCapital,
+          max_trades_per_day: 12,
+          min_cash_buffer: Math.max(100, Math.round(initialCapital * 0.1)),
+          default_order_notional: Math.max(Number(backtestForm.parameters.orderValue) || 100, 100),
+          order_type: "MARKET",
+        },
+      });
+      await api.readyDeployment(result.deployment.deployment_id).catch(() => undefined);
+      toast.success(language === "zh-CN" ? "QUANTAXIS 回测已创建" : "QUANTAXIS backtest created");
+      navigate(`/deployments/${encodeURIComponent(result.deployment.deployment_id)}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : language === "zh-CN" ? "QUANTAXIS 回测失败" : "QUANTAXIS backtest failed");
+    } finally {
+      setQuantaxisRunning(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex h-[60vh] items-center justify-center text-sm text-muted-foreground">
@@ -710,7 +761,7 @@ export function StrategyEdit() {
             <button
               type="button"
               onClick={handleSave}
-              disabled={saving}
+              disabled={saving || running || quantaxisRunning}
               className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90 disabled:opacity-50"
             >
               <Check className="h-4 w-4" />
@@ -1114,13 +1165,25 @@ export function StrategyEdit() {
                 <button
                   type="button"
                   onClick={handleBacktest}
-                  disabled={running}
+                  disabled={running || quantaxisRunning}
                   className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90 disabled:opacity-50"
                 >
                   <Play className="h-4 w-4" />
                   {running ? copy.running : copy.run}
                 </button>
+                <button
+                  type="button"
+                  onClick={() => void handleQuantaxisBacktest()}
+                  disabled={quantaxisRunning || running}
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-md border bg-background px-4 text-sm font-semibold transition hover:bg-muted disabled:opacity-50"
+                >
+                  <Database className="h-4 w-4 text-primary" />
+                  {quantaxisRunning ? copy.quantaxisRunning : copy.quantaxisRun}
+                </button>
               </div>
+              <p className="text-xs leading-5 text-muted-foreground">
+                {copy.backtestGuide}
+              </p>
             </div>
 
             {backtestResult && (

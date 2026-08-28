@@ -8,6 +8,7 @@ normalizes their message projections for API transport.
 from __future__ import annotations
 
 import json
+import math
 import os
 import queue
 import threading
@@ -159,10 +160,8 @@ class QifiProjectionAdapter:
         order_time: str = "",
         fill_immediately: bool = False,
     ) -> dict[str, Any]:
+        amount = _normalize_qifi_amount(quantity)
         account = self._load_account(deployment)
-        amount = float(quantity)
-        if amount <= 0:
-            raise QuantaxisAdapterError("QIFI order quantity must be positive")
         order = account.send_order(
             code=_normalize_qifi_symbol(symbol),
             amount=amount,
@@ -242,13 +241,14 @@ class QuantaxisShadowExecutionAdapter:
         if deployment.target != DeploymentTarget.SHADOW:
             raise QuantaxisAdapterError("shadow execution adapter only accepts SHADOW deployments")
         normalized_symbol = _normalize_qifi_symbol(symbol)
+        normalized_quantity = _normalize_qifi_amount(quantity)
         market_rule = self._market_rule(normalized_symbol)
         result = self.qifi_adapter.submit_order_intent(
             deployment,
             client_order_id=client_order_id,
             symbol=normalized_symbol,
             side=side,
-            quantity=self._normalize_quantity(quantity, market_rule),
+            quantity=self._normalize_quantity(normalized_quantity, market_rule),
             price=self._normalize_price(price, market_rule),
             order_time=order_time,
             fill_immediately=True,
@@ -282,9 +282,7 @@ class QuantaxisShadowExecutionAdapter:
 
     @staticmethod
     def _normalize_quantity(quantity: float, market_rule: dict[str, Any]) -> float:
-        amount = float(quantity)
-        if amount <= 0:
-            raise QuantaxisAdapterError("shadow order quantity must be positive")
+        amount = _normalize_qifi_amount(quantity)
         min_amount = float(market_rule.get("min_amount") or 0)
         if min_amount and amount < min_amount:
             raise QuantaxisAdapterError("shadow order quantity is below QAMarket minimum")
@@ -539,6 +537,20 @@ def _normalize_qifi_symbol(value: Any) -> str:
     if not symbol:
         raise QuantaxisAdapterError("QIFI order symbol is required")
     return symbol
+
+
+def _normalize_qifi_amount(quantity: Any) -> float:
+    try:
+        amount = float(quantity)
+    except (TypeError, ValueError) as exc:
+        raise QuantaxisAdapterError("QIFI order quantity must be numeric") from exc
+    if not math.isfinite(amount) or amount <= 0:
+        raise QuantaxisAdapterError("QIFI order quantity must be positive")
+    if int(amount) < 1:
+        raise QuantaxisAdapterError("QIFI order quantity must be at least 1")
+    if not amount.is_integer():
+        raise QuantaxisAdapterError("QIFI order quantity must be an integer lot")
+    return amount
 
 
 def _qifi_towards(side: str) -> int:

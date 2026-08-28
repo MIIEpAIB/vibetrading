@@ -87,6 +87,15 @@ export interface StrategyMarketAdminItem {
   note: string;
   updated_at: string;
   name?: string;
+  author?: string;
+  assets?: string[];
+  one_year_sharpe?: number | null;
+  five_year_cagr?: number | null;
+  five_year_drawdown?: number | null;
+  oos_three_month_return?: number | null;
+  oos_three_month_sharpe?: number | null;
+  oos_one_year_sharpe?: number | null;
+  followers?: number;
   owner_user_id?: number | null;
   source_strategy_id?: string;
   deleted?: boolean;

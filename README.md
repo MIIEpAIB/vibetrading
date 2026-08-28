@@ -446,6 +446,8 @@ Open `http://localhost:8899`. Backend + frontend in one container.
 
 Docker publishes the backend on `127.0.0.1:8899` by default and runs the app as a non-root container user. If you intentionally expose the API beyond your own machine, set a strong `API_AUTH_KEY` and send `Authorization: Bearer <key>` from clients.
 
+User registration and login are separate from QUANTAXIS QIFI. They use the app's MySQL-backed auth tables; QIFI is reserved for deployment account snapshots and paper-trading state.
+
 > [!NOTE]
 > **Using Ollama with Docker:** the container reaches a host-side Ollama via `host.docker.internal`, not `localhost` (inside the container `localhost` is the container itself). `docker-compose.yml` defaults `OLLAMA_BASE_URL` to `http://host.docker.internal:11434`; export `OLLAMA_BASE_URL` (or set it in a top-level `.env`) to point elsewhere. This relies on the `host-gateway` mapping in `extra_hosts`, which requires **Docker Engine ≥ 20.10 / Compose v2** (provided automatically on Docker Desktop).
 

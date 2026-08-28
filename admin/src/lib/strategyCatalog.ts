@@ -21,6 +21,7 @@ export const strategyMarketBaseline: StrategyMarketAdminItem[] = [
   ["crypto-stat-arb-pairs", "built-in", "加密统计套利配对", ""],
   ["crypto-vol-target-rotation", "built-in", "波动率目标轮动策略", ""],
   ["crypto-event-driven-risk", "built-in", "加密事件驱动策略", ""],
+  ["professional-grid-trading-v2", "built-in", "专业网格交易策略 v2", ""],
   ["binance-perp-funding-arbitrage", "paid", "币安永续资金费率套利", "50 USD/30 天"],
   ["perp-multi-symbol-grid", "paid", "永续合约多币种网格策略", "50 USD/30 天"],
   ["universal-perp-single-symbol-grid", "paid", "通用永续单币种网格策略", "50 USD/30 天"],

@@ -1,5 +1,7 @@
 import type { StrategyLibraryItem } from "@/lib/api";
 import cryptoAdvancedGridCode from "./strategies/CryptoAdvancedGrid.py?raw";
+import cryptoAdvancedGridV2Code from "./strategies/CryptoAdvancedGridV2.py?raw";
+import { toQuantaxisStrategyCode } from "@/lib/quantaxisStrategy";
 
 export const PROFESSIONAL_GRID_SOURCE_TAG = "source:CryptoAdvancedGrid.py";
 
@@ -12,6 +14,16 @@ export interface StrategyCatalogItem {
   publicId?: string;
   name: string;
   summary: string;
+  author?: string;
+  assets?: string[];
+  oneYearSharpe?: number;
+  fiveYearCagr?: number;
+  fiveYearDrawdown?: number;
+  oosThreeMonthReturn?: number;
+  oosThreeMonthSharpe?: number;
+  oosOneYearSharpe?: number;
+  publishedAt?: string;
+  followers?: number;
   description?: string;
   strategyDescription?: string;
   usage?: string[];
@@ -245,6 +257,17 @@ export const builtInStrategyCatalog: StrategyCatalogItem[] = [
     category: "risk",
     kind: "built-in",
   },
+  {
+    id: "professional-grid-trading-v2",
+    name: "专业网格交易策略 v2",
+    summary: "QUANTAXIS 原生自适应网格、趋势过滤和库存风控。",
+    description: "基于 QUANTAXIS QAStrategy 运行契约开发的专业网格 v2，使用 ATR 自适应网格间距、滚动中枢锚定、EMA 趋势过滤、波动率暂停和库存上限控制。",
+    usage: ["适合 BTC/USDT、ETH/USDT 等高流动性 1h 级别震荡行情", "先完成 QUANTAXIS 回测和模拟盘验证，再启用实盘部署", "上线时应配置单笔名义金额、最大库存和交易所 API 权限边界"],
+    riskNotes: ["单边趋势会降低网格成交质量", "极端波动期间策略会暂停但仍可能存在跳空滑点", "库存上限和止损参数需要按账户规模重新校准"],
+    tags: ["grid", "QUANTAXIS", "adaptive", "risk", "official"],
+    category: "grid",
+    kind: "built-in",
+  },
 ];
 
 export const paidStrategyCatalog: StrategyCatalogItem[] = [
@@ -305,6 +328,10 @@ function buildStableNumericRouteId(strategyId: string): string {
     hash = (hash * 31 + strategyId.charCodeAt(index)) >>> 0;
   }
   return String(100000000 + (hash % 900000000));
+}
+
+function isProfessionalGridStrategy(strategyId: string): boolean {
+  return strategyId === "professional-grid-trading" || strategyId === "professional-grid-trading-v2";
 }
 
 export function getStrategyRouteId(strategyId: string): string {
@@ -473,6 +500,9 @@ export function buildMarketStarterCode(strategy: StrategyCatalogItem): string {
   if (strategy.codeSnapshot) {
     return strategy.codeSnapshot;
   }
+  if (strategy.id === "professional-grid-trading-v2") {
+    return cryptoAdvancedGridV2Code;
+  }
   if (strategy.id === "professional-grid-trading") {
     return cryptoAdvancedGridCode;
   }
@@ -488,7 +518,7 @@ export function getProfessionalGridSourceCode(): string {
 }
 
 export function buildMarketBacktestSummary(strategy: StrategyCatalogItem): MarketBacktestSummary {
-  if (strategy.id === "professional-grid-trading") {
+  if (isProfessionalGridStrategy(strategy.id)) {
     return runProfessionalGridBacktest();
   }
   if (strategy.id === "classic-turtle-trading") {
@@ -551,7 +581,7 @@ export function buildMarketBacktestSummary(strategy: StrategyCatalogItem): Marke
 
 export function buildMarketStrategySpec(strategy: StrategyCatalogItem) {
   const backtest = buildMarketBacktestSummary(strategy);
-  if (strategy.id === "professional-grid-trading") {
+  if (isProfessionalGridStrategy(strategy.id)) {
     return buildProfessionalGridStrategySpec(strategy, backtest);
   }
   if (strategy.id === "classic-turtle-trading") {
@@ -643,7 +673,7 @@ export function defaultShadowRiskPolicyForMarketStrategy(strategy: StrategyCatal
     max_total_exposure: risk.max_total_exposure,
     max_trades_per_day: risk.max_trades_per_day,
     min_cash_buffer: risk.min_cash_buffer,
-    default_order_notional: strategy.id === "professional-grid-trading"
+    default_order_notional: isProfessionalGridStrategy(strategy.id)
       ? professionalGridConfig.baseOrderNotional
       : strategy.id === "classic-turtle-trading"
         ? classicTurtleConfig.baseOrderNotional
@@ -657,7 +687,6 @@ export function createMarketOwnedStrategy(
   ownership: MarketOwnership,
 ): StrategyLibraryItem {
   const now = new Date().toISOString();
-  const isClassicTurtle = strategy.id === "classic-turtle-trading";
   const isCommunity = strategy.kind === "community";
   return {
     id: isCommunity ? `owned_${strategy.id}` : strategy.id,
@@ -668,11 +697,11 @@ export function createMarketOwnedStrategy(
       strategy.usage?.length ? `\n## 使用方式\n${strategy.usage.map((item) => `- ${item}`).join("\n")}` : "",
       strategy.riskNotes?.length ? `\n## 风控要点\n${strategy.riskNotes.map((item) => `- ${item}`).join("\n")}` : "",
     ].filter(Boolean).join("\n"),
-    language: isCommunity ? strategy.language ?? "python" : isClassicTurtle ? "python" : "javascript",
+    language: "python",
     category: strategy.category,
     status: "draft",
     tags: Array.from(new Set([...strategy.tags, ownership, "market"])).slice(0, 8),
-    code: buildMarketStarterCode(strategy),
+    code: toQuantaxisStrategyCode(buildMarketStarterCode(strategy), strategy.name),
     createdAt: now,
     updatedAt: now,
   };
@@ -724,10 +753,30 @@ def _true_range(high, low, close):
     ).max(axis=1)
 
 
+def _pick_ohlcv_column(frame, *names):
+    for name in names:
+        if name in frame.columns:
+            return pd.to_numeric(frame[name], errors="coerce")
+    raise KeyError(names[0])
+
+
 def generate_signals(data):
-    close = data["close"].astype(float)
-    high = data["high"].astype(float)
-    low = data["low"].astype(float)
+    if not isinstance(data, pd.DataFrame):
+        if isinstance(data, dict):
+            for key in ("history", "bars", "data", "ohlcv"):
+                value = data.get(key)
+                if isinstance(value, pd.DataFrame):
+                    data = value
+                    break
+            else:
+                market = data.get("market_event") if isinstance(data.get("market_event"), dict) else data
+                data = pd.DataFrame([market if isinstance(market, dict) else data])
+        else:
+            data = pd.DataFrame(data)
+
+    close = _pick_ohlcv_column(data, "close", "Close", "close_price", "price").astype(float)
+    high = _pick_ohlcv_column(data, "high", "High", "high_price").astype(float)
+    low = _pick_ohlcv_column(data, "low", "Low", "low_price").astype(float)
 
     atr = _true_range(high, low, close).rolling(
         PARAMS["atr_window"],

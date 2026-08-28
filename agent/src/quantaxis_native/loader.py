@@ -10,6 +10,7 @@ side effects.
 from __future__ import annotations
 
 import importlib
+import inspect
 import os
 import sys
 import types
@@ -86,6 +87,7 @@ def ensure_quantaxis_namespace() -> Path:
 def load_quantaxis_modules() -> QuantaxisModuleSet:
     """Load and return the QUANTAXIS primitives used by this integration."""
     package_dir = ensure_quantaxis_namespace()
+    _patch_pika_plain_credentials()
     try:
         qamarket = importlib.import_module("QUANTAXIS.QAMarket")
         qifi_account_module = importlib.import_module("QUANTAXIS.QIFI.QifiAccount")
@@ -160,3 +162,31 @@ def _read_quantaxis_version(init_path: Path) -> str:
     except OSError:
         return "unknown"
     return "unknown"
+
+
+def _patch_pika_plain_credentials() -> None:
+    try:
+        import pika
+    except Exception:
+        return
+    credentials = getattr(pika, "PlainCredentials", None)
+    if credentials is None:
+        return
+    try:
+        signature = inspect.signature(credentials)
+    except (TypeError, ValueError):
+        return
+    if "erase_on_connect" in signature.parameters:
+        return
+    original_init = getattr(credentials, "__init__", None)
+    if not callable(original_init):
+        return
+
+    def _compat_init(self, username, password, erase_on_connect=False):  # type: ignore[no-untyped-def]
+        try:
+            original_init(self, username, password, erase_on_connect=erase_on_connect)
+        except TypeError:
+            original_init(self, username, password)
+            setattr(self, "erase_on_connect", erase_on_connect)
+
+    credentials.__init__ = _compat_init  # type: ignore[assignment]

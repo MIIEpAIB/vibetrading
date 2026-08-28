@@ -12,12 +12,13 @@ import {
   UserPlus,
 } from "lucide-react";
 import { toast } from "sonner";
-import { api, type StrategyLibraryItem } from "@/lib/api";
+import { api, type StrategyLibraryItem, type StrategyMarketAdminItem } from "@/lib/api";
 import { useTranslation } from "@/i18n/I18nProvider";
 import {
   getStrategyRouteId,
   resolveStrategyRouteId,
 } from "@/lib/strategyMarketplace";
+import { toQuantaxisStrategyCode } from "@/lib/quantaxisStrategy";
 
 const SHARE_STATS_KEY = "vibe-strategy-share-stats";
 
@@ -75,6 +76,31 @@ function cloneStrategy(strategy: StrategyLibraryItem): StrategyLibraryItem {
   };
 }
 
+function catalogItemToStrategy(item: StrategyMarketAdminItem): StrategyLibraryItem {
+  const now = new Date().toISOString();
+  return {
+    id: item.id,
+    name: item.name || item.id,
+    description: item.description || item.summary || item.note || "",
+    strategyDescription: item.strategy_description || item.description || "",
+    language: item.language || "python",
+    category: item.category || "utility",
+    status: "draft",
+    tags: item.tags ?? [],
+    code: toQuantaxisStrategyCode(item.code_snapshot || "", item.name || item.id),
+    createdAt: item.published_at || item.updated_at || now,
+    updatedAt: item.updated_at || now,
+  };
+}
+
+function findStrategyByRouteId(strategies: StrategyLibraryItem[], routeId: string, resolvedId: string) {
+  return strategies.find((item) => item.id === resolvedId || getStrategyRouteId(item.id) === routeId) ?? null;
+}
+
+function findCatalogItemByRouteId(items: StrategyMarketAdminItem[], routeId: string, resolvedId: string) {
+  return items.find((item) => item.id === resolvedId || item.id === routeId || getStrategyRouteId(item.id) === routeId) ?? null;
+}
+
 export function StrategyShare() {
   const { language } = useTranslation();
   const navigate = useNavigate();
@@ -106,6 +132,8 @@ export function StrategyShare() {
       followers: "关注者",
       detail: "策略详细介绍",
       emptyDetail: "作者还没有填写策略详细介绍。",
+      code: "策略代码",
+      emptyCode: "这个策略还没有公开代码。",
       copied: "策略已复制到你的策略库",
       saved: "已收藏到你的策略库",
     }
@@ -128,34 +156,25 @@ export function StrategyShare() {
       followers: "Followers",
       detail: "Strategy Details",
       emptyDetail: "The author has not added a detailed strategy description yet.",
+      code: "Strategy Code",
+      emptyCode: "This strategy has no public code yet.",
       copied: "Strategy copied into your library",
       saved: "Saved to your strategy library",
     };
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([api.listStrategies(), api.getStrategyMarketCatalogConfig()])
-      .then((payload) => {
+    Promise.allSettled([api.listStrategies(), api.getStrategyMarketCatalogConfig()])
+      .then((results) => {
         if (cancelled) return;
-        const [strategies, catalog] = payload;
-        const remote = strategies.strategies.find((item) => item.id === resolvedId || getStrategyRouteId(item.id) === routeId) ?? null;
-        const market = catalog.items.find((item) => item.id === resolvedId || item.id === routeId);
-        const fallback: StrategyLibraryItem | null = market
-          ? {
-            id: market.id,
-            name: market.name || market.id,
-            description: market.description || market.summary || "",
-            strategyDescription: market.strategy_description || market.description || "",
-            language: market.language || "python",
-            category: market.category || "utility",
-            status: "draft",
-            tags: market.tags ?? [],
-            code: market.code_snapshot || "",
-            createdAt: market.published_at || market.updated_at,
-            updatedAt: market.updated_at,
-          }
-          : null;
-        setStrategy(remote || fallback);
+        const [strategiesResult, catalogResult] = results;
+        const strategies = strategiesResult.status === "fulfilled" ? strategiesResult.value.strategies : [];
+        const catalogItems = catalogResult.status === "fulfilled" ? catalogResult.value.items : [];
+        const remote = findStrategyByRouteId(strategies, routeId, resolvedId);
+        const market = findCatalogItemByRouteId(catalogItems, routeId, resolvedId);
+        const fallback = market ? catalogItemToStrategy(market) : null;
+        const selected = remote || fallback;
+        setStrategy(selected ? { ...selected, code: toQuantaxisStrategyCode(selected.code, selected.name) } : null);
       })
       .catch(() => {
         if (!cancelled) setStrategy(null);
@@ -183,6 +202,7 @@ export function StrategyShare() {
   const currentStats = strategy ? stats[getStrategyRouteId(strategy.id)] ?? { views: 0, copies: 0, favorites: 0 } : { views: 0, copies: 0, favorites: 0 };
   const author = useMemo(() => authorFor(strategy?.id ?? routeId), [routeId, strategy?.id]);
   const detail = strategy?.strategyDescription?.trim() || strategy?.description?.trim() || "";
+  const sourceCode = strategy?.code?.trim() || "";
 
   const bump = (field: "copies" | "favorites") => {
     if (!strategy) return;
@@ -327,6 +347,22 @@ export function StrategyShare() {
         <article className="prose prose-sm max-w-none rounded-lg border bg-card p-5 text-foreground dark:prose-invert prose-img:rounded-lg prose-img:border">
           {detail ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{detail}</ReactMarkdown> : <p>{copy.emptyDetail}</p>}
         </article>
+      </section>
+
+      <section className="mx-auto max-w-7xl px-4 pb-8 sm:px-6 lg:px-8">
+        <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
+          <Copy className="h-4 w-4 text-primary" />
+          {copy.code}
+        </div>
+        <div className="overflow-hidden rounded-lg border bg-card">
+          {sourceCode ? (
+            <pre className="max-h-[34rem] overflow-auto bg-muted/30 p-5 text-xs leading-relaxed text-foreground">
+              <code>{sourceCode}</code>
+            </pre>
+          ) : (
+            <p className="p-5 text-sm text-muted-foreground">{copy.emptyCode}</p>
+          )}
+        </div>
       </section>
     </main>
   );

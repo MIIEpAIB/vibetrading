@@ -18,6 +18,25 @@ type UserDraft = {
   revoke_tokens: boolean;
 };
 
+type StrategyDraft = {
+  id: string;
+  kind: "built-in" | "paid";
+  status: "draft" | "published" | "hidden";
+  name: string;
+  author: string;
+  price: string;
+  category: string;
+  language: string;
+  tags: string;
+  summary: string;
+  description: string;
+  strategy_description: string;
+  risk_warnings: string;
+  code_snapshot: string;
+  enabled: boolean;
+  featured: boolean;
+};
+
 const nav = [
   ["overview", "运营看板"],
   ["settings", "系统设置"],
@@ -43,6 +62,27 @@ function splitTerms(value: string) {
     .split(/[\n,，;；]+/)
     .map((term) => term.trim())
     .filter(Boolean);
+}
+
+function createEmptyStrategyDraft(): StrategyDraft {
+  return {
+    id: "",
+    kind: "paid",
+    status: "draft",
+    name: "",
+    author: "Vibe Trading",
+    price: "",
+    category: "",
+    language: "python",
+    tags: "",
+    summary: "",
+    description: "",
+    strategy_description: "",
+    risk_warnings: "",
+    code_snapshot: "",
+    enabled: true,
+    featured: false,
+  };
 }
 
 function maskTerms(content: string, terms: string[]) {
@@ -222,6 +262,8 @@ export function AdminConsole() {
   const [message, setMessage] = useState("");
   const [activeSection, setActiveSection] = useState<AdminSection>("overview");
   const [selectedMarketItem, setSelectedMarketItem] = useState<StrategyMarketAdminItem | null>(null);
+  const [showAddStrategy, setShowAddStrategy] = useState(false);
+  const [strategyDraft, setStrategyDraft] = useState<StrategyDraft>(() => createEmptyStrategyDraft());
 
   useEffect(() => {
     if (!selectedMarketItem) return;
@@ -358,6 +400,69 @@ export function AdminConsole() {
 
   const updateMarketItem = (id: string, patch: Partial<StrategyMarketAdminItem>) => {
     setMarketItems((prev) => prev.map((item) => item.id === id ? { ...item, ...patch } : item));
+  };
+
+  const updateStrategyDraft = (patch: Partial<StrategyDraft>) => {
+    setStrategyDraft((prev) => ({ ...prev, ...patch }));
+  };
+
+  const resetStrategyDraft = () => {
+    setStrategyDraft(createEmptyStrategyDraft());
+  };
+
+  const addMarketItem = async () => {
+    const id = strategyDraft.id.trim();
+    const name = strategyDraft.name.trim();
+    if (!id || !name) {
+      setMessage("请填写策略 ID 和名称");
+      return;
+    }
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{1,127}$/.test(id)) {
+      setMessage("策略 ID 只能包含字母、数字、下划线和短横线，长度 2-128");
+      return;
+    }
+    if (marketItems.some((item) => item.id === id)) {
+      setMessage(`策略 ID ${id} 已存在`);
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const item: StrategyMarketAdminItem = {
+      id,
+      kind: strategyDraft.kind,
+      enabled: strategyDraft.enabled,
+      featured: strategyDraft.featured,
+      price: strategyDraft.price.trim(),
+      status: strategyDraft.status,
+      note: "",
+      updated_at: now,
+      name,
+      author: strategyDraft.author.trim(),
+      owner_user_id: null,
+      source_strategy_id: id,
+      deleted: false,
+      summary: strategyDraft.summary.trim(),
+      description: strategyDraft.description.trim(),
+      strategy_description: strategyDraft.strategy_description.trim(),
+      language: strategyDraft.language.trim(),
+      category: strategyDraft.category.trim(),
+      tags: splitTerms(strategyDraft.tags),
+      code_snapshot: strategyDraft.code_snapshot,
+      published_at: strategyDraft.status === "published" ? now : "",
+      backtest_summary: {},
+      risk_warnings: splitTerms(strategyDraft.risk_warnings),
+    };
+
+    setSavingMarket(true);
+    try {
+      const response = await api.updateAdminStrategyMarket([...marketItems, item]);
+      setMarketItems(response.items);
+      setShowAddStrategy(false);
+      resetStrategyDraft();
+      setMessage(`${name} 已添加到策略商城`);
+    } finally {
+      setSavingMarket(false);
+    }
   };
 
   const saveMarketItem = async (item: StrategyMarketAdminItem) => {
@@ -628,10 +733,167 @@ export function AdminConsole() {
           <div className="section-title row">
             <div>
               <h2>策略商城</h2>
-              <p>统一调用 `/admin/strategy-market` 管理发布状态。</p>
+              <p>统一调用 `/admin/strategy-market` 管理发布状态，也支持由后台添加平台策略。</p>
             </div>
-            <button onClick={saveMarket} disabled={savingMarket}>{savingMarket ? "保存中" : "保存商城"}</button>
+            <div className="section-actions">
+              <button onClick={() => setShowAddStrategy((value) => !value)}>
+                {showAddStrategy ? "收起添加" : "添加策略"}
+              </button>
+              <button onClick={saveMarket} disabled={savingMarket}>{savingMarket ? "保存中" : "保存商城"}</button>
+            </div>
           </div>
+          {showAddStrategy ? (
+            <div className="panel add-strategy-panel">
+              <div className="panel-title">
+                <div>
+                  <h3>添加策略</h3>
+                  <p>创建后会立即写入策略商城配置。</p>
+                </div>
+                <div className="table-actions">
+                  <button onClick={resetStrategyDraft} disabled={savingMarket}>清空</button>
+                  <button className="primary" onClick={addMarketItem} disabled={savingMarket}>
+                    {savingMarket ? "添加中" : "添加到商城"}
+                  </button>
+                </div>
+              </div>
+              <div className="add-strategy-grid">
+                <label>
+                  策略 ID
+                  <input
+                    value={strategyDraft.id}
+                    onChange={(event) => updateStrategyDraft({ id: event.target.value.trim() })}
+                    placeholder="例如 custom-grid-alpha"
+                  />
+                </label>
+                <label>
+                  策略名称
+                  <input
+                    value={strategyDraft.name}
+                    onChange={(event) => updateStrategyDraft({ name: event.target.value })}
+                    placeholder="展示在策略商城的名称"
+                  />
+                </label>
+                <label>
+                  类型
+                  <select
+                    value={strategyDraft.kind}
+                    onChange={(event) => updateStrategyDraft({ kind: event.target.value as StrategyDraft["kind"] })}
+                  >
+                    <option value="paid">付费策略</option>
+                    <option value="built-in">内置策略</option>
+                  </select>
+                </label>
+                <label>
+                  状态
+                  <select
+                    value={strategyDraft.status}
+                    onChange={(event) => updateStrategyDraft({ status: event.target.value as StrategyDraft["status"] })}
+                  >
+                    <option value="draft">draft</option>
+                    <option value="published">published</option>
+                    <option value="hidden">hidden</option>
+                  </select>
+                </label>
+                <label>
+                  作者
+                  <input
+                    value={strategyDraft.author}
+                    onChange={(event) => updateStrategyDraft({ author: event.target.value })}
+                  />
+                </label>
+                <label>
+                  价格
+                  <input
+                    value={strategyDraft.price}
+                    onChange={(event) => updateStrategyDraft({ price: event.target.value })}
+                    placeholder="例如 50 USD/30 天"
+                  />
+                </label>
+                <label>
+                  分类
+                  <input
+                    value={strategyDraft.category}
+                    onChange={(event) => updateStrategyDraft({ category: event.target.value })}
+                    placeholder="例如 crypto / grid"
+                  />
+                </label>
+                <label>
+                  语言
+                  <input
+                    value={strategyDraft.language}
+                    onChange={(event) => updateStrategyDraft({ language: event.target.value })}
+                    placeholder="python"
+                  />
+                </label>
+                <label className="wide">
+                  标签
+                  <input
+                    value={strategyDraft.tags}
+                    onChange={(event) => updateStrategyDraft({ tags: event.target.value })}
+                    placeholder="多个标签用逗号或换行分隔"
+                  />
+                </label>
+                <label className="check-row add-strategy-check">
+                  <input
+                    type="checkbox"
+                    checked={strategyDraft.enabled}
+                    onChange={(event) => updateStrategyDraft({ enabled: event.target.checked })}
+                  />
+                  启用
+                </label>
+                <label className="check-row add-strategy-check">
+                  <input
+                    type="checkbox"
+                    checked={strategyDraft.featured}
+                    onChange={(event) => updateStrategyDraft({ featured: event.target.checked })}
+                  />
+                  推荐
+                </label>
+                <label className="wide">
+                  摘要
+                  <textarea
+                    value={strategyDraft.summary}
+                    onChange={(event) => updateStrategyDraft({ summary: event.target.value })}
+                    placeholder="一句话概括策略卖点"
+                  />
+                </label>
+                <label className="wide">
+                  简介
+                  <textarea
+                    value={strategyDraft.description}
+                    onChange={(event) => updateStrategyDraft({ description: event.target.value })}
+                    placeholder="策略商城卡片和详情页展示的简介"
+                  />
+                </label>
+                <label className="wide">
+                  策略说明
+                  <textarea
+                    value={strategyDraft.strategy_description}
+                    onChange={(event) => updateStrategyDraft({ strategy_description: event.target.value })}
+                    placeholder="完整策略逻辑、适用市场和参数说明"
+                  />
+                </label>
+                <label className="wide">
+                  风险提示
+                  <textarea
+                    value={strategyDraft.risk_warnings}
+                    onChange={(event) => updateStrategyDraft({ risk_warnings: event.target.value })}
+                    placeholder="多个风险提示用逗号或换行分隔"
+                  />
+                </label>
+                <label className="wide">
+                  策略代码
+                  <textarea
+                    className="code-editor"
+                    spellCheck={false}
+                    value={strategyDraft.code_snapshot}
+                    onChange={(event) => updateStrategyDraft({ code_snapshot: event.target.value })}
+                    placeholder="可粘贴 Python/PineScript 等策略代码"
+                  />
+                </label>
+              </div>
+            </div>
+          ) : null}
           <div className="table-wrap">
             <table>
               <thead>

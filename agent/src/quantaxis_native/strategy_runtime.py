@@ -110,16 +110,21 @@ class RestrictedQAStrategyRuntime:
     ) -> dict[str, Any]:
         self.validate_package(deployment.strategy_snapshot.code)
         strategy = self._instantiate_strategy(deployment)
+        normalized_market_event = _normalize_market_event(market_event)
         context = {
             "deployment_id": deployment.deployment_id,
             "account_cookie": deployment.account_cookie,
-            "market_event": dict(market_event),
+            "market_event": normalized_market_event,
+            "history": [normalized_market_event],
+            "bars": [normalized_market_event],
+            "data": [normalized_market_event],
+            "ohlcv": [normalized_market_event],
             "account": self._read_only_account_context(account_snapshot),
             "parameters": dict(deployment.parameters),
             "risk_policy": dict(deployment.risk_policy),
         }
         raw_signal = self._call_strategy(strategy, context)
-        intent = self._intent_from_signal(deployment, raw_signal, market_event)
+        intent = self._intent_from_signal(deployment, raw_signal, normalized_market_event)
         return {
             "deployment_id": deployment.deployment_id,
             "strategy_contract": "QAStrategy",
@@ -137,14 +142,16 @@ class RestrictedQAStrategyRuntime:
         strategy_cls = self._find_strategy_class(namespace, modules.strategy_cta_base)
         if strategy_cls is not None:
             try:
-                return strategy_cls(
+                strategy = strategy_cls(
                     code=deployment.symbols[0] if deployment.symbols else "",
                     frequence=deployment.timeframe,
                     strategy_id=deployment.deployment_id,
                     account_cookie=deployment.account_cookie,
                 )
             except TypeError:
-                return strategy_cls()
+                strategy = strategy_cls()
+            fallback = _legacy_adapter_from_namespace(namespace)
+            return _QAStrategyWithLegacyFallback(strategy, fallback) if fallback is not None else strategy
         if "SignalEngine" in namespace:
             engine = namespace["SignalEngine"]()
             return _SignalEngineQAStrategyAdapter(engine)
@@ -157,7 +164,15 @@ class RestrictedQAStrategyRuntime:
         for method_name in ("on_tick", "on_market_event", "generate_intent", "generate_signal"):
             method = getattr(strategy, method_name, None)
             if callable(method):
-                return method(context)
+                try:
+                    return method(context)
+                except KeyError as exc:
+                    if _is_market_data_key_error(exc):
+                        return {
+                            "action": "HOLD",
+                            "reason": f"missing market data field: {exc.args[0]}",
+                        }
+                    raise
         raise QuantaxisStrategyRuntimeError("QAStrategy package has no supported tick handler")
 
     @staticmethod
@@ -229,7 +244,9 @@ class RestrictedQAStrategyRuntime:
                 "__build_class__": builtins.__build_class__,
                 "dict": dict,
                 "float": float,
+                "hasattr": hasattr,
                 "int": int,
+                "isinstance": isinstance,
                 "__import__": _restricted_import,
                 "len": len,
                 "list": list,
@@ -295,8 +312,39 @@ class _SignalEngineQAStrategyAdapter:
         if hasattr(self.engine, "generate_signal"):
             return self.engine.generate_signal(context)
         if hasattr(self.engine, "generate"):
-            return self.engine.generate({"market_event": context["market_event"], "account": context["account"]})
+            frame = _coerce_market_frame(context)
+            symbol = str(context.get("market_event", {}).get("symbol") or context.get("symbol") or "market_event")
+            return _legacy_signal_response(self.engine.generate({symbol: frame}))
         raise QuantaxisStrategyRuntimeError("SignalEngine has no supported generate method")
+
+
+class _QAStrategyWithLegacyFallback:
+    def __init__(self, strategy: Any, fallback: Any) -> None:
+        self.strategy = strategy
+        self.fallback = fallback
+
+    def on_tick(self, context: dict[str, Any]) -> Any:
+        return self._call_primary_or_fallback("on_tick", context)
+
+    def on_market_event(self, context: dict[str, Any]) -> Any:
+        return self._call_primary_or_fallback("on_market_event", context)
+
+    def generate_intent(self, context: dict[str, Any]) -> Any:
+        return self._call_primary_or_fallback("generate_intent", context)
+
+    def generate_signal(self, context: dict[str, Any]) -> Any:
+        return self._call_primary_or_fallback("generate_signal", context)
+
+    def _call_primary_or_fallback(self, method_name: str, context: dict[str, Any]) -> Any:
+        method = getattr(self.strategy, method_name, None)
+        if not callable(method):
+            raise AttributeError(method_name)
+        try:
+            return method(context)
+        except (AttributeError, KeyError, TypeError) as exc:
+            if _is_market_data_protocol_error(exc):
+                return self.fallback.generate_signal(context)
+            raise
 
 
 class _GenerateSignalsQAStrategyAdapter:
@@ -304,7 +352,142 @@ class _GenerateSignalsQAStrategyAdapter:
         self.fn = fn
 
     def generate_signal(self, context: dict[str, Any]) -> Any:
-        return self.fn({"market_event": context["market_event"], "account": context["account"]})
+        return _legacy_signal_response(self.fn(_coerce_market_frame(context)))
+
+
+def _legacy_adapter_from_namespace(namespace: dict[str, Any]) -> Any | None:
+    if "SignalEngine" in namespace:
+        return _SignalEngineQAStrategyAdapter(namespace["SignalEngine"]())
+    if "generate_signals" in namespace:
+        return _GenerateSignalsQAStrategyAdapter(namespace["generate_signals"])
+    return None
+
+
+def _coerce_market_frame(context: dict[str, Any]) -> Any:
+    import pandas as pd
+
+    payload = context.get("history") or context.get("bars") or context.get("data") or context.get("ohlcv")
+    if payload is None:
+        payload = context.get("market_event") or context
+    if isinstance(payload, pd.DataFrame):
+        frame = payload.copy()
+    elif isinstance(payload, list):
+        frame = pd.DataFrame(payload)
+    elif isinstance(payload, dict):
+        for key in ("history", "bars", "data", "ohlcv"):
+            value = payload.get(key)
+            if isinstance(value, pd.DataFrame):
+                frame = value.copy()
+                break
+            if isinstance(value, list):
+                frame = pd.DataFrame(value)
+                break
+        else:
+            market = payload.get("market_event") if isinstance(payload.get("market_event"), dict) else payload
+            frame = pd.DataFrame([market])
+    else:
+        frame = pd.DataFrame()
+    return _normalize_ohlcv_frame(frame)
+
+
+def _normalize_market_event(market_event: dict[str, Any]) -> dict[str, Any]:
+    import pandas as pd
+
+    frame = _normalize_ohlcv_frame(pd.DataFrame([dict(market_event)]))
+    if frame.empty:
+        return dict(market_event)
+    normalized = frame.iloc[-1].to_dict()
+    normalized.update({key: value for key, value in dict(market_event).items() if key not in normalized})
+    return normalized
+
+
+def _normalize_ohlcv_frame(frame: Any) -> Any:
+    import pandas as pd
+
+    if not isinstance(frame, pd.DataFrame):
+        return pd.DataFrame()
+    normalized = frame.copy()
+    aliases = {
+        "open": ("open", "Open", "OPEN", "open_price", "price"),
+        "high": ("high", "High", "HIGH", "high_price", "price"),
+        "low": ("low", "Low", "LOW", "low_price", "price"),
+        "close": ("close", "Close", "CLOSE", "close_price", "last", "price"),
+        "volume": ("volume", "Volume", "VOLUME", "vol", "amount"),
+    }
+    for canonical, candidates in aliases.items():
+        if canonical in normalized.columns:
+            continue
+        for candidate in candidates:
+            if candidate in normalized.columns:
+                normalized[canonical] = normalized[candidate]
+                break
+    if "close" in normalized.columns:
+        for price_field in ("open", "high", "low"):
+            if price_field not in normalized.columns:
+                normalized[price_field] = normalized["close"]
+    if "volume" not in normalized.columns:
+        normalized["volume"] = 0.0
+    for time_field in ("datetime", "time", "timestamp", "date"):
+        if time_field in normalized.columns:
+            try:
+                normalized.index = pd.to_datetime(normalized[time_field])
+            except Exception:
+                pass
+            break
+    return normalized
+
+
+def _legacy_signal_response(signal: Any) -> dict[str, Any]:
+    value = _last_signal_value(signal)
+    return {
+        "action": "HOLD",
+        "signal": value,
+        "reason": "legacy vector signal evaluated without order intent",
+    }
+
+
+def _last_signal_value(signal: Any) -> Any:
+    import pandas as pd
+
+    if isinstance(signal, pd.Series):
+        if signal.empty:
+            return 0.0
+        value = signal.iloc[-1]
+        return None if pd.isna(value) else float(value)
+    if isinstance(signal, pd.DataFrame):
+        if signal.empty:
+            return {}
+        row = signal.iloc[-1].to_dict()
+        return {str(key): _last_signal_value(pd.Series([value])) for key, value in row.items()}
+    if isinstance(signal, dict):
+        return {str(key): _last_signal_value(value) for key, value in signal.items()}
+    if isinstance(signal, (list, tuple)):
+        return _last_signal_value(pd.Series(list(signal)))
+    try:
+        if pd.isna(signal):
+            return None
+    except Exception:
+        pass
+    if isinstance(signal, (bool, int, float, str)) or signal is None:
+        return signal
+    return str(signal)
+
+
+def _is_market_data_key_error(exc: KeyError) -> bool:
+    if not exc.args:
+        return False
+    return str(exc.args[0]).strip("'\"") in {"open", "high", "low", "close", "volume"}
+
+
+def _is_market_data_protocol_error(exc: BaseException) -> bool:
+    if isinstance(exc, KeyError):
+        return _is_market_data_key_error(exc)
+    message = str(exc)
+    if isinstance(exc, AttributeError):
+        return "object has no attribute 'astype'" in message or 'object has no attribute "astype"' in message
+    if isinstance(exc, TypeError):
+        return "object is not subscriptable" in message
+    return False
 
 
 def _import_root(name: str) -> str:

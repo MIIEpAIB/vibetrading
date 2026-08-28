@@ -1,0 +1,2 @@
+10:41:59 QUANTAXIS>>> 关闭RabbitMQ通道失败: 'Channel' object has no attribute 'is_open'
+10:41:59 QUANTAXIS>>> 关闭RabbitMQ连接失败: 'BlockingConnection' object has no attribute 'is_open'

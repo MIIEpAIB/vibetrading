@@ -9,12 +9,22 @@ __version__ = "0.0.4"
 
 mongo_ip = os.getenv("MONGODB", "127.0.0.1")
 mongo_port = os.getenv("MONGODBPORT", 27017)
-mongo_uri = f"mongodb://{mongo_ip}:{mongo_port}"
+mongo_uri = (
+    os.getenv("QUANTAXIS_MONGOURI")
+    or os.getenv("MONGOURI")
+    or os.getenv("MONGODB_URI")
+    or os.getenv("MONGO_URI")
+    or (
+        mongo_ip
+        if str(mongo_ip).startswith(("mongodb://", "mongodb+srv://"))
+        else f"mongodb://{mongo_ip}:{mongo_port}"
+    )
+)
 
 eventmq_ip = os.getenv("QAPUBSUB_IP", "127.0.0.1")
 eventmq_port = os.getenv("QAPUBSUB_PORT", 5672)
 eventmq_username = os.getenv("QAPUBSUB_USER", "admin")
-eventmq_password = os.getenv("QAPUBSUB_PWD", "admin")
+eventmq_password = os.getenv("QAPUBSUB_PASSWORD") or os.getenv("QAPUBSUB_PWD", "admin")
 eventmq_amqp = f"pyamqp://{eventmq_username}:{eventmq_password}@{eventmq_ip}:{eventmq_port}//"
 
 clickhouse_ip = os.getenv("CLICKHOUSE_IP", "127.0.0.1")

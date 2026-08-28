@@ -238,8 +238,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  recoverDeployment: (deploymentId: string, body: QuantaxisDeploymentRecoverRequest) =>
+  recoverDeployment: (deploymentId: string, body: QuantaxisDeploymentRecoverRequest = {}) =>
     request<QuantaxisDeploymentActionResponse>(`/api/deployments/${encodeURIComponent(deploymentId)}/recover`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  submitDeploymentTestSignal: (deploymentId: string, body: QuantaxisDeploymentTestSignalRequest) =>
+    request<QuantaxisDeploymentTestSignalResponse>(`/api/deployments/${encodeURIComponent(deploymentId)}/test-signal`, {
       method: "POST",
       body: JSON.stringify(body),
     }),
@@ -539,6 +544,15 @@ export interface StrategyMarketAdminItem {
   note: string;
   updated_at: string;
   name?: string;
+  author?: string;
+  assets?: string[];
+  one_year_sharpe?: number | null;
+  five_year_cagr?: number | null;
+  five_year_drawdown?: number | null;
+  oos_three_month_return?: number | null;
+  oos_three_month_sharpe?: number | null;
+  oos_one_year_sharpe?: number | null;
+  followers?: number;
   summary?: string;
   description?: string;
   strategy_description?: string;
@@ -933,11 +947,16 @@ export interface StrategyMarketBacktestRequest {
   symbol?: string;
   interval?: string;
   source?: string;
-  exchange?: string;
-  mode?: string;
-  quote_currency?: string;
   initial_capital?: number;
-  trading_currency?: string;
+  benchmark?: string;
+  commission?: number;
+  slippage?: number;
+  leverage?: number;
+  risk_free_rate?: number;
+  analyzer?: string;
+  optimize?: boolean;
+  optimization_target?: string;
+  walk_forward_windows?: number;
   parameters?: Record<string, unknown>;
 }
 
@@ -947,12 +966,41 @@ export interface StrategyBacktestRequest {
   symbol?: string;
   interval?: string;
   source?: string;
-  exchange?: string;
-  mode?: string;
-  quote_currency?: string;
   initial_capital?: number;
-  trading_currency?: string;
+  benchmark?: string;
+  commission?: number;
+  slippage?: number;
+  leverage?: number;
+  risk_free_rate?: number;
+  analyzer?: string;
+  optimize?: boolean;
+  optimization_target?: string;
+  walk_forward_windows?: number;
   parameters?: Record<string, unknown>;
+}
+
+export interface QuantaxisAnalysisPayload {
+  module?: string;
+  visualAnalysis?: {
+    equityCurve?: Array<{ time?: string; equity?: string | number; drawdown?: string | number }>;
+    drawdown?: Array<{ time?: string; drawdown?: string | number }>;
+    returnDistribution?: Array<{ bucket: string; count: number }>;
+  };
+  basicMetrics?: Record<string, string | number>;
+  performanceAnalysis?: Record<string, string | number>;
+  detailedAnalysis?: {
+    assumptions?: string[];
+    warnings?: string[];
+    artifacts?: Array<Record<string, unknown>>;
+    tradeLogPreview?: Array<Record<string, unknown>>;
+  };
+  optimization?: {
+    enabled?: boolean;
+    target?: string;
+    walkForwardWindows?: Array<{ window: number; start?: string; end?: string; returnPct: number }>;
+    parameterGrid?: Record<string, unknown>;
+  };
+  config?: Record<string, unknown>;
 }
 
 export interface StrategyMarketBacktestResponse {
@@ -972,6 +1020,7 @@ export interface StrategyMarketBacktestResponse {
   engine: string;
   assumptions: string[];
   warnings: string[];
+  qaAnalysis?: QuantaxisAnalysisPayload;
 }
 
 
@@ -1302,7 +1351,22 @@ export interface QuantaxisDeploymentPromoteRequest {
 }
 
 export interface QuantaxisDeploymentRecoverRequest {
-  broker: string;
+  broker?: string;
+}
+
+export interface QuantaxisDeploymentTestSignalRequest {
+  signal_type: "BUY_OPEN" | "SELL_CLOSE" | "SELL_OPEN" | "BUY_CLOSE";
+  symbol: string;
+  quantity: number;
+  price: number;
+}
+
+export interface QuantaxisDeploymentTestSignalResponse {
+  deployment_id: string;
+  signal_type: string;
+  signal: Record<string, unknown>;
+  signal_event: Record<string, unknown>;
+  execution: Record<string, unknown>;
 }
 
 export interface QuantaxisAccountSnapshot {

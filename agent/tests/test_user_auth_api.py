@@ -100,9 +100,10 @@ def test_strategy_market_admin_response_includes_full_builtin_catalog(monkeypatc
 
     items = api_server._load_strategy_market_admin_response_items()
 
-    assert len(items) == 20
+    assert len(items) == 21
     assert items[0].id == "quantclaw-ai-assistant"
     assert items[3].id == "classic-turtle-trading"
+    assert items[16].id == "professional-grid-trading-v2"
     assert items[-1].id == "perp-multi-symbol-balance"
     assert all(item.enabled and item.status == "published" for item in items)
 
@@ -126,6 +127,16 @@ def test_professional_grid_builtin_details_are_available_to_admin(monkeypatch) -
     assert item.strategy_description
     assert item.code_snapshot
     assert "CryptoAdvancedGrid" in item.code_snapshot or "SignalEngine" in item.code_snapshot
+
+    v2_item = next(
+        item
+        for item in api_server._load_strategy_market_admin_response_items()
+        if item.id == "professional-grid-trading-v2"
+    )
+    assert v2_item.language == "python"
+    assert v2_item.category == "grid"
+    assert "2.0.0" in v2_item.code_snapshot
+    assert "QAStrategy" in v2_item.code_snapshot
 
 
 @pytest.mark.asyncio

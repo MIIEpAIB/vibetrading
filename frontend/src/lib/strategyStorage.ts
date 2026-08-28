@@ -1,4 +1,5 @@
 import type { StrategyLibraryItem } from "@/lib/api";
+import { toQuantaxisStrategyCode } from "@/lib/quantaxisStrategy";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -11,11 +12,6 @@ function toTags(value: unknown): string[] {
         .map((tag) => tag.trim())
         .slice(0, 8)
     : [];
-}
-
-function normalizeLanguage(value: unknown, fallback: string): string {
-  if (value === "json") return "javascript";
-  return typeof value === "string" && value.trim() ? value : fallback;
 }
 
 function fallbackStrategy(): StrategyLibraryItem {
@@ -40,20 +36,21 @@ export function normalizeOwnedStrategy(value: unknown, fallback = fallbackStrate
   if (!isRecord(value)) return fallback;
   const now = new Date().toISOString();
   const code = typeof value.code === "string" ? value.code : fallback.code;
+  const name = typeof value.name === "string" && value.name.trim() ? value.name : fallback.name;
   return {
     id: typeof value.id === "string" && value.id.trim() ? value.id : fallback.id,
-    name: typeof value.name === "string" && value.name.trim() ? value.name : fallback.name,
+    name,
     description: typeof value.description === "string" ? value.description : fallback.description,
     strategyDescription: typeof value.strategyDescription === "string"
       ? value.strategyDescription
       : typeof value.strategy_description === "string"
         ? value.strategy_description
         : fallback.strategyDescription,
-    language: normalizeLanguage(value.language, fallback.language),
+    language: "python",
     category: typeof value.category === "string" && value.category.trim() ? value.category : fallback.category,
     status: typeof value.status === "string" && value.status.trim() ? value.status : fallback.status,
     tags: toTags(value.tags),
-    code,
+    code: toQuantaxisStrategyCode(code, name),
     createdAt: typeof value.createdAt === "string" ? value.createdAt : fallback.createdAt ?? now,
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : fallback.updatedAt ?? now,
     shareStatus: typeof value.shareStatus === "string" && value.shareStatus.trim() ? value.shareStatus : fallback.shareStatus ?? "none",

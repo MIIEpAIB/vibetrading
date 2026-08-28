@@ -105,6 +105,19 @@ def test_crypto_klines_api_normalizes_bars(
     assert body.bars[0].open == 119
 
 
+def test_crypto_klines_api_accepts_small_limit_for_latest_price(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = [[1_700_000_000_000 + i * 300_000, 100 + i, 104 + i, 98 + i, 102 + i, 1000 + i] for i in range(2)]
+    monkeypatch.setattr(crypto_market, "_json_get", lambda *args: rows)
+
+    payload = asyncio.run(api_server.get_crypto_klines(symbol="BTC/USDT", timeframe="5m", limit=2))
+
+    body = api_server.CryptoKlinesResponse.model_validate(payload)
+    assert len(body.bars) == 2
+    assert body.bars[-1].close == 102
+
+
 def test_okx_kline_stream_payload_is_normalized() -> None:
     payload = {
         "arg": {"channel": "candle1H", "instId": "BTC-USDT-SWAP"},

@@ -5,6 +5,7 @@ import { I18nProvider } from "@/i18n/I18nProvider";
 import { StrategyMarket } from "@/pages/StrategyMarket";
 import { StrategyLibrary } from "@/pages/StrategyLibrary";
 import { StrategyEdit } from "@/pages/StrategyEdit";
+import { StrategyShare } from "@/pages/StrategyShare";
 import { api } from "@/lib/api";
 import {
   buildMarketStarterCode,
@@ -73,6 +74,42 @@ vi.mock("@/lib/api", async () => {
         engine: "user_strategy_backtest_v1",
         assumptions: [],
         warnings: [],
+        qaAnalysis: {
+          module: "QAAnalysis",
+          basicMetrics: {
+            totalReturnPct: 8.2,
+            sharpe: 1.1,
+            maxDrawdownPct: 4.1,
+          },
+          performanceAnalysis: {
+            volatilityPct: 12.5,
+            sortino: 1.4,
+          },
+          visualAnalysis: {
+            equityCurve: [
+              { time: "2024-01-01", equity: 100000, drawdown: 0 },
+              { time: "2024-01-02", equity: 108200, drawdown: -0.01 },
+            ],
+            drawdown: [
+              { time: "2024-01-01", drawdown: 0 },
+              { time: "2024-01-02", drawdown: -0.01 },
+            ],
+            returnDistribution: [
+              { bucket: "0 - 1%", count: 3 },
+              { bucket: "1% - 2%", count: 1 },
+            ],
+          },
+          detailedAnalysis: {
+            assumptions: ["Server-side backtest"],
+            warnings: [],
+          },
+          optimization: {
+            enabled: true,
+            target: "sharpe",
+            walkForwardWindows: [{ window: 1, start: "2024-01-01", end: "2024-01-02", returnPct: 8.2 }],
+            parameterGrid: { fast_window: [10, 20] },
+          },
+        },
       }),
       runStrategyMarketBacktest: vi.fn().mockImplementation((body: { strategy_id: string }) => Promise.resolve({
         strategy_id: body.strategy_id,
@@ -203,6 +240,25 @@ describe("strategy market / library split", () => {
     expect(window.localStorage.getItem("vibe-personal-strategy-library")).toBeNull();
   });
 
+  it("shows public strategy details and code for numeric strategy share routes without private library access", async () => {
+    vi.mocked(api.listStrategies).mockRejectedValueOnce(new Error("Login required"));
+
+    render(
+      <MemoryRouter initialEntries={["/strategy/359806"]}>
+        <I18nProvider>
+          <Routes>
+            <Route path="/strategy/:strategyId" element={<StrategyShare />} />
+          </Routes>
+        </I18nProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "专业网格交易策略" })).toBeInTheDocument();
+    expect(screen.getByText("策略详细介绍")).toBeInTheDocument();
+    expect(screen.getByText("策略代码")).toBeInTheDocument();
+    expect(screen.getByText(/class QAStrategy/)).toBeInTheDocument();
+  });
+
   it("runs a market backtest and starts paper trading from the result", async () => {
     const user = userEvent.setup();
 
@@ -253,7 +309,7 @@ describe("strategy market / library split", () => {
 
     await waitFor(() => expect(api.upsertStrategy).toHaveBeenCalledWith(expect.objectContaining({
       id: "professional-grid-trading",
-      code: expect.stringContaining("class CryptoAdvancedGrid"),
+      code: expect.stringContaining("class QAStrategy"),
     })));
     expect(api.createDeployment).toHaveBeenCalledWith(expect.objectContaining({
       strategy_id: "professional-grid-trading",
@@ -484,6 +540,63 @@ describe("strategy market / library split", () => {
     expect(api.runStrategyMarketBacktest).not.toHaveBeenCalled();
   });
 
+  it("creates a QUANTAXIS shadow deployment from the strategy editor", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.listStrategies).mockResolvedValueOnce({
+      strategies: [{
+        id: "owned-qa-1",
+        name: "QUANTAXIS 网格策略",
+        description: "QA grid",
+        language: "python",
+        category: "grid",
+        status: "draft",
+        tags: ["qa"],
+        code: "class QAStrategy:\n    def on_tick(self, context):\n        return {'action': 'HOLD'}",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-27T00:00:00.000Z",
+      }],
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/m/edit-strategy/owned-qa-1?tab=backtest"]}>
+        <I18nProvider>
+          <Routes>
+            <Route path="/m/edit-strategy/:strategyId" element={<StrategyEdit />} />
+            <Route path="/deployments/:deploymentId" element={<LocationProbe />} />
+          </Routes>
+        </I18nProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "QUANTAXIS 网格策略" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "QUANTAXIS 回测" }));
+
+    await waitFor(() => expect(api.createDeployment).toHaveBeenCalledWith(expect.objectContaining({
+      strategy_id: "owned-qa-1",
+      target: "SHADOW",
+      market: "CRYPTO",
+      symbols: ["BTC_USDT"],
+      timeframe: "1d",
+      parameters: expect.objectContaining({
+        quantaxis_backtest: true,
+        strategy_id: "owned-qa-1",
+        symbol: "BTC_USDT",
+        source: "okx",
+        exchange: "okx_spot",
+        mode: "simulation",
+        initial_capital: 50000,
+        trading_currency: "USDT",
+      }),
+      risk_policy: expect.objectContaining({
+        max_order_notional: 100,
+        max_total_exposure: 50000,
+        order_type: "MARKET",
+      }),
+    })));
+    expect(api.readyDeployment).toHaveBeenCalledWith("qadep_1");
+    expect(await screen.findByTestId("location")).toHaveTextContent("/deployments/qadep_1");
+  });
+
   it("migrates an existing classic turtle JSON spec to Python when opening the strategy library", async () => {
     const user = userEvent.setup();
     vi.mocked(api.listStrategies).mockResolvedValueOnce({
@@ -603,6 +716,62 @@ describe("strategy market / library split", () => {
     expect(api.createDeployment).not.toHaveBeenCalled();
   });
 
+  it("runs a configured QUANTAXIS QAAnalysis backtest from the owned strategy toolbar", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.listStrategies).mockResolvedValueOnce({
+      strategies: [{
+        id: "owned-qa-1",
+        name: "QUANTAXIS 策略",
+        description: "QA backtest",
+        language: "python",
+        category: "trend",
+        status: "draft",
+        tags: ["qa"],
+        code: "class QAStrategy:\n    def on_tick(self, context):\n        return {'action': 'HOLD'}",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-27T00:00:00.000Z",
+      }],
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/strategies"]}>
+        <I18nProvider>
+          <Routes>
+            <Route path="/deployments/:deploymentId" element={<LocationProbe />} />
+            <Route path="*" element={<StrategyLibrary />} />
+          </Routes>
+        </I18nProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("QUANTAXIS 策略")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "QUANTAXIS 回测" }));
+
+    expect(await screen.findByText("回测参数配置")).toBeInTheDocument();
+    expect(screen.getByText("高级参数")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "运行 QAAnalysis" }));
+
+    await waitFor(() => expect(api.runStrategyBacktest).toHaveBeenCalledWith("owned-qa-1", expect.objectContaining({
+      symbol: "BTC-USDT",
+      interval: "4H",
+      source: "okx",
+      initial_capital: 100000,
+      commission: 0.0005,
+      slippage: 0.0005,
+      leverage: 1,
+      analyzer: "QAAnalysis",
+      optimize: false,
+      optimization_target: "sharpe",
+      parameters: expect.objectContaining({
+        quantaxis_backtest: true,
+      }),
+    })));
+    expect(api.createDeployment).not.toHaveBeenCalled();
+    expect(await screen.findByText("基本指标")).toBeInTheDocument();
+    expect(screen.getByText("可视化分析")).toBeInTheDocument();
+    expect(screen.getByText("走势期优化")).toBeInTheDocument();
+  });
+
   it("opens the owned strategy edit URL from the row action", async () => {
     const user = userEvent.setup();
     vi.mocked(api.listStrategies).mockResolvedValueOnce({
@@ -669,8 +838,48 @@ describe("strategy market / library split", () => {
       strategy_id: "owned-paper-1",
       target: "SHADOW",
       symbols: ["BTC_USDT"],
-      risk_policy: expect.objectContaining({ order_type: "MARKET" }),
+      risk_policy: expect.objectContaining({ initial_cash: 100000, order_type: "MARKET" }),
     })));
     expect(api.readyDeployment).toHaveBeenCalledWith("qadep_1");
+  });
+
+  it("opens the paper deployment wizard even when an active deployment already exists", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.listStrategies).mockResolvedValueOnce({
+      strategies: [{
+        id: "owned-paper-existing",
+        name: "已有部署策略",
+        description: "paper",
+        language: "python",
+        category: "trend",
+        status: "draft",
+        tags: ["paper"],
+        code: "def generate_signals(data):\n    return 0",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-27T00:00:00.000Z",
+      }],
+    });
+    vi.mocked(api.listDeployments).mockResolvedValueOnce({
+      deployments: [{
+        deployment_id: "qadep_existing",
+        target: "SHADOW",
+        status: "READY",
+        strategy_snapshot: { strategy_id: "owned-paper-existing" },
+      }],
+    } as never);
+
+    render(
+      <MemoryRouter initialEntries={["/strategies"]}>
+        <I18nProvider>
+          <StrategyLibrary />
+        </I18nProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("已有部署策略")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "模拟盘运行" }));
+
+    expect(await screen.findByText("部署策略")).toBeInTheDocument();
+    expect(api.createDeployment).not.toHaveBeenCalled();
   });
 });

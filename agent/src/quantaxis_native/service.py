@@ -31,6 +31,8 @@ from src.quantaxis_native.strategy_runtime import (
 )
 from src.quantaxis_native.store import MySQLQuantaxisDeploymentStore
 
+DEFAULT_SHADOW_INITIAL_CASH = 100000.0
+
 
 class StrategyStoreLike(Protocol):
     def list_strategy_versions(self, strategy_id: str, user_id: int | None = None) -> list[dict[str, Any]]: ...
@@ -110,6 +112,12 @@ class QuantaxisDeploymentService:
             raise QuantaxisTradingError("timeframe is required")
         snapshot = self._deployable_strategy_snapshot(snapshot)
         self._validate_strategy_runtime(snapshot)
+        normalized_parameters = dict(parameters or {})
+        normalized_risk_policy = self._normalize_risk_policy(
+            target=target_value,
+            parameters=normalized_parameters,
+            risk_policy=dict(risk_policy or {}),
+        )
         deployment = QuantaxisDeployment.create(
             user_id=user_id,
             target=target_value,
@@ -117,20 +125,20 @@ class QuantaxisDeploymentService:
             market=market,
             symbols=normalized_symbols,
             timeframe=timeframe,
-            parameters=dict(parameters or {}),
-            risk_policy=dict(risk_policy or {}),
+            parameters=normalized_parameters,
+            risk_policy=normalized_risk_policy,
             broker_binding_id=broker_binding_id,
         )
         return self.store.create(deployment)
 
     def list_deployments(self, *, user_id: int) -> list[QuantaxisDeployment]:
-        return self.store.list(user_id=user_id)
+        return [self._ensure_runtime_defaults(item) for item in self.store.list(user_id=user_id)]
 
     def get_deployment(self, deployment_id: str, *, user_id: int) -> QuantaxisDeployment:
         deployment = self.store.get(deployment_id, user_id=user_id)
         if deployment is None:
             raise QuantaxisTradingError("deployment not found")
-        return deployment
+        return self._ensure_runtime_defaults(deployment)
 
     def set_status(self, deployment_id: str, *, user_id: int, action: str) -> QuantaxisDeployment:
         deployment = self.get_deployment(deployment_id, user_id=user_id)
@@ -338,11 +346,13 @@ class QuantaxisDeploymentService:
     def recover_startup(self, *, worker_id: str) -> dict[str, Any]:
         if not hasattr(self.store, "list_by_status"):
             return {"checked": 0, "recovery_required": 0, "resumed": 0}
-        running = self.store.list_by_status([DeploymentStatus.RUNNING])
+        candidates = self.store.list_by_status([DeploymentStatus.RUNNING, DeploymentStatus.STOPPED])
         checked = 0
         recovery_required = 0
         resumed = 0
-        for deployment in running:
+        for deployment in candidates:
+            if deployment.status == DeploymentStatus.STOPPED and not self._is_maintenance_recovery_candidate(deployment):
+                continue
             checked += 1
             reason = self._startup_recovery_reason(deployment)
             recovery_payload: dict[str, Any] = {"worker_id": worker_id, "status": deployment.status.value}
@@ -370,8 +380,19 @@ class QuantaxisDeploymentService:
                 recovery_required += 1
             else:
                 resumed += 1
+                event_deployment = deployment
+                if deployment.status == DeploymentStatus.STOPPED:
+                    event_deployment = self.store.update(
+                        replace(
+                            deployment,
+                            status=DeploymentStatus.RUNNING,
+                            updated_at=now_iso(),
+                            recovery_reason="",
+                            stopped_at=None,
+                        )
+                    )
                 self._append_deployment_event(
-                    deployment,
+                    event_deployment,
                     event_type="deployment.recovered",
                     idempotency_key=f"deployment:{deployment.deployment_id}:startup_recovered:{worker_id}",
                     payload=recovery_payload,
@@ -417,6 +438,7 @@ class QuantaxisDeploymentService:
             recovery_reason="",
             started_at=deployment.started_at or now_iso(),
             paused_at=None,
+            stopped_at=None,
         )
         saved = self.store.update(updated)
         payload = {"broker": broker, "is_safe": True, "report": report}
@@ -433,6 +455,56 @@ class QuantaxisDeploymentService:
             payload=payload,
         )
         return saved
+
+    def recover_shadow_deployment(
+        self,
+        deployment_id: str,
+        *,
+        user_id: int,
+        worker_id: str,
+    ) -> QuantaxisDeployment:
+        deployment = self.get_deployment(deployment_id, user_id=user_id)
+        if deployment.target != DeploymentTarget.SHADOW:
+            raise QuantaxisTradingError("only shadow deployments can be recovered without broker reconciliation")
+        if deployment.status not in {DeploymentStatus.RECOVERY_REQUIRED, DeploymentStatus.STOPPED}:
+            raise QuantaxisTradingError("only recovery-required or stopped shadow deployments can be recovered")
+        reason = self._startup_recovery_reason(deployment)
+        if reason:
+            updated = replace(deployment, updated_at=now_iso(), recovery_reason=reason)
+            self.store.update(updated)
+            raise QuantaxisTradingError(reason)
+        payload = self._recover_shadow_runtime(deployment, worker_id=worker_id)
+        updated = replace(
+            deployment,
+            status=DeploymentStatus.RUNNING,
+            updated_at=now_iso(),
+            recovery_reason="",
+            started_at=deployment.started_at or now_iso(),
+            paused_at=None,
+            stopped_at=None,
+        )
+        saved = self.store.update(updated)
+        self._append_deployment_event(
+            saved,
+            event_type="deployment.recovered",
+            idempotency_key=f"deployment:{deployment.deployment_id}:shadow_recovered:{worker_id}",
+            payload=payload,
+        )
+        self.publish_recovery_event(
+            saved.deployment_id,
+            user_id=saved.user_id,
+            recovery_event_id=f"shadow_recovered:{worker_id}",
+            payload=payload,
+        )
+        return saved
+
+    @staticmethod
+    def _is_maintenance_recovery_candidate(deployment: QuantaxisDeployment) -> bool:
+        return (
+            deployment.target == DeploymentTarget.SHADOW
+            and deployment.status == DeploymentStatus.STOPPED
+            and not deployment.stopped_at
+        )
 
     def account_snapshot(self, account_cookie: str, *, user_id: int) -> dict[str, Any]:
         deployment = next((item for item in self.list_deployments(user_id=user_id) if item.account_cookie == account_cookie), None)
@@ -561,6 +633,81 @@ class QuantaxisDeploymentService:
         )
         return result
 
+    def submit_shadow_test_signal(
+        self,
+        deployment_id: str,
+        *,
+        user_id: int,
+        signal_type: str,
+        symbol: str,
+        quantity: float,
+        price: float,
+    ) -> dict[str, Any]:
+        deployment = self.get_deployment(deployment_id, user_id=user_id)
+        if deployment.target != DeploymentTarget.SHADOW:
+            raise QuantaxisTradingError("test signals are only available for SHADOW deployments")
+        if deployment.status != DeploymentStatus.RUNNING:
+            raise QuantaxisTradingError("test signals require a running shadow deployment")
+        side = _shadow_test_signal_side(signal_type)
+        ts = now_iso()
+        client_order_id = self._client_order_id(deployment, f"test:{signal_type}:{ts}")
+        signal_payload = {
+            "strategy_contract": "manual_test_signal",
+            "action": side,
+            "symbol": symbol,
+            "price": float(price),
+            "quantity": float(quantity),
+            "intent": {
+                "symbol": symbol,
+                "side": side,
+                "quantity": float(quantity),
+                "price": float(price),
+                "client_order_id": client_order_id,
+                "order_time": ts,
+                "reason": f"manual {signal_type} test signal",
+            },
+            "test_signal": True,
+            "signal_type": signal_type,
+        }
+        policy_skip_reason = ""
+        try:
+            self._validate_order_intent_policy(deployment, signal_payload["intent"])
+        except QuantaxisTradingError as exc:
+            if not _is_max_notional_error(str(exc)):
+                raise
+            policy_skip_reason = "order notional exceeds deployment max_order_notional; execution skipped"
+        signal_event = self.publish_signal_event(
+            deployment.deployment_id,
+            user_id=deployment.user_id,
+            signal_id=client_order_id,
+            payload=signal_payload,
+        )
+        if policy_skip_reason:
+            execution = self._publish_shadow_execution_skip(
+                deployment,
+                client_order_id=client_order_id,
+                intent=signal_payload["intent"],
+                reason=policy_skip_reason,
+            )
+        else:
+            execution = self.execute_shadow_order_intent(
+                deployment.deployment_id,
+                user_id=deployment.user_id,
+                client_order_id=client_order_id,
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                price=price,
+                order_time=ts,
+            )
+        return {
+            "deployment_id": deployment.deployment_id,
+            "signal_type": signal_type,
+            "signal": signal_payload,
+            "signal_event": signal_event,
+            "execution": execution,
+        }
+
     def execute_deployment_tick(
         self,
         deployment_id: str,
@@ -601,21 +748,32 @@ class QuantaxisDeploymentService:
                 self._validate_order_intent_policy(deployment, intent)
                 client_order_id = str(intent.get("client_order_id") or self._client_order_id(deployment, market_event_id))
                 adapter = self.shadow_execution_adapter if deployment.target == DeploymentTarget.SHADOW else self.live_execution_adapter
-                execution = adapter.execute_order_intent(
-                    deployment,
-                    client_order_id=client_order_id,
-                    symbol=str(intent["symbol"]),
-                    side=str(intent["side"]),
-                    quantity=float(intent["quantity"]),
-                    price=float(intent["price"]),
-                    order_time=str(intent.get("order_time") or market_event.get("datetime") or ""),
-                )
-                self._publish_execution_events(
-                    deployment,
-                    client_order_id=client_order_id,
-                    execution=execution,
-                    source="QAMarket/QIFI" if deployment.target == DeploymentTarget.SHADOW else "LIVE_GATE",
-                )
+                try:
+                    execution = adapter.execute_order_intent(
+                        deployment,
+                        client_order_id=client_order_id,
+                        symbol=str(intent["symbol"]),
+                        side=str(intent["side"]),
+                        quantity=float(intent["quantity"]),
+                        price=float(intent["price"]),
+                        order_time=str(intent.get("order_time") or market_event.get("datetime") or ""),
+                    )
+                except QuantaxisAdapterError as exc:
+                    if deployment.target != DeploymentTarget.SHADOW or not _is_qifi_quantity_error(str(exc)):
+                        raise
+                    execution = self._publish_shadow_execution_skip(
+                        deployment,
+                        client_order_id=client_order_id,
+                        intent=intent,
+                        reason="quantity is below the QIFI minimum executable lot; execution skipped",
+                    )
+                else:
+                    self._publish_execution_events(
+                        deployment,
+                        client_order_id=client_order_id,
+                        execution=execution,
+                        source="QAMarket/QIFI" if deployment.target == DeploymentTarget.SHADOW else "LIVE_GATE",
+                    )
             if hasattr(self.store, "save_event_offset"):
                 self.store.save_event_offset(
                     deployment_id=deployment.deployment_id,
@@ -959,6 +1117,40 @@ class QuantaxisDeploymentService:
         if max_notional is not None and quantity * price > float(max_notional):
             raise QuantaxisTradingError("strategy order intent exceeds deployment max_order_notional")
 
+    def _ensure_runtime_defaults(self, deployment: QuantaxisDeployment) -> QuantaxisDeployment:
+        normalized = self._normalize_risk_policy(
+            target=deployment.target,
+            parameters=deployment.parameters,
+            risk_policy=deployment.risk_policy,
+        )
+        if normalized == deployment.risk_policy:
+            return deployment
+        updated = replace(deployment, risk_policy=normalized, updated_at=now_iso())
+        try:
+            return self.store.update(updated)
+        except Exception:
+            return updated
+
+    @staticmethod
+    def _normalize_risk_policy(
+        *,
+        target: DeploymentTarget,
+        parameters: dict[str, Any],
+        risk_policy: dict[str, Any],
+    ) -> dict[str, Any]:
+        normalized = dict(risk_policy or {})
+        if target != DeploymentTarget.SHADOW or normalized.get("initial_cash") is not None:
+            return normalized
+        value = parameters.get("initial_cash", parameters.get("initial_capital", DEFAULT_SHADOW_INITIAL_CASH))
+        try:
+            amount = float(value)
+        except (TypeError, ValueError) as exc:
+            raise QuantaxisTradingError("shadow initial_cash must be numeric") from exc
+        if amount <= 0:
+            raise QuantaxisTradingError("shadow initial_cash must be positive")
+        normalized["initial_cash"] = amount
+        return normalized
+
     @staticmethod
     def _client_order_id(deployment: QuantaxisDeployment, market_event_id: str) -> str:
         return f"{deployment.deployment_id}:{deployment.strategy_snapshot.version_id}:{market_event_id}"
@@ -997,15 +1189,64 @@ class QuantaxisDeploymentService:
                 payload={"source": source, "snapshot": snapshot},
             )
 
+    def _publish_shadow_execution_skip(
+        self,
+        deployment: QuantaxisDeployment,
+        *,
+        client_order_id: str,
+        intent: dict[str, Any],
+        reason: str,
+    ) -> dict[str, Any]:
+        payload = {
+            "source": "QAMarket/QIFI",
+            "status": "skipped",
+            "reason": reason,
+            "intent": dict(intent),
+        }
+        event = self.publish_runtime_event(
+            deployment.deployment_id,
+            user_id=deployment.user_id,
+            event_scope="order",
+            event_type="order.skipped",
+            idempotency_key=f"order:{deployment.deployment_id}:{client_order_id}:skipped",
+            payload=payload,
+        )
+        return {**payload, "event": event}
+
     @staticmethod
     def _default_market_event(deployment: QuantaxisDeployment) -> dict[str, Any]:
-        return {
+        symbol = deployment.symbols[0] if deployment.symbols else ""
+        event = {
             "event_id": f"manual:{deployment.deployment_id}:{now_iso()}",
-            "symbol": deployment.symbols[0] if deployment.symbols else "",
+            "symbol": symbol,
             "market": deployment.market,
             "timeframe": deployment.timeframe,
             "datetime": now_iso(),
         }
+        if deployment.market.upper() != "CRYPTO" or not symbol:
+            return event
+        try:
+            from src.crypto_market import get_klines
+
+            payload = get_klines(symbol=symbol, timeframe=deployment.timeframe or "1h", limit=20)
+            bars = list(payload.get("bars") or [])
+            latest = dict(bars[-1]) if bars else {}
+        except Exception:
+            latest = {}
+        if latest:
+            event.update({
+                "symbol": latest.get("symbol") or symbol,
+                "datetime": latest.get("time") or event["datetime"],
+                "timestamp": latest.get("timestamp"),
+                "open": latest.get("open"),
+                "high": latest.get("high"),
+                "low": latest.get("low"),
+                "close": latest.get("close"),
+                "price": latest.get("close"),
+                "volume": latest.get("volume"),
+                "source": "crypto_klines",
+            })
+        return event
 
     def _cancel_runtime_tasks(self, deployment: QuantaxisDeployment) -> int:
         self.engine_adapter.cancel_deployment_tasks(deployment_id=deployment.deployment_id, task_type="tick")
@@ -1154,6 +1395,31 @@ class SignalEngine:
 
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _shadow_test_signal_side(signal_type: str) -> str:
+    normalized = str(signal_type or "").strip().upper()
+    mapping = {
+        "BUY_OPEN": "BUY_OPEN",
+        "OPEN_LONG": "BUY_OPEN",
+        "SELL_CLOSE": "SELL_CLOSE",
+        "CLOSE_LONG": "SELL_CLOSE",
+        "SELL_OPEN": "SELL_OPEN",
+        "OPEN_SHORT": "SELL_OPEN",
+        "BUY_CLOSE": "BUY_CLOSE",
+        "CLOSE_SHORT": "BUY_CLOSE",
+    }
+    if normalized not in mapping:
+        raise QuantaxisTradingError("test signal type must be BUY_OPEN, SELL_CLOSE, SELL_OPEN, or BUY_CLOSE")
+    return mapping[normalized]
+
+
+def _is_qifi_quantity_error(message: str) -> bool:
+    return str(message or "").startswith("QIFI order quantity must")
+
+
+def _is_max_notional_error(message: str) -> bool:
+    return str(message or "") == "strategy order intent exceeds deployment max_order_notional"
 
 
 class DefaultLiveReconciliationGate:

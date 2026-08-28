@@ -1,0 +1,18 @@
+20:50:51 QUANTAXIS>>> Strategy catalog store unavailable; using local market catalog config
+Traceback (most recent call last):
+  File "/opt/Vibe-Trading/agent/api_server.py", line 2407, in _load_strategy_market_catalog_items
+    return _strategy_catalog_api_items(_get_strategy_store())
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/Vibe-Trading/agent/api_server.py", line 2356, in _strategy_catalog_api_items
+    store.upsert_strategy_catalog(
+  File "/opt/Vibe-Trading/agent/src/strategies/store.py", line 426, in upsert_strategy_catalog
+    self._upsert_catalog_with_cursor(cur, item)
+  File "/opt/Vibe-Trading/agent/src/strategies/store.py", line 819, in _upsert_catalog_with_cursor
+    cur.execute(
+  File "/opt/Vibe-Trading/.venv/lib/python3.12/site-packages/pymysql/cursors.py", line 157, in execute
+    query = self.mogrify(query, args)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/Vibe-Trading/.venv/lib/python3.12/site-packages/pymysql/cursors.py", line 135, in mogrify
+    query = query % self._escape_args(args, conn)
+            ~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+TypeError: not all arguments converted during string formatting

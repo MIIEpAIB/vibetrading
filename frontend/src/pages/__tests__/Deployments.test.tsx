@@ -4,8 +4,13 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { I18nProvider } from "@/i18n/I18nProvider";
 import { Deployments } from "@/pages/Deployments";
 import { api } from "@/lib/api";
+import { toast } from "sonner";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), message: vi.fn() } }));
+
+vi.mock("@/components/charts/StrategyReturnChart", () => ({
+  StrategyReturnChart: () => <div data-testid="strategy-return-chart" />,
+}));
 
 vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
@@ -17,14 +22,20 @@ vi.mock("@/lib/api", async () => {
       listDeployments: vi.fn(),
       getDeployment: vi.fn(),
       listExchangeApiKeys: vi.fn(),
+      listStrategies: vi.fn(),
       getQuantaxisAccountSnapshot: vi.fn(),
       listQuantaxisAccountOrders: vi.fn(),
       listQuantaxisAccountTrades: vi.fn(),
       listDeploymentSignals: vi.fn(),
       listDeploymentEvents: vi.fn(),
+      getCryptoKlines: vi.fn(),
+      upsertStrategy: vi.fn(),
+      deleteStrategy: vi.fn(),
+      archiveDeployment: vi.fn(),
       deploymentEventsSseUrl: vi.fn(),
       promoteDeployment: vi.fn(),
       recoverDeployment: vi.fn(),
+      submitDeploymentTestSignal: vi.fn(),
     },
   };
 });
@@ -124,6 +135,21 @@ describe("Deployments", () => {
     vi.mocked(api.listExchangeApiKeys).mockResolvedValue({
       bindings: [{ binding_id: 99, exchange: "binance", label: "Live Binance", status: "active" }],
     } as never);
+    vi.mocked(api.listStrategies).mockResolvedValue({
+      strategies: [{
+        id: "s1",
+        name: "Momentum",
+        description: "",
+        strategyDescription: "",
+        language: "python",
+        category: "trend",
+        status: "archived",
+        tags: [],
+        code: "",
+        createdAt: "2026-08-20T00:00:00Z",
+        updatedAt: "2026-08-20T00:01:00Z",
+      }],
+    } as never);
     vi.mocked(api.getQuantaxisAccountSnapshot).mockResolvedValue({
       account_cookie: shadowDeployment.account_cookie,
       cash: 1000,
@@ -147,6 +173,26 @@ describe("Deployments", () => {
       deployment_id: shadowDeployment.deployment_id,
       events: [{ event_id: "e1", sequence_no: 4, event_type: "deployment.recovery_required" }],
     } as never);
+    vi.mocked(api.getCryptoKlines).mockResolvedValue({
+      status: "ok",
+      symbol: "BTC/USDT",
+      timeframe: "5m",
+      source: "okx",
+      updated_at: "2026-08-20T00:00:00Z",
+      storage: { redis: "disabled", timescale: "disabled" },
+      bars: [
+        {
+          time: "2026-08-20T00:00:00Z",
+          timestamp: 1,
+          symbol: "BTC/USDT",
+          open: 66900,
+          high: 67100,
+          low: 66850,
+          close: 67000,
+          volume: 10,
+        },
+      ],
+    } as never);
     vi.mocked(api.deploymentEventsSseUrl).mockReturnValue("/api/deployments/qadep_shadow/events/stream?after_sequence_no=4");
     vi.mocked(api.promoteDeployment).mockResolvedValue({
       deployment: { ...shadowDeployment, deployment_id: "qadep_live", target: "LIVE", status: "DRAFT", broker_binding_id: 99 },
@@ -154,19 +200,205 @@ describe("Deployments", () => {
     vi.mocked(api.recoverDeployment).mockResolvedValue({
       deployment: { ...liveRecoveryDeployment, status: "RUNNING", broker_binding_id: 99, recovery_reason: "" },
     } as never);
+    vi.mocked(api.submitDeploymentTestSignal).mockResolvedValue({
+      deployment_id: shadowDeployment.deployment_id,
+      signal_type: "BUY_OPEN",
+      signal: {},
+      signal_event: {},
+      execution: {},
+    });
+    vi.mocked(api.upsertStrategy).mockResolvedValue({
+      id: "s1",
+      name: "Momentum",
+      description: "",
+      strategyDescription: "",
+      language: "python",
+      category: "trend",
+      status: "draft",
+      tags: [],
+      code: "",
+      createdAt: "2026-08-20T00:00:00Z",
+      updatedAt: "2026-08-20T00:02:00Z",
+    } as never);
+    vi.mocked(api.deleteStrategy).mockResolvedValue({ status: "deleted", id: "s1" } as never);
+    vi.mocked(api.archiveDeployment).mockResolvedValue({
+      deployment: { ...shadowDeployment, status: "ARCHIVED" },
+    } as never);
   });
 
   it("renders shared deployment detail with QIFI projections and recovery state", async () => {
     renderDeployments();
 
     expect(await screen.findByText("Momentum")).toBeInTheDocument();
-    expect(screen.getByText("RECOVERY_REQUIRED")).toBeInTheDocument();
+    expect(screen.getByText("Recovery required")).toBeInTheDocument();
+    expect(screen.getByText("QUANTAXIS Backtest Analysis")).toBeInTheDocument();
+    expect(await screen.findByTestId("strategy-return-chart")).toBeInTheDocument();
     expect(screen.getByText("QIFI Account")).toBeInTheDocument();
     expect(await screen.findByText("1000")).toBeInTheDocument();
     expect((await screen.findAllByText(/deployment.recovery_required/)).length).toBeGreaterThan(0);
     expect(api.getQuantaxisAccountSnapshot).toHaveBeenCalledWith(shadowDeployment.account_cookie);
     await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
     expect(MockEventSource.instances[0].url).toContain("after_sequence_no=4");
+  });
+
+  it("submits shadow recovery without requiring a broker binding", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.recoverDeployment).mockResolvedValue({
+      deployment: { ...shadowDeployment, status: "RUNNING", recovery_reason: "" },
+    } as never);
+
+    renderDeployments();
+
+    await screen.findByText("Recovery required");
+    await user.click(screen.getByRole("button", { name: "Recover Deployment" }));
+
+    await waitFor(() => expect(api.recoverDeployment).toHaveBeenCalledWith("qadep_shadow", {}));
+  });
+
+  it("shows recovery action for stopped shadow deployments", async () => {
+    const user = userEvent.setup();
+    const stoppedDeployment = { ...shadowDeployment, status: "STOPPED", stopped_at: "2026-08-20T00:00:00Z", recovery_reason: "" };
+    vi.mocked(api.listDeployments).mockResolvedValue({ deployments: [stoppedDeployment] } as never);
+    vi.mocked(api.getDeployment).mockResolvedValue({ deployment: stoppedDeployment } as never);
+    vi.mocked(api.recoverDeployment).mockResolvedValue({
+      deployment: { ...stoppedDeployment, status: "RUNNING", stopped_at: null },
+    } as never);
+
+    renderDeployments();
+
+    await screen.findByText("Stopped");
+    await user.click(screen.getByRole("button", { name: "Recover Deployment" }));
+
+    await waitFor(() => expect(api.recoverDeployment).toHaveBeenCalledWith("qadep_shadow", {}));
+  });
+
+  it("restores an archived shadow strategy from the detail page", async () => {
+    const user = userEvent.setup();
+
+    renderDeployments();
+
+    await screen.findByText("Archive");
+    await user.click(screen.getByRole("button", { name: "Restore from archive" }));
+
+    await waitFor(() => expect(api.upsertStrategy).toHaveBeenCalledWith(expect.objectContaining({
+      id: "s1",
+      status: "draft",
+    })));
+  });
+
+  it("deletes a shadow deployment from the detail page without deleting the library strategy", async () => {
+    const user = userEvent.setup();
+
+    renderDeployments();
+
+    await screen.findByText("Archive");
+    await user.click(screen.getByRole("button", { name: "Delete deployment" }));
+    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+    await waitFor(() => expect(api.archiveDeployment).toHaveBeenCalledWith("qadep_shadow"));
+    expect(api.deleteStrategy).not.toHaveBeenCalled();
+  });
+
+  it("hides archived shadow deployments without deleting the library strategy", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.listDeployments)
+      .mockResolvedValueOnce({
+        deployments: [shadowDeployment],
+      } as never)
+      .mockResolvedValue({ deployments: [{ ...shadowDeployment, status: "ARCHIVED" }] } as never);
+
+    render(
+      <MemoryRouter initialEntries={["/deployments/qadep_shadow"]}>
+        <I18nProvider>
+          <Routes>
+            <Route path="/deployments" element={<Deployments />} />
+            <Route path="/deployments/:deploymentId" element={<Deployments />} />
+          </Routes>
+        </I18nProvider>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("Archive");
+    await user.click(screen.getByRole("button", { name: "Delete deployment" }));
+    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+    await waitFor(() => expect(api.archiveDeployment).toHaveBeenCalledWith("qadep_shadow"));
+    await waitFor(() => expect(screen.queryByText("Momentum")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Delete deployment" })).not.toBeInTheDocument());
+    expect(api.deleteStrategy).not.toHaveBeenCalled();
+  });
+
+  it("prefills the shadow test signal price from BTC kline data and submits it", async () => {
+    const user = userEvent.setup();
+    const runningDeployment = {
+      ...shadowDeployment,
+      status: "RUNNING",
+      recovery_reason: "",
+      risk_policy: { ...shadowDeployment.risk_policy, max_order_notional: 67000 },
+    };
+    vi.mocked(api.listDeployments).mockResolvedValue({ deployments: [runningDeployment] } as never);
+    vi.mocked(api.getDeployment).mockResolvedValue({ deployment: runningDeployment } as never);
+
+    renderDeployments();
+
+    await screen.findByText("Test Signals");
+    expect(await screen.findByLabelText("Quantity")).toHaveValue(1);
+    await screen.findByDisplayValue("67000");
+    await user.click(screen.getByRole("button", { name: "10%" }));
+    expect(screen.getByLabelText("Quantity")).toHaveValue(1);
+    expect(toast.error).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: /Buy Open/ }));
+
+    await waitFor(() => expect(api.submitDeploymentTestSignal).toHaveBeenCalledWith("qadep_shadow", {
+      signal_type: "BUY_OPEN",
+      symbol: "BTC_USDT",
+      quantity: 1,
+      price: 67000,
+    }));
+  });
+
+  it("blocks shadow test signals when one lot exceeds max_order_notional", async () => {
+    const user = userEvent.setup();
+    const runningDeployment = {
+      ...shadowDeployment,
+      status: "RUNNING",
+      recovery_reason: "",
+      risk_policy: { ...shadowDeployment.risk_policy, max_order_notional: 1000 },
+    };
+    vi.mocked(api.listDeployments).mockResolvedValue({ deployments: [runningDeployment] } as never);
+    vi.mocked(api.getDeployment).mockResolvedValue({ deployment: runningDeployment } as never);
+
+    renderDeployments();
+
+    await screen.findByDisplayValue("67000");
+    expect(screen.getByRole("button", { name: /Buy Open/ })).toBeDisabled();
+    expect(screen.getByText("The minimum executable quantity exceeds max_order_notional. Increase the deployment risk limit or lower the test price.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "10%" }));
+    expect(toast.error).toHaveBeenCalledWith("This sizing is below the simulated account minimum lot. Increase max_order_notional or use a higher percentage.");
+    expect(api.submitDeploymentTestSignal).not.toHaveBeenCalled();
+  });
+
+  it("presents skipped shadow execution as a business status with guidance", async () => {
+    vi.mocked(api.listDeploymentEvents).mockResolvedValue({
+      deployment_id: shadowDeployment.deployment_id,
+      events: [{
+        event_id: "e-skip",
+        sequence_no: 8,
+        event_scope: "order",
+        event_type: "order.skipped",
+        payload: {
+          reason: "QIFI order quantity must be at least 1",
+          intent: { symbol: "BTC_USDT", quantity: 0.5, price: 67000 },
+        },
+      }],
+    } as never);
+
+    renderDeployments();
+
+    expect(await screen.findAllByText("Signal not executed")).not.toHaveLength(0);
+    expect(screen.getAllByText("Order quantity is below the simulated account minimum lot, so execution was skipped.").length).toBeGreaterThan(0);
+    expect(screen.getByText(/Increase order notional/)).toBeInTheDocument();
+    expect(screen.queryByText("QIFI order quantity must be at least 1")).not.toBeInTheDocument();
   });
 
   it("reloads durable events when the event stream reconnects and surfaces stream failures", async () => {
@@ -222,7 +454,7 @@ describe("Deployments", () => {
 
     renderDeployments();
 
-    expect(await screen.findByText("Running Strategy")).toBeInTheDocument();
+    expect(await screen.findByText("Running strategy")).toBeInTheDocument();
     expect(await screen.findByText("No event yet")).toBeInTheDocument();
     expect(screen.getByText(/Waiting for the first runtime event/)).toBeInTheDocument();
     expect(screen.getByText(/No runtime events have been recorded yet/)).toBeInTheDocument();
@@ -231,6 +463,9 @@ describe("Deployments", () => {
 
   it("submits shadow promotion with consent and selected broker binding", async () => {
     const user = userEvent.setup();
+    const promotableDeployment = { ...shadowDeployment, status: "PAUSED", recovery_reason: "" };
+    vi.mocked(api.listDeployments).mockResolvedValue({ deployments: [promotableDeployment] } as never);
+    vi.mocked(api.getDeployment).mockResolvedValue({ deployment: promotableDeployment } as never);
     renderDeployments();
 
     await screen.findByText("Promote To Live");
@@ -259,12 +494,31 @@ describe("Deployments", () => {
       </MemoryRouter>,
     );
 
-    await screen.findByText("Recovery Required");
+    await screen.findByText("Recovery required");
     await user.selectOptions(screen.getByLabelText("Broker Binding"), "99");
     await user.click(screen.getByRole("button", { name: /Recover Live Deployment/ }));
 
     await waitFor(() => expect(api.recoverDeployment).toHaveBeenCalledWith("qadep_f297c7abfcf7", {
       broker: "binance",
     }));
+  });
+
+  it("renders deployment copy in Chinese when the language is zh-CN", async () => {
+    window.localStorage.setItem("vibe-language", "zh-CN");
+
+    render(
+      <MemoryRouter initialEntries={["/deployments"]}>
+        <I18nProvider>
+          <Routes>
+            <Route path="/deployments" element={<Deployments />} />
+          </Routes>
+        </I18nProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("策略部署")).toBeInTheDocument();
+    expect(screen.getByText("刷新")).toBeInTheDocument();
+    expect(screen.getByText("需要恢复")).toBeInTheDocument();
+    window.localStorage.removeItem("vibe-language");
   });
 });

@@ -238,6 +238,7 @@ class MySQLStrategyStore:
                 self._ensure_composite_primary_key(cur)
                 self._init_public_strategy_marketplace(cur)
                 self._init_strategy_catalog(cur)
+                self._ensure_strategy_catalog_market_columns(cur)
                 self._init_strategy_versions(cur)
 
     def list_strategies(self, user_id: int | None = None) -> list[StrategyRecord]:
@@ -459,6 +460,21 @@ class MySQLStrategyStore:
                                 code_snapshot = CASE
                                     WHEN TRIM(code_snapshot) = '' THEN %s ELSE code_snapshot
                                 END,
+                                author = CASE
+                                    WHEN TRIM(author) = '' THEN %s ELSE author
+                                END,
+                                assets_json = CASE
+                                    WHEN assets_json IS NULL OR JSON_LENGTH(assets_json) = 0 THEN %s ELSE assets_json
+                                END,
+                                one_year_sharpe = COALESCE(one_year_sharpe, %s),
+                                five_year_cagr = COALESCE(five_year_cagr, %s),
+                                five_year_drawdown = COALESCE(five_year_drawdown, %s),
+                                oos_three_month_return = COALESCE(oos_three_month_return, %s),
+                                oos_three_month_sharpe = COALESCE(oos_three_month_sharpe, %s),
+                                oos_one_year_sharpe = COALESCE(oos_one_year_sharpe, %s),
+                                followers = CASE
+                                    WHEN followers = 0 THEN %s ELSE followers
+                                END,
                                 tags_json = CASE
                                     WHEN JSON_LENGTH(tags_json) = 0 THEN %s ELSE tags_json
                                 END,
@@ -474,6 +490,15 @@ class MySQLStrategyStore:
                                 normalized["language"],
                                 normalized["category"],
                                 normalized["code_snapshot"],
+                                normalized["author"],
+                                _json_dumps(normalized["assets"]),
+                                normalized["one_year_sharpe"],
+                                normalized["five_year_cagr"],
+                                normalized["five_year_drawdown"],
+                                normalized["oos_three_month_return"],
+                                normalized["oos_three_month_sharpe"],
+                                normalized["oos_one_year_sharpe"],
+                                normalized["followers"],
                                 _json_dumps(normalized["tags"]),
                                 _json_dumps(normalized["risk_warnings"]),
                                 normalized["strategy_id"],
@@ -761,6 +786,15 @@ class MySQLStrategyStore:
             "owner_user_id": item.get("owner_user_id"),
             "source_strategy_id": str(item.get("source_strategy_id") or ""),
             "name": str(item.get("name") or strategy_id),
+            "author": str(item.get("author") or ""),
+            "assets": list(item.get("assets") or []),
+            "one_year_sharpe": item.get("one_year_sharpe"),
+            "five_year_cagr": item.get("five_year_cagr"),
+            "five_year_drawdown": item.get("five_year_drawdown"),
+            "oos_three_month_return": item.get("oos_three_month_return"),
+            "oos_three_month_sharpe": item.get("oos_three_month_sharpe"),
+            "oos_one_year_sharpe": item.get("oos_one_year_sharpe"),
+            "followers": int(item.get("followers") or 0),
             "summary": str(item.get("summary") or item.get("description") or ""),
             "description": str(item.get("description") or ""),
             "strategy_description": str(item.get("strategy_description") or item.get("strategyDescription") or ""),
@@ -785,17 +819,29 @@ class MySQLStrategyStore:
         cur.execute(
             """
             INSERT INTO strategy_catalog (
-                strategy_id, kind, owner_user_id, source_strategy_id, name, summary,
+                strategy_id, kind, owner_user_id, source_strategy_id, name, author,
+                assets_json, one_year_sharpe, five_year_cagr, five_year_drawdown,
+                oos_three_month_return, oos_three_month_sharpe, oos_one_year_sharpe,
+                followers, summary,
                 description, strategy_description, language, category, tags_json,
                 code_snapshot, status, enabled, featured, price, note, deleted,
                 published_at, updated_at, backtest_summary_json, risk_warnings_json
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
                 kind = VALUES(kind),
                 owner_user_id = VALUES(owner_user_id),
                 source_strategy_id = VALUES(source_strategy_id),
                 name = VALUES(name),
+                author = VALUES(author),
+                assets_json = VALUES(assets_json),
+                one_year_sharpe = VALUES(one_year_sharpe),
+                five_year_cagr = VALUES(five_year_cagr),
+                five_year_drawdown = VALUES(five_year_drawdown),
+                oos_three_month_return = VALUES(oos_three_month_return),
+                oos_three_month_sharpe = VALUES(oos_three_month_sharpe),
+                oos_one_year_sharpe = VALUES(oos_one_year_sharpe),
+                followers = VALUES(followers),
                 summary = VALUES(summary),
                 description = VALUES(description),
                 strategy_description = VALUES(strategy_description),
@@ -820,6 +866,15 @@ class MySQLStrategyStore:
                 item["owner_user_id"],
                 item["source_strategy_id"],
                 item["name"],
+                item["author"],
+                _json_dumps(item["assets"]),
+                item["one_year_sharpe"],
+                item["five_year_cagr"],
+                item["five_year_drawdown"],
+                item["oos_three_month_return"],
+                item["oos_three_month_sharpe"],
+                item["oos_one_year_sharpe"],
+                item["followers"],
                 item["summary"],
                 item["description"],
                 item["strategy_description"],
@@ -849,6 +904,15 @@ class MySQLStrategyStore:
             "owner_user_id": row.get("owner_user_id"),
             "source_strategy_id": row.get("source_strategy_id") or "",
             "name": row["name"],
+            "author": row.get("author") or "",
+            "assets": list(_json_loads(row.get("assets_json"), [])),
+            "one_year_sharpe": row.get("one_year_sharpe"),
+            "five_year_cagr": row.get("five_year_cagr"),
+            "five_year_drawdown": row.get("five_year_drawdown"),
+            "oos_three_month_return": row.get("oos_three_month_return"),
+            "oos_three_month_sharpe": row.get("oos_three_month_sharpe"),
+            "oos_one_year_sharpe": row.get("oos_one_year_sharpe"),
+            "followers": int(row.get("followers") or 0),
             "summary": row.get("summary") or "",
             "description": row.get("description") or "",
             "strategy_description": row.get("strategy_description") or "",
@@ -1119,6 +1183,15 @@ class MySQLStrategyStore:
                 owner_user_id BIGINT UNSIGNED NULL,
                 source_strategy_id VARCHAR(128) NOT NULL,
                 name TEXT NOT NULL,
+                author VARCHAR(191) NOT NULL DEFAULT '',
+                assets_json JSON NOT NULL,
+                one_year_sharpe DOUBLE NULL,
+                five_year_cagr DOUBLE NULL,
+                five_year_drawdown DOUBLE NULL,
+                oos_three_month_return DOUBLE NULL,
+                oos_three_month_sharpe DOUBLE NULL,
+                oos_one_year_sharpe DOUBLE NULL,
+                followers INT UNSIGNED NOT NULL DEFAULT 0,
                 summary TEXT NOT NULL,
                 description TEXT NOT NULL,
                 strategy_description MEDIUMTEXT NOT NULL,
@@ -1142,6 +1215,19 @@ class MySQLStrategyStore:
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """
         )
+
+    @staticmethod
+    def _ensure_strategy_catalog_market_columns(cur: Any) -> None:
+        MySQLStrategyStore._ensure_column(cur, "strategy_catalog", "author", "VARCHAR(191) NOT NULL DEFAULT ''")
+        MySQLStrategyStore._ensure_column(cur, "strategy_catalog", "assets_json", "JSON NULL")
+        MySQLStrategyStore._ensure_column(cur, "strategy_catalog", "one_year_sharpe", "DOUBLE NULL")
+        MySQLStrategyStore._ensure_column(cur, "strategy_catalog", "five_year_cagr", "DOUBLE NULL")
+        MySQLStrategyStore._ensure_column(cur, "strategy_catalog", "five_year_drawdown", "DOUBLE NULL")
+        MySQLStrategyStore._ensure_column(cur, "strategy_catalog", "oos_three_month_return", "DOUBLE NULL")
+        MySQLStrategyStore._ensure_column(cur, "strategy_catalog", "oos_three_month_sharpe", "DOUBLE NULL")
+        MySQLStrategyStore._ensure_column(cur, "strategy_catalog", "oos_one_year_sharpe", "DOUBLE NULL")
+        MySQLStrategyStore._ensure_column(cur, "strategy_catalog", "followers", "INT UNSIGNED NOT NULL DEFAULT 0")
+        cur.execute("UPDATE strategy_catalog SET assets_json = JSON_ARRAY() WHERE assets_json IS NULL")
 
     @staticmethod
     def _scope_user_id(user_id: int | None) -> int:

@@ -126,6 +126,33 @@ def test_remote_request_rejects_wrong_dev_proxy_auth(
     assert excinfo.value.status_code == 403
 
 
+def test_auth_store_requires_mysql_persistence(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("src.persistence.mysql_configured", lambda: False)
+    api_server._auth_store = None
+
+    with pytest.raises(api_server.HTTPException) as excinfo:
+        api_server._get_auth_store()
+
+    assert excinfo.value.status_code == 501
+    assert "MySQL persistence" in excinfo.value.detail
+
+
+def test_auth_store_is_mysql_backed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("src.persistence.mysql_configured", lambda: True)
+    api_server._auth_store = None
+
+    class StubAuthStore:
+        def __init__(self) -> None:
+            self.initialized = True
+
+    monkeypatch.setattr("src.auth.MySQLAuthStore", StubAuthStore)
+
+    store = api_server._get_auth_store()
+
+    assert isinstance(store, StubAuthStore)
+    assert api_server._auth_store is store
+
+
 def test_configured_api_key_required_for_sensitive_reads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

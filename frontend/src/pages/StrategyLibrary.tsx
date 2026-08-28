@@ -5,9 +5,12 @@ import {
   Bot,
   Check,
   Copy,
+  BarChart3,
   Download,
   FileCode2,
   FolderTree,
+  Database,
+  LineChart,
   Loader2,
   MoreHorizontal,
   Pencil,
@@ -17,6 +20,7 @@ import {
   Search,
   Share2,
   ShieldCheck,
+  SlidersHorizontal,
   Store,
   Trash2,
   Upload,
@@ -26,10 +30,11 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { api, ApiError, type StrategyLibraryItem, type StrategyVersionItem } from "@/lib/api";
+import { api, ApiError, type StrategyBacktestRequest, type StrategyLibraryItem, type StrategyMarketBacktestResponse, type StrategyVersionItem } from "@/lib/api";
 import { adminUrl } from "@/lib/adminUrl";
 import { StrategyCodeEditor } from "@/components/strategy/StrategyCodeEditor";
 import { buildClassicTurtlePythonStrategyCode, getStrategyRouteId } from "@/lib/strategyMarketplace";
+import { quantaxisStarterCode, toQuantaxisStrategyCode } from "@/lib/quantaxisStrategy";
 import { useTranslation } from "@/i18n/I18nProvider";
 
 type StrategyLanguage = "javascript" | "python" | "cpp" | "rust" | "pine";
@@ -67,9 +72,31 @@ type DeploymentWizardState = {
   market: string;
   symbols: string;
   timeframe: string;
+  initialCash: string;
   parametersJson: string;
   riskPolicyJson: string;
   brokerBindingId: string;
+};
+
+type QuantaxisBacktestState = {
+  strategy: StrategyItem;
+  startDate: string;
+  endDate: string;
+  symbol: string;
+  interval: string;
+  source: string;
+  initialCapital: string;
+  benchmark: string;
+  commission: string;
+  slippage: string;
+  leverage: string;
+  riskFreeRate: string;
+  analyzer: string;
+  optimize: boolean;
+  optimizationTarget: string;
+  walkForwardWindows: string;
+  parametersJson: string;
+  result: StrategyMarketBacktestResponse | null;
 };
 
 const languageOptions: Array<{ value: StrategyLanguage; label: string }> = [
@@ -97,16 +124,7 @@ const categoryOptions: Array<{ value: StrategyCategory }> = [
   { value: "utility" },
 ];
 
-const starterCode = `# Strategy idea
-# Replace this draft with your entry, exit, sizing, and risk rules.
-
-def generate_signals(data):
-    close = data["close"]
-    fast = close.rolling(20).mean()
-    slow = close.rolling(60).mean()
-    signal = (fast > slow).astype(int)
-    return signal.diff().fillna(0)
-`;
+const starterCode = quantaxisStarterCode;
 
 function createId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -173,11 +191,15 @@ function normalizeStrategy(value: unknown, fallback: StrategyItem): StrategyItem
   const now = new Date().toISOString();
   const id = typeof value.id === "string" && value.id.trim() ? value.id : fallback.id;
   const rawCode = typeof value.code === "string" ? value.code : fallback.code;
+  const name = typeof value.name === "string" && value.name.trim() ? value.name : fallback.name;
   const shouldMigrateClassicTurtle = isLegacyClassicTurtleJsonSpec(id, rawCode);
+  const quantaxisCode = shouldMigrateClassicTurtle
+    ? toQuantaxisStrategyCode(buildClassicTurtlePythonStrategyCode(), name)
+    : toQuantaxisStrategyCode(rawCode, name);
 
   return {
     id,
-    name: typeof value.name === "string" && value.name.trim() ? value.name : fallback.name,
+    name,
     description: typeof value.description === "string" ? value.description : fallback.description,
     strategyDescription: typeof value.strategyDescription === "string"
       ? value.strategyDescription
@@ -188,7 +210,7 @@ function normalizeStrategy(value: unknown, fallback: StrategyItem): StrategyItem
     category: isStrategyCategory(value.category) ? value.category : fallback.category,
     status: isStrategyStatus(value.status) ? value.status : fallback.status,
     tags,
-    code: shouldMigrateClassicTurtle ? buildClassicTurtlePythonStrategyCode() : rawCode,
+    code: quantaxisCode,
     createdAt: typeof value.createdAt === "string" ? value.createdAt : fallback.createdAt,
     updatedAt: shouldMigrateClassicTurtle ? now : typeof value.updatedAt === "string" ? value.updatedAt : now,
     shareStatus: normalizeShareStatus(value.shareStatus ?? value.share_status),
@@ -313,8 +335,10 @@ function deploymentWizardForStrategy(strategy: StrategyItem, target: "SHADOW" | 
     market: "CRYPTO",
     symbols: inferred.symbols.join(","),
     timeframe: "1h",
+    initialCash: "100000",
     parametersJson: "{}",
     riskPolicyJson: JSON.stringify({
+      initial_cash: 100000,
       allowed_sides: inferred.allowed_sides,
       max_order_notional: inferred.max_order_notional,
       max_total_exposure: inferred.max_total_exposure,
@@ -327,6 +351,36 @@ function deploymentWizardForStrategy(strategy: StrategyItem, target: "SHADOW" | 
   };
 }
 
+function quantaxisBacktestForStrategy(strategy: StrategyItem): QuantaxisBacktestState {
+  return {
+    strategy,
+    startDate: "2024-01-01",
+    endDate: "2026-06-27",
+    symbol: "BTC-USDT",
+    interval: "4H",
+    source: "okx",
+    initialCapital: "100000",
+    benchmark: "auto",
+    commission: "0.0005",
+    slippage: "0.0005",
+    leverage: "1",
+    riskFreeRate: "0",
+    analyzer: "QAAnalysis",
+    optimize: false,
+    optimizationTarget: "sharpe",
+    walkForwardWindows: "4",
+    parametersJson: JSON.stringify({
+      quantaxis_backtest: true,
+      analysis: ["performance", "basic_metrics", "detailed", "visual"],
+      optimization_grid: {
+        fast_window: [10, 20, 30],
+        slow_window: [50, 100, 150],
+      },
+    }, null, 2),
+    result: null,
+  };
+}
+
 function parseJsonObject(value: string, label: string): Record<string, unknown> {
   const trimmed = value.trim();
   if (!trimmed) return {};
@@ -335,6 +389,63 @@ function parseJsonObject(value: string, label: string): Record<string, unknown> 
     throw new Error(`${label} must be a JSON object`);
   }
   return parsed as Record<string, unknown>;
+}
+
+function toFiniteNumber(value: string, label: string): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`${label} must be a number`);
+  }
+  return parsed;
+}
+
+function buildQuantaxisBacktestRequest(state: QuantaxisBacktestState): StrategyBacktestRequest {
+  return {
+    start_date: state.startDate,
+    end_date: state.endDate,
+    symbol: state.symbol,
+    interval: state.interval,
+    source: state.source,
+    initial_capital: toFiniteNumber(state.initialCapital, "Initial capital"),
+    benchmark: state.benchmark,
+    commission: toFiniteNumber(state.commission, "Commission"),
+    slippage: toFiniteNumber(state.slippage, "Slippage"),
+    leverage: toFiniteNumber(state.leverage, "Leverage"),
+    risk_free_rate: toFiniteNumber(state.riskFreeRate, "Risk-free rate"),
+    analyzer: state.analyzer,
+    optimize: state.optimize,
+    optimization_target: state.optimizationTarget,
+    walk_forward_windows: Math.max(1, Math.round(toFiniteNumber(state.walkForwardWindows, "Walk-forward windows"))),
+    parameters: parseJsonObject(state.parametersJson, "QUANTAXIS parameters"),
+  };
+}
+
+function metricValue(value: unknown): string {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.abs(value) >= 1000 ? value.toLocaleString(undefined, { maximumFractionDigits: 2 }) : String(value);
+  }
+  if (typeof value === "string") return value;
+  return "--";
+}
+
+function compactDate(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value.slice(0, 10);
+}
+
+function linePoints(rows: Array<Record<string, unknown>>, key: string): string {
+  const values = rows
+    .map((row) => Number(row[key]))
+    .filter((value) => Number.isFinite(value));
+  if (values.length === 0) return "";
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  return values.map((value, index) => {
+    const x = values.length === 1 ? 0 : (index / (values.length - 1)) * 100;
+    const y = 100 - ((value - min) / span) * 100;
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  }).join(" ");
 }
 
 function buildAssistantPrompt(prompt: string, strategy?: StrategyItem | null) {
@@ -370,6 +481,7 @@ export function StrategyLibrary() {
   const [query, setQuery] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [runningId, setRunningId] = useState<string | null>(null);
+  const [quantaxisRunningId, setQuantaxisRunningId] = useState<string | null>(null);
   const [paperRunningId, setPaperRunningId] = useState<string | null>(null);
   const [publishingId, setPublishingId] = useState<string | null>(null);
   const [moreMenu, setMoreMenu] = useState<MoreMenuState | null>(null);
@@ -378,6 +490,7 @@ export function StrategyLibrary() {
   const [deploymentWizard, setDeploymentWizard] = useState<DeploymentWizardState | null>(null);
   const [deploymentVersions, setDeploymentVersions] = useState<StrategyVersionItem[]>([]);
   const [submittingDeployment, setSubmittingDeployment] = useState(false);
+  const [quantaxisBacktest, setQuantaxisBacktest] = useState<QuantaxisBacktestState | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -502,6 +615,7 @@ export function StrategyLibrary() {
       market: "市场",
       symbols: "标的",
       timeframe: "K线周期",
+      initialCash: "初始资金",
       parameters: "参数 JSON",
       riskPolicy: "风控 JSON",
       brokerBinding: "Broker 绑定 ID",
@@ -526,6 +640,21 @@ export function StrategyLibrary() {
       liveMissing: "请填写必填配置并确认风险",
       backtest: "回测",
       backtesting: "回测中",
+      quantaxisBacktest: "QUANTAXIS 回测",
+      quantaxisBacktesting: "QUANTAXIS 回测中",
+      backtestConfig: "回测参数配置",
+      advancedParams: "高级参数",
+      performanceAnalysis: "性能分析",
+      basicMetrics: "基本指标",
+      detailedAnalysis: "详细分析",
+      visualAnalysis: "可视化分析",
+      equityCurve: "权益曲线",
+      drawdownAnalysis: "回撤分析",
+      returnDistribution: "收益分布",
+      backtestOptimization: "回测优化",
+      walkForwardOptimization: "走势期优化",
+      runQuantaxisBacktest: "运行 QAAnalysis",
+      viewRun: "查看运行",
       confirm: "确认",
       cancel: "取消",
       search: "搜索策略名称",
@@ -579,6 +708,7 @@ export function StrategyLibrary() {
       market: "Market",
       symbols: "Symbols",
       timeframe: "Timeframe",
+      initialCash: "Initial Cash",
       parameters: "Parameters JSON",
       riskPolicy: "Risk JSON",
       brokerBinding: "Broker Binding ID",
@@ -603,6 +733,21 @@ export function StrategyLibrary() {
       liveMissing: "Fill required fields and confirm the risk",
       backtest: "Backtest",
       backtesting: "Backtesting",
+      quantaxisBacktest: "QUANTAXIS Backtest",
+      quantaxisBacktesting: "Running QUANTAXIS",
+      backtestConfig: "Backtest Parameters",
+      advancedParams: "Advanced Parameters",
+      performanceAnalysis: "Performance Analysis",
+      basicMetrics: "Basic Metrics",
+      detailedAnalysis: "Detailed Analysis",
+      visualAnalysis: "Visual Analysis",
+      equityCurve: "Equity Curve",
+      drawdownAnalysis: "Drawdown Analysis",
+      returnDistribution: "Return Distribution",
+      backtestOptimization: "Backtest Optimization",
+      walkForwardOptimization: "Walk-forward Optimization",
+      runQuantaxisBacktest: "Run QAAnalysis",
+      viewRun: "View Run",
       confirm: "Confirm",
       cancel: "Cancel",
       search: "Search strategy names",
@@ -634,6 +779,14 @@ export function StrategyLibrary() {
   const selectedDeploymentVersion = deploymentWizard
     ? deploymentVersions.find((item) => String(item.version) === deploymentWizard.versionNo) ?? deploymentVersions[0] ?? null
     : null;
+  const quantaxisResult = quantaxisBacktest?.result ?? null;
+  const qaAnalysis = quantaxisResult?.qaAnalysis ?? {};
+  const qaVisual = qaAnalysis.visualAnalysis ?? {};
+  const equityRows = (qaVisual.equityCurve ?? []) as Array<Record<string, unknown>>;
+  const drawdownRows = (qaVisual.drawdown ?? []) as Array<Record<string, unknown>>;
+  const distributionRows = qaVisual.returnDistribution ?? [];
+  const equityPolyline = linePoints(equityRows, "equity");
+  const drawdownPolyline = linePoints(drawdownRows, "drawdown");
 
   const updateStrategy = (id: string, patch: Partial<StrategyItem>) => {
     const updatedAt = new Date().toISOString();
@@ -762,23 +915,37 @@ export function StrategyLibrary() {
     }
   };
 
+  const handleQuantaxisBacktest = async (strategy: StrategyItem) => {
+    setMoreMenu(null);
+    setQuantaxisBacktest(quantaxisBacktestForStrategy(strategy));
+  };
+
+  const submitQuantaxisBacktest = async () => {
+    if (!quantaxisBacktest) return;
+    setQuantaxisRunningId(quantaxisBacktest.strategy.id);
+    try {
+      if (remoteReadyRef.current) {
+        await api.upsertStrategy(toApiStrategy(quantaxisBacktest.strategy));
+      }
+      const result = await api.runStrategyBacktest(
+        quantaxisBacktest.strategy.id,
+        buildQuantaxisBacktestRequest(quantaxisBacktest),
+      );
+      setQuantaxisBacktest({ ...quantaxisBacktest, result });
+      toast.success(language === "zh-CN" ? "QUANTAXIS QAAnalysis 回测完成" : "QUANTAXIS QAAnalysis completed");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : language === "zh-CN" ? "QUANTAXIS 回测失败" : "QUANTAXIS backtest failed");
+    } finally {
+      setQuantaxisRunningId(null);
+    }
+  };
+
   const openDeploymentWizard = async (strategy: StrategyItem, target: "SHADOW" | "LIVE") => {
     setMoreMenu(null);
     setPaperRunningId(strategy.id);
     try {
       if (remoteReadyRef.current) {
         await api.upsertStrategy(toApiStrategy(strategy));
-      }
-      const existing = await api.listDeployments();
-      const existingDeployment = existing.deployments.find((deployment) => (
-        deployment.strategy_snapshot.strategy_id === strategy.id
-        && deployment.target === target
-        && deployment.status !== "ARCHIVED"
-      ));
-      if (existingDeployment) {
-        toast.message(copy.paperExists);
-        navigate(`/deployments/${encodeURIComponent(existingDeployment.deployment_id)}`);
-        return;
       }
       setDeploymentVersions([]);
       setDeploymentWizard(deploymentWizardForStrategy(strategy, target));
@@ -799,6 +966,10 @@ export function StrategyLibrary() {
         .split(",")
         .map((item) => item.trim())
         .filter(Boolean);
+      const riskPolicy = parseJsonObject(deploymentWizard.riskPolicyJson, "Risk policy");
+      if (deploymentWizard.target === "SHADOW") {
+        riskPolicy.initial_cash = toFiniteNumber(deploymentWizard.initialCash, "Initial cash");
+      }
       const result = await api.createDeployment({
         strategy_id: deploymentWizard.strategy.id,
         target: deploymentWizard.target,
@@ -807,7 +978,7 @@ export function StrategyLibrary() {
         symbols,
         timeframe: deploymentWizard.timeframe,
         parameters: parseJsonObject(deploymentWizard.parametersJson, "Parameters"),
-        risk_policy: parseJsonObject(deploymentWizard.riskPolicyJson, "Risk policy"),
+        risk_policy: riskPolicy,
         broker_binding_id: deploymentWizard.target === "LIVE" ? Number(deploymentWizard.brokerBindingId) : undefined,
       });
       await api.readyDeployment(result.deployment.deployment_id).catch(() => undefined);
@@ -916,11 +1087,20 @@ export function StrategyLibrary() {
               <button
                 type="button"
                 onClick={() => activeStrategy && handleRun(activeStrategy)}
-                disabled={!activeStrategy || runningId === activeStrategy.id}
+                disabled={!activeStrategy || runningId === activeStrategy.id || quantaxisRunningId === activeStrategy.id}
                 className="inline-flex items-center justify-center gap-2 rounded-md border bg-background px-3 py-2 text-sm font-semibold transition hover:bg-muted disabled:opacity-50"
               >
                 <Play className="h-4 w-4 text-primary" />
                 {activeStrategy && runningId === activeStrategy.id ? copy.backtesting : copy.backtest}
+              </button>
+              <button
+                type="button"
+                onClick={() => activeStrategy && void handleQuantaxisBacktest(activeStrategy)}
+                disabled={!activeStrategy || quantaxisRunningId === activeStrategy.id || runningId === activeStrategy.id}
+                className="inline-flex items-center justify-center gap-2 rounded-md border bg-background px-3 py-2 text-sm font-semibold transition hover:bg-muted disabled:opacity-50"
+              >
+                <Database className="h-4 w-4 text-primary" />
+                {activeStrategy && quantaxisRunningId === activeStrategy.id ? copy.quantaxisBacktesting : copy.quantaxisBacktest}
               </button>
               <button
                 type="button"
@@ -1277,6 +1457,258 @@ export function StrategyLibrary() {
         document.body,
       )}
 
+      {quantaxisBacktest && createPortal(
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4 py-6">
+          <div className="max-h-[92vh] w-full max-w-6xl overflow-auto rounded-lg border bg-card shadow-xl">
+            <div className="flex items-start justify-between gap-3 border-b px-5 py-4">
+              <div className="min-w-0">
+                <h2 className="flex items-center gap-2 text-lg font-semibold">
+                  <Database className="h-5 w-5 text-primary" />
+                  {copy.quantaxisBacktest}
+                </h2>
+                <p className="mt-1 truncate text-sm text-muted-foreground">
+                  {quantaxisBacktest.strategy.name} · {qaAnalysis.module ?? "QAAnalysis"}
+                </p>
+              </div>
+              <button type="button" onClick={() => setQuantaxisBacktest(null)} className="rounded-md p-1.5 text-muted-foreground hover:bg-muted">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="grid gap-5 px-5 py-5 lg:grid-cols-[22rem_minmax(0,1fr)]">
+              <div className="space-y-4">
+                <section className="rounded-md border bg-background p-4">
+                  <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold">
+                    <SlidersHorizontal className="h-4 w-4 text-primary" />
+                    {copy.backtestConfig}
+                  </h3>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+                    <label className="text-xs font-semibold text-muted-foreground">
+                      Symbol
+                      <input value={quantaxisBacktest.symbol} onChange={(event) => setQuantaxisBacktest({ ...quantaxisBacktest, symbol: event.target.value })} className="mt-1 h-10 w-full rounded-md border bg-card px-3 text-sm text-foreground" />
+                    </label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="text-xs font-semibold text-muted-foreground">
+                        Start
+                        <input type="date" value={quantaxisBacktest.startDate} onChange={(event) => setQuantaxisBacktest({ ...quantaxisBacktest, startDate: event.target.value })} className="mt-1 h-10 w-full rounded-md border bg-card px-3 text-sm text-foreground" />
+                      </label>
+                      <label className="text-xs font-semibold text-muted-foreground">
+                        End
+                        <input type="date" value={quantaxisBacktest.endDate} onChange={(event) => setQuantaxisBacktest({ ...quantaxisBacktest, endDate: event.target.value })} className="mt-1 h-10 w-full rounded-md border bg-card px-3 text-sm text-foreground" />
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="text-xs font-semibold text-muted-foreground">
+                        Interval
+                        <select value={quantaxisBacktest.interval} onChange={(event) => setQuantaxisBacktest({ ...quantaxisBacktest, interval: event.target.value })} className="mt-1 h-10 w-full rounded-md border bg-card px-3 text-sm text-foreground">
+                          {["1H", "4H", "1D", "1W"].map((value) => <option key={value} value={value}>{value}</option>)}
+                        </select>
+                      </label>
+                      <label className="text-xs font-semibold text-muted-foreground">
+                        Source
+                        <select value={quantaxisBacktest.source} onChange={(event) => setQuantaxisBacktest({ ...quantaxisBacktest, source: event.target.value })} className="mt-1 h-10 w-full rounded-md border bg-card px-3 text-sm text-foreground">
+                          {["okx", "ccxt", "yfinance", "akshare", "mootdx", "futu"].map((value) => <option key={value} value={value}>{value}</option>)}
+                        </select>
+                      </label>
+                    </div>
+                    <label className="text-xs font-semibold text-muted-foreground">
+                      Initial Capital
+                      <input value={quantaxisBacktest.initialCapital} onChange={(event) => setQuantaxisBacktest({ ...quantaxisBacktest, initialCapital: event.target.value })} inputMode="decimal" className="mt-1 h-10 w-full rounded-md border bg-card px-3 text-sm text-foreground" />
+                    </label>
+                  </div>
+                </section>
+
+                <section className="rounded-md border bg-background p-4">
+                  <h3 className="mb-3 text-sm font-semibold">{copy.advancedParams}</h3>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="text-xs font-semibold text-muted-foreground">
+                        Commission
+                        <input value={quantaxisBacktest.commission} onChange={(event) => setQuantaxisBacktest({ ...quantaxisBacktest, commission: event.target.value })} inputMode="decimal" className="mt-1 h-10 w-full rounded-md border bg-card px-3 text-sm text-foreground" />
+                      </label>
+                      <label className="text-xs font-semibold text-muted-foreground">
+                        Slippage
+                        <input value={quantaxisBacktest.slippage} onChange={(event) => setQuantaxisBacktest({ ...quantaxisBacktest, slippage: event.target.value })} inputMode="decimal" className="mt-1 h-10 w-full rounded-md border bg-card px-3 text-sm text-foreground" />
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="text-xs font-semibold text-muted-foreground">
+                        Leverage
+                        <input value={quantaxisBacktest.leverage} onChange={(event) => setQuantaxisBacktest({ ...quantaxisBacktest, leverage: event.target.value })} inputMode="decimal" className="mt-1 h-10 w-full rounded-md border bg-card px-3 text-sm text-foreground" />
+                      </label>
+                      <label className="text-xs font-semibold text-muted-foreground">
+                        Risk-free
+                        <input value={quantaxisBacktest.riskFreeRate} onChange={(event) => setQuantaxisBacktest({ ...quantaxisBacktest, riskFreeRate: event.target.value })} inputMode="decimal" className="mt-1 h-10 w-full rounded-md border bg-card px-3 text-sm text-foreground" />
+                      </label>
+                    </div>
+                    <label className="text-xs font-semibold text-muted-foreground">
+                      Benchmark
+                      <input value={quantaxisBacktest.benchmark} onChange={(event) => setQuantaxisBacktest({ ...quantaxisBacktest, benchmark: event.target.value })} className="mt-1 h-10 w-full rounded-md border bg-card px-3 text-sm text-foreground" />
+                    </label>
+                    <label className="text-xs font-semibold text-muted-foreground">
+                      Analyzer
+                      <select value={quantaxisBacktest.analyzer} onChange={(event) => setQuantaxisBacktest({ ...quantaxisBacktest, analyzer: event.target.value })} className="mt-1 h-10 w-full rounded-md border bg-card px-3 text-sm text-foreground">
+                        <option value="QAAnalysis">QAAnalysis</option>
+                        <option value="QAAnalysis_trade">QAAnalysis_trade</option>
+                        <option value="QAAnalysis_stock">QAAnalysis_stock</option>
+                      </select>
+                    </label>
+                    <label className="flex items-center gap-2 text-xs font-semibold text-muted-foreground">
+                      <input type="checkbox" checked={quantaxisBacktest.optimize} onChange={(event) => setQuantaxisBacktest({ ...quantaxisBacktest, optimize: event.target.checked })} className="h-4 w-4 rounded border" />
+                      {copy.backtestOptimization}
+                    </label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="text-xs font-semibold text-muted-foreground">
+                        Target
+                        <select value={quantaxisBacktest.optimizationTarget} onChange={(event) => setQuantaxisBacktest({ ...quantaxisBacktest, optimizationTarget: event.target.value })} className="mt-1 h-10 w-full rounded-md border bg-card px-3 text-sm text-foreground">
+                          {["sharpe", "total_return", "max_drawdown", "calmar"].map((value) => <option key={value} value={value}>{value}</option>)}
+                        </select>
+                      </label>
+                      <label className="text-xs font-semibold text-muted-foreground">
+                        Windows
+                        <input value={quantaxisBacktest.walkForwardWindows} onChange={(event) => setQuantaxisBacktest({ ...quantaxisBacktest, walkForwardWindows: event.target.value })} inputMode="numeric" className="mt-1 h-10 w-full rounded-md border bg-card px-3 text-sm text-foreground" />
+                      </label>
+                    </div>
+                    <label className="text-xs font-semibold text-muted-foreground">
+                      Parameters JSON
+                      <textarea value={quantaxisBacktest.parametersJson} onChange={(event) => setQuantaxisBacktest({ ...quantaxisBacktest, parametersJson: event.target.value })} rows={8} className="mt-1 w-full rounded-md border bg-card px-3 py-2 font-mono text-xs text-foreground" />
+                    </label>
+                  </div>
+                </section>
+              </div>
+
+              <div className="space-y-4">
+                <section className="rounded-md border bg-background p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <h3 className="flex items-center gap-2 text-sm font-semibold">
+                      <BarChart3 className="h-4 w-4 text-primary" />
+                      {copy.basicMetrics}
+                    </h3>
+                    <div className="flex gap-2">
+                      {quantaxisResult ? (
+                        <button type="button" onClick={() => navigate(`/runs/${encodeURIComponent(quantaxisResult.run_id)}`)} className="rounded-md border px-3 py-2 text-sm font-semibold hover:bg-muted">
+                          {copy.viewRun}
+                        </button>
+                      ) : null}
+                      <button type="button" onClick={() => void submitQuantaxisBacktest()} disabled={quantaxisRunningId === quantaxisBacktest.strategy.id} className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50">
+                        {quantaxisRunningId === quantaxisBacktest.strategy.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <LineChart className="h-4 w-4" />}
+                        {quantaxisRunningId === quantaxisBacktest.strategy.id ? copy.quantaxisBacktesting : copy.runQuantaxisBacktest}
+                      </button>
+                    </div>
+                  </div>
+                  {quantaxisResult ? (
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                      {Object.entries(qaAnalysis.basicMetrics ?? {}).map(([key, value]) => (
+                        <div key={key} className="rounded-md border bg-card p-3">
+                          <div className="text-xs font-semibold uppercase text-muted-foreground">{key}</div>
+                          <div className="mt-1 text-xl font-semibold">{metricValue(value)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="mt-4 rounded-md border border-dashed bg-card p-6 text-sm text-muted-foreground">
+                      {language === "zh-CN" ? "配置参数后运行 QAAnalysis，可在这里查看基本指标、权益曲线、回撤和收益分布。" : "Run QAAnalysis after configuring parameters to inspect metrics, equity, drawdown, and return distribution here."}
+                    </div>
+                  )}
+                </section>
+
+                {quantaxisResult ? (
+                  <>
+                    <section className="rounded-md border bg-background p-4">
+                      <h3 className="mb-3 text-sm font-semibold">{copy.performanceAnalysis}</h3>
+                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                        {Object.entries(qaAnalysis.performanceAnalysis ?? {}).map(([key, value]) => (
+                          <div key={key} className="rounded-md border bg-card p-3">
+                            <div className="text-xs font-semibold uppercase text-muted-foreground">{key}</div>
+                            <div className="mt-1 text-lg font-semibold">{metricValue(value)}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+
+                    <section className="rounded-md border bg-background p-4">
+                      <h3 className="mb-3 text-sm font-semibold">{copy.visualAnalysis}</h3>
+                      <div className="grid gap-4 xl:grid-cols-2">
+                        <div className="rounded-md border bg-card p-3">
+                          <div className="mb-2 text-xs font-semibold uppercase text-muted-foreground">{copy.equityCurve}</div>
+                          <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-44 w-full overflow-visible rounded border bg-background">
+                            <polyline points={equityPolyline} fill="none" stroke="currentColor" strokeWidth="1.8" className="text-primary" vectorEffect="non-scaling-stroke" />
+                          </svg>
+                          <div className="mt-2 flex justify-between text-xs text-muted-foreground">
+                            <span>{compactDate(equityRows[0]?.time)}</span>
+                            <span>{compactDate(equityRows[equityRows.length - 1]?.time)}</span>
+                          </div>
+                        </div>
+                        <div className="rounded-md border bg-card p-3">
+                          <div className="mb-2 text-xs font-semibold uppercase text-muted-foreground">{copy.drawdownAnalysis}</div>
+                          <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-44 w-full overflow-visible rounded border bg-background">
+                            <polyline points={drawdownPolyline} fill="none" stroke="currentColor" strokeWidth="1.8" className="text-destructive" vectorEffect="non-scaling-stroke" />
+                          </svg>
+                          <div className="mt-2 flex justify-between text-xs text-muted-foreground">
+                            <span>{compactDate(drawdownRows[0]?.time)}</span>
+                            <span>{compactDate(drawdownRows[drawdownRows.length - 1]?.time)}</span>
+                          </div>
+                        </div>
+                        <div className="rounded-md border bg-card p-3 xl:col-span-2">
+                          <div className="mb-2 text-xs font-semibold uppercase text-muted-foreground">{copy.returnDistribution}</div>
+                          <div className="grid h-44 items-end gap-2 sm:grid-cols-6">
+                            {distributionRows.map((row) => {
+                              const maxCount = Math.max(1, ...distributionRows.map((item) => item.count));
+                              return (
+                                <div key={row.bucket} className="flex h-full flex-col justify-end gap-2">
+                                  <div className="rounded-t bg-primary/70" style={{ height: `${Math.max(4, (row.count / maxCount) * 100)}%` }} />
+                                  <div className="text-center text-[11px] text-muted-foreground">{row.bucket}</div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+
+                    <section className="grid gap-4 xl:grid-cols-2">
+                      <div className="rounded-md border bg-background p-4">
+                        <h3 className="mb-3 text-sm font-semibold">{copy.walkForwardOptimization}</h3>
+                        <div className="space-y-2">
+                          {(qaAnalysis.optimization?.walkForwardWindows ?? []).map((row) => (
+                            <div key={row.window} className="grid grid-cols-[3rem_1fr_5rem] items-center gap-3 rounded-md border bg-card px-3 py-2 text-sm">
+                              <span className="font-mono text-xs text-muted-foreground">W{row.window}</span>
+                              <span className="truncate text-xs text-muted-foreground">{compactDate(row.start)} - {compactDate(row.end)}</span>
+                              <span className={cn("text-right font-semibold", row.returnPct >= 0 ? "text-emerald-600" : "text-destructive")}>{row.returnPct}%</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="rounded-md border bg-background p-4">
+                        <h3 className="mb-3 text-sm font-semibold">{copy.detailedAnalysis}</h3>
+                        <div className="space-y-3 text-sm">
+                          <div>
+                            <div className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Assumptions</div>
+                            <ul className="space-y-1 text-muted-foreground">
+                              {(qaAnalysis.detailedAnalysis?.assumptions ?? []).map((item) => <li key={item}>{item}</li>)}
+                            </ul>
+                          </div>
+                          <div>
+                            <div className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Warnings</div>
+                            <ul className="space-y-1 text-muted-foreground">
+                              {(qaAnalysis.detailedAnalysis?.warnings ?? []).map((item) => <li key={item}>{item}</li>)}
+                            </ul>
+                          </div>
+                          <pre className="max-h-40 overflow-auto rounded-md border bg-card p-3 font-mono text-xs text-muted-foreground">
+                            {JSON.stringify(qaAnalysis.optimization?.parameterGrid ?? {}, null, 2)}
+                          </pre>
+                        </div>
+                      </div>
+                    </section>
+                  </>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
       {deploymentWizard && createPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4 py-6">
           <div className="max-h-[90vh] w-full max-w-2xl overflow-auto rounded-lg border bg-card shadow-xl">
@@ -1336,6 +1768,17 @@ export function StrategyLibrary() {
                   className="mt-1 h-10 w-full rounded-md border bg-background px-3 text-sm text-foreground"
                 />
               </label>
+              {deploymentWizard.target === "SHADOW" ? (
+                <label className="text-xs font-semibold text-muted-foreground">
+                  {copy.initialCash}
+                  <input
+                    value={deploymentWizard.initialCash}
+                    onChange={(event) => setDeploymentWizard({ ...deploymentWizard, initialCash: event.target.value })}
+                    inputMode="decimal"
+                    className="mt-1 h-10 w-full rounded-md border bg-background px-3 text-sm text-foreground"
+                  />
+                </label>
+              ) : null}
               <label className="text-xs font-semibold text-muted-foreground sm:col-span-2">
                 {copy.symbols}
                 <input
