@@ -380,8 +380,49 @@ export const api = {
     return request<CryptoSymbolsResponse>(`/crypto/symbols?${q.toString()}`);
   },
   getCryptoKlines: (symbol: string, timeframe = "1h", limit = 180) => {
-    const q = new URLSearchParams({ symbol, timeframe, limit: String(limit) });
-    return request<CryptoKlinesResponse>(`/crypto/klines?${q.toString()}`);
+    const legacy = request<{
+      status: number;
+      symbol: string;
+      frequency: string;
+      count: number;
+      data: Array<{
+        time: number;
+        open: number;
+        high: number;
+        low: number;
+        close: number;
+        volume: number;
+      }>;
+      message?: string;
+    }>(`/api/crypto/kline?symbol=${encodeURIComponent(symbol)}&frequency=${encodeURIComponent(timeframe)}&limit=${encodeURIComponent(String(limit))}`)
+      .then((payload) => {
+        if (payload.status !== 200) return null;
+        return {
+          status: "ok",
+          symbol: payload.symbol,
+          timeframe: payload.frequency,
+          source: "legacy",
+          updated_at: new Date().toISOString(),
+          storage: { redis: "disabled", timescale: "disabled" },
+          bars: (payload.data || []).map((bar) => ({
+            time: new Date(bar.time * 1000).toISOString(),
+            timestamp: bar.time * 1000,
+            symbol: payload.symbol,
+            open: bar.open,
+            high: bar.high,
+            low: bar.low,
+            close: bar.close,
+            volume: bar.volume,
+          })),
+        } as CryptoKlinesResponse;
+      })
+      .catch(() => null);
+
+    return legacy.then((payload) => {
+      if (payload) return payload;
+      const q = new URLSearchParams({ symbol, timeframe, limit: String(limit) });
+      return request<CryptoKlinesResponse>(`/crypto/klines?${q.toString()}`);
+    });
   },
   getCryptoKlineStreamUrl: (symbol: string, timeframe = "1h") => {
     const path = withAuthQuery(`/crypto/stream?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}`);

@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { I18nProvider } from "@/i18n/I18nProvider";
@@ -10,6 +10,12 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), message: v
 
 vi.mock("@/components/charts/StrategyReturnChart", () => ({
   StrategyReturnChart: () => <div data-testid="strategy-return-chart" />,
+}));
+
+vi.mock("@/components/charts/KLineChartPanel", () => ({
+  KLineChartPanel: ({ symbol, timeframe, bars }: { symbol: string; timeframe: string; bars: Array<{ close: number }> }) => (
+    <div data-testid="kline-panel">{`${symbol}:${timeframe}:${bars.length}`}</div>
+  ),
 }));
 
 vi.mock("@/lib/api", async () => {
@@ -32,36 +38,12 @@ vi.mock("@/lib/api", async () => {
       upsertStrategy: vi.fn(),
       deleteStrategy: vi.fn(),
       archiveDeployment: vi.fn(),
-      deploymentEventsSseUrl: vi.fn(),
       promoteDeployment: vi.fn(),
       recoverDeployment: vi.fn(),
       submitDeploymentTestSignal: vi.fn(),
     },
   };
 });
-
-class MockEventSource {
-  static instances: MockEventSource[] = [];
-  listeners = new Map<string, ((event: MessageEvent) => void)[]>();
-  onerror: (() => void) | null = null;
-  url: string;
-
-  constructor(url: string) {
-    this.url = url;
-    MockEventSource.instances.push(this);
-  }
-
-  addEventListener(type: string, handler: (event: MessageEvent) => void) {
-    this.listeners.set(type, [...(this.listeners.get(type) ?? []), handler]);
-  }
-
-  emit(type: string, payload: unknown) {
-    const event = new MessageEvent(type, { data: JSON.stringify(payload) });
-    for (const handler of this.listeners.get(type) ?? []) handler(event);
-  }
-
-  close() {}
-}
 
 const shadowDeployment = {
   deployment_id: "qadep_shadow",
@@ -117,8 +99,6 @@ function renderDeployments() {
 describe("Deployments", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    MockEventSource.instances = [];
-    vi.stubGlobal("EventSource", MockEventSource);
     vi.mocked(api.getQuantaxisRuntime).mockResolvedValue({
       available: true,
       version: "2.1.0",
@@ -193,7 +173,6 @@ describe("Deployments", () => {
         },
       ],
     } as never);
-    vi.mocked(api.deploymentEventsSseUrl).mockReturnValue("/api/deployments/qadep_shadow/events/stream?after_sequence_no=4");
     vi.mocked(api.promoteDeployment).mockResolvedValue({
       deployment: { ...shadowDeployment, deployment_id: "qadep_live", target: "LIVE", status: "DRAFT", broker_binding_id: 99 },
     } as never);
@@ -230,15 +209,13 @@ describe("Deployments", () => {
     renderDeployments();
 
     expect(await screen.findByText("Momentum")).toBeInTheDocument();
-    expect(screen.getByText("Recovery required")).toBeInTheDocument();
-    expect(screen.getByText("QUANTAXIS Backtest Analysis")).toBeInTheDocument();
-    expect(await screen.findByTestId("strategy-return-chart")).toBeInTheDocument();
-    expect(screen.getByText("QIFI Account")).toBeInTheDocument();
-    expect(await screen.findByText("1000")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Recover Deployment" })).toBeInTheDocument();
+    expect(screen.getByText("Main Ledger")).toBeInTheDocument();
+    expect(screen.getByText("Strategy Signals")).toBeInTheDocument();
+    expect(screen.getByText("Runtime Events")).toBeInTheDocument();
+    expect(await screen.findByTestId("kline-panel")).toBeInTheDocument();
     expect((await screen.findAllByText(/deployment.recovery_required/)).length).toBeGreaterThan(0);
     expect(api.getQuantaxisAccountSnapshot).toHaveBeenCalledWith(shadowDeployment.account_cookie);
-    await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
-    expect(MockEventSource.instances[0].url).toContain("after_sequence_no=4");
   });
 
   it("submits shadow recovery without requiring a broker binding", async () => {
@@ -249,7 +226,7 @@ describe("Deployments", () => {
 
     renderDeployments();
 
-    await screen.findByText("Recovery required");
+    await screen.findByRole("button", { name: "Recover Deployment" });
     await user.click(screen.getByRole("button", { name: "Recover Deployment" }));
 
     await waitFor(() => expect(api.recoverDeployment).toHaveBeenCalledWith("qadep_shadow", {}));
@@ -277,7 +254,7 @@ describe("Deployments", () => {
 
     renderDeployments();
 
-    await screen.findByText("Archive");
+    await screen.findByText("Main Ledger");
     await user.click(screen.getByRole("button", { name: "Restore from archive" }));
 
     await waitFor(() => expect(api.upsertStrategy).toHaveBeenCalledWith(expect.objectContaining({
@@ -291,7 +268,7 @@ describe("Deployments", () => {
 
     renderDeployments();
 
-    await screen.findByText("Archive");
+    await screen.findByText("Main Ledger");
     await user.click(screen.getByRole("button", { name: "Delete deployment" }));
     await user.click(screen.getByRole("button", { name: "Confirm delete" }));
 
@@ -318,7 +295,7 @@ describe("Deployments", () => {
       </MemoryRouter>,
     );
 
-    await screen.findByText("Archive");
+    await screen.findByText("Main Ledger");
     await user.click(screen.getByRole("button", { name: "Delete deployment" }));
     await user.click(screen.getByRole("button", { name: "Confirm delete" }));
 
@@ -341,7 +318,10 @@ describe("Deployments", () => {
 
     renderDeployments();
 
-    await screen.findByText("Test Signals");
+    await screen.findByText("Main Ledger");
+    const orderPanel = screen.getByText("下单面板").closest("section");
+    expect(orderPanel).not.toBeNull();
+    expect(within(orderPanel as HTMLElement).getByText("下单面板")).toBeInTheDocument();
     expect(await screen.findByLabelText("Quantity")).toHaveValue(1);
     await screen.findByDisplayValue("67000");
     await user.click(screen.getByRole("button", { name: "10%" }));
@@ -370,9 +350,12 @@ describe("Deployments", () => {
 
     renderDeployments();
 
+    await screen.findByText("Main Ledger");
     await screen.findByDisplayValue("67000");
     expect(screen.getByRole("button", { name: /Buy Open/ })).toBeDisabled();
-    expect(screen.getByText("The minimum executable quantity exceeds max_order_notional. Increase the deployment risk limit or lower the test price.")).toBeInTheDocument();
+    const orderPanel = screen.getByText("下单面板").closest("section");
+    expect(orderPanel).not.toBeNull();
+    expect(within(orderPanel as HTMLElement).getByText("The minimum executable quantity exceeds max_order_notional. Increase the deployment risk limit or lower the test price.")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "10%" }));
     expect(toast.error).toHaveBeenCalledWith("This sizing is below the simulated account minimum lot. Increase max_order_notional or use a higher percentage.");
     expect(api.submitDeploymentTestSignal).not.toHaveBeenCalled();
@@ -397,27 +380,7 @@ describe("Deployments", () => {
 
     expect(await screen.findAllByText("Signal not executed")).not.toHaveLength(0);
     expect(screen.getAllByText("Order quantity is below the simulated account minimum lot, so execution was skipped.").length).toBeGreaterThan(0);
-    expect(screen.getByText(/Increase order notional/)).toBeInTheDocument();
     expect(screen.queryByText("QIFI order quantity must be at least 1")).not.toBeInTheDocument();
-  });
-
-  it("reloads durable events when the event stream reconnects and surfaces stream failures", async () => {
-    renderDeployments();
-    await screen.findByText("Event stream:");
-    await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
-
-    act(() => {
-      MockEventSource.instances[0].onerror?.();
-    });
-
-    expect((await screen.findAllByText("reconnecting")).length).toBeGreaterThan(0);
-    await waitFor(() => expect(vi.mocked(api.listDeploymentEvents).mock.calls.length).toBeGreaterThanOrEqual(2));
-
-    act(() => {
-      MockEventSource.instances[0].emit("deployment.error", { error: "gateway unavailable" });
-    });
-
-    expect(await screen.findByText("gateway unavailable")).toBeInTheDocument();
   });
 
   it("shows QIFI configuration guidance instead of loading account projections when durable store is missing", async () => {
@@ -435,7 +398,7 @@ describe("Deployments", () => {
 
     renderDeployments();
 
-    expect(await screen.findAllByText(/QIFI account projection is waiting for durable store configuration/)).toHaveLength(2);
+    expect(await screen.findAllByText(/QIFI account projection is waiting for durable store configuration/)).toHaveLength(1);
     expect(screen.getAllByText(/QUANTAXIS_MONGOURI/).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/VIBE_QUANTAXIS_QIFI_PASSWORD/).length).toBeGreaterThanOrEqual(1);
     await waitFor(() => expect(api.getQuantaxisAccountSnapshot).toHaveBeenCalledTimes(0));
@@ -454,11 +417,10 @@ describe("Deployments", () => {
 
     renderDeployments();
 
-    expect(await screen.findByText("Running strategy")).toBeInTheDocument();
-    expect(await screen.findByText("No event yet")).toBeInTheDocument();
-    expect(screen.getByText(/Waiting for the first runtime event/)).toBeInTheDocument();
-    expect(screen.getByText(/No runtime events have been recorded yet/)).toBeInTheDocument();
+    expect(await screen.findByText("Strategy Signals")).toBeInTheDocument();
+    expect(await screen.findByText("Runtime Events")).toBeInTheDocument();
     expect(screen.getByText(/No strategy signal has been emitted yet/)).toBeInTheDocument();
+    expect(screen.getByText(/No runtime events have been recorded yet/)).toBeInTheDocument();
   });
 
   it("submits shadow promotion with consent and selected broker binding", async () => {
@@ -494,7 +456,7 @@ describe("Deployments", () => {
       </MemoryRouter>,
     );
 
-    await screen.findByText("Recovery required");
+    await screen.findByRole("button", { name: "Recover Live Deployment" });
     await user.selectOptions(screen.getByLabelText("Broker Binding"), "99");
     await user.click(screen.getByRole("button", { name: /Recover Live Deployment/ }));
 

@@ -175,7 +175,7 @@ export function KLineChartPanel({
       chartRef.current = null;
       setChartReady(false);
     };
-  }, [showMovingAverages]);
+  }, [bars.length, showMovingAverages]);
 
   useEffect(() => {
     chartRef.current?.applyNewData(mergeLiveBar(chartData, liveBarRef.current));
