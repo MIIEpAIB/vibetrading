@@ -14,6 +14,11 @@ RUN npm run build
 # ============================================================================
 FROM python:3.11-slim AS runtime
 
+# Keep the QUANTAXIS source in the application image so deployments do not
+# need a separate host checkout or bind mount.
+ARG QUANTAXIS_REF=master
+ENV QUANTAXIS_PATH=/opt/QUANTAXIS
+
 LABEL org.opencontainers.image.title="Vibe-Trading" \
     org.opencontainers.image.description="Natural-language finance research AI agent with backtesting" \
     org.opencontainers.image.version="0.1.7" \
@@ -25,11 +30,18 @@ WORKDIR /app
 # System deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Python deps (install before copying code for layer caching)
 COPY agent/requirements.txt agent/requirements.txt
 RUN pip install --no-cache-dir -r agent/requirements.txt
+
+# The QUANTAXIS adapter loads modules from the source checkout (rather than
+# importing QUANTAXIS top-level, which has unrelated startup side effects).
+RUN git clone --depth 1 --branch "${QUANTAXIS_REF}" \
+      https://github.com/QUANTAXIS/QUANTAXIS.git /opt/QUANTAXIS \
+    && pip install --no-cache-dir -e /opt/QUANTAXIS
 
 # Copy project
 COPY pyproject.toml LICENSE README.md ./

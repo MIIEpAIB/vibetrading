@@ -440,6 +440,8 @@ docker compose up --build
 
 打开 `http://localhost:8899`。后端 + 前端在同一个容器中运行。
 
+Docker 构建会自动获取并安装 QUANTAXIS 源码到应用镜像中，SHADOW/LIVE 部署无需在宿主机另行准备 `/opt/QUANTAXIS`。默认获取官方仓库 `master` 分支；如需固定构建来源，可通过构建参数 `QUANTAXIS_REF` 指定分支或标签，例如 `QUANTAXIS_REF=<ref> docker compose up --build`。
+
 Docker 默认将后端发布在 `127.0.0.1:8899`，并以非 root 容器用户运行应用。如果你有意将 API 暴露到本机之外，请设置强 `API_AUTH_KEY`，并让客户端发送 `Authorization: Bearer <key>`。
 
 用户注册和登录不走 QUANTAXIS QIFI。它们使用项目自己的 MySQL 认证表；QIFI 只用于部署账户快照和 paper trading 状态。

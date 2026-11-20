@@ -48,3 +48,7 @@
   vibe-trading serve --port 8899
 
   然后打开 http://localhost:8899。当前项目里已经有 agent/.env，启动前注意里面的 API key 不要提交或外发。
+
+
+#修改配置重新启动docker镜像
+docker compose up -d --build
