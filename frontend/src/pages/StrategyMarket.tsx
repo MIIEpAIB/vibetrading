@@ -64,7 +64,7 @@ const MARKET_COPY = {
     kicker: "Strategy Market",
     title: "Browse platform strategies and save a copy into your own library.",
     subtitle:
-      "Built-in strategies are free to inspect and favorite. Paid strategies can be purchased locally, then appear in your owned library for editing, export, and QUANTAXIS shadow deployment.",
+      "Built-in and community strategies can be saved to your library. Paid strategy checkout is not enabled yet.",
     openLibrary: "Open my library",
     sectionHint: "Saved items move into your private strategy library.",
     saved: "Saved",
@@ -73,14 +73,15 @@ const MARKET_COPY = {
     backtestFailed: "Backtest failed",
     preview: "Preview",
     favorite: "Favorite",
-    purchase: "Purchase",
+    checkoutUnavailable: "Checkout unavailable",
+    columns: { name: "Name", assets: "Assets", sharpe: "1Y Sharpe", drawdown: "5Y Drawdown", oosReturn: "OOS 3M Return", oosSharpe3m: "OOS 3M Sharpe", oosSharpe1y: "OOS 1Y Sharpe", published: "Published" },
     builtIn: {
       title: "Built-in strategies",
       description: "Platform strategies with direct backtest and favorite actions.",
     },
     paid: {
       title: "Paid strategies",
-      description: "Subscription-style strategies that can be purchased into your library.",
+      description: "Checkout is not configured yet. Paid items cannot be added to your library until purchase is implemented.",
     },
     community: {
       title: "Community strategies",
@@ -91,7 +92,7 @@ const MARKET_COPY = {
     kicker: "策略商城",
     title: "浏览平台策略，并把选中的策略保存到自己的策略库。",
     subtitle:
-      "内置策略可直接查看和收藏；付费策略可以本地购买后进入你的私有策略库，继续编辑、导出和模拟盘部署。",
+      "内置和社区策略可以保存到策略库；付费策略的结算功能尚未开放。",
     openLibrary: "打开我的策略库",
     sectionHint: "已保存的条目会进入你的私有策略库。",
     saved: "已保存",
@@ -100,14 +101,15 @@ const MARKET_COPY = {
     backtestFailed: "回测未通过",
     preview: "预览",
     favorite: "收藏",
-    purchase: "购买",
+    checkoutUnavailable: "暂不可购买",
+    columns: { name: "名称", assets: "标的", sharpe: "1 年夏普", drawdown: "5 年回撤", oosReturn: "样本外 3 个月收益", oosSharpe3m: "样本外 3 个月夏普", oosSharpe1y: "样本外 1 年夏普", published: "发布时间" },
     builtIn: {
       title: "内置策略",
       description: "平台策略，可直接回测并收藏到自己的策略库。",
     },
     paid: {
       title: "付费策略",
-      description: "订阅型策略，可购买后进入你的策略库继续使用。",
+      description: "购买结算尚未配置；购买功能上线前，付费策略不会添加到你的策略库。",
     },
     community: {
       title: "社区策略",
@@ -141,11 +143,13 @@ function MarketCard({
   actionLabel,
   onAction,
   kind,
+  disabled,
 }: {
   item: StrategyCatalogItem;
   actionLabel: string;
   onAction: () => void;
   kind: "built-in" | "paid" | "community";
+  disabled?: boolean;
 }) {
   const price = item.price ? <span className="rounded-md border border-primary/20 bg-primary/10 px-2 py-1 text-xs font-semibold text-primary">{item.price}</span> : null;
 
@@ -175,7 +179,9 @@ function MarketCard({
         <button
           type="button"
           onClick={onAction}
-          className="inline-flex min-w-0 items-center justify-center gap-2 rounded-md bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary/90"
+          disabled={disabled}
+          title={disabled ? actionLabel : undefined}
+          className="inline-flex min-w-0 items-center justify-center gap-2 rounded-md bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {kind === "built-in" ? <Star className="h-4 w-4 shrink-0" /> : kind === "community" ? <Library className="h-4 w-4 shrink-0" /> : <ShoppingBag className="h-4 w-4 shrink-0" />}
           <span className="truncate">{actionLabel}</span>
@@ -190,18 +196,17 @@ function MarketSectionBlock({
   language,
   ownedStrategies,
   onFavorite,
-  onPurchase,
   onOpenLibrary,
 }: {
   section: MarketSection;
   language: "en-US" | "zh-CN";
   ownedStrategies: StrategyLibraryItem[];
   onFavorite: (item: StrategyCatalogItem) => void;
-  onPurchase: (item: StrategyCatalogItem) => void;
   onOpenLibrary: () => void;
 }) {
   const headerTitle = language === "zh-CN" ? section.titleZh : section.titleEn;
   const headerDescription = language === "zh-CN" ? section.descriptionZh : section.descriptionEn;
+  const copy = MARKET_COPY[language];
 
   return (
     <section className="border-b bg-background">
@@ -217,14 +222,14 @@ function MarketSectionBlock({
           <table className="w-full min-w-[58rem] border-collapse text-left">
             <thead className="border-b bg-muted/40 text-[11px] font-semibold uppercase tracking-normal text-muted-foreground">
               <tr>
-                <th className="whitespace-nowrap px-3 py-2">Name</th>
-                <th className="whitespace-nowrap px-3 py-2">Assets</th>
-                <th className="whitespace-nowrap px-3 py-2 text-right">1Y Sharpe</th>
-                <th className="whitespace-nowrap px-3 py-2 text-right">5Y Drawdown</th>
-                <th className="whitespace-nowrap px-3 py-2 text-right">OOS 3M Return</th>
-                <th className="whitespace-nowrap px-3 py-2 text-right">OOS 3M Sharpe</th>
-                <th className="whitespace-nowrap px-3 py-2 text-right">OOS 1Y Sharpe</th>
-                <th className="whitespace-nowrap px-3 py-2">Published</th>
+                <th className="whitespace-nowrap px-3 py-2">{copy.columns.name}</th>
+                <th className="whitespace-nowrap px-3 py-2">{copy.columns.assets}</th>
+                <th className="whitespace-nowrap px-3 py-2 text-right">{copy.columns.sharpe}</th>
+                <th className="whitespace-nowrap px-3 py-2 text-right">{copy.columns.drawdown}</th>
+                <th className="whitespace-nowrap px-3 py-2 text-right">{copy.columns.oosReturn}</th>
+                <th className="whitespace-nowrap px-3 py-2 text-right">{copy.columns.oosSharpe3m}</th>
+                <th className="whitespace-nowrap px-3 py-2 text-right">{copy.columns.oosSharpe1y}</th>
+                <th className="whitespace-nowrap px-3 py-2">{copy.columns.published}</th>
                 <th className="whitespace-nowrap px-3 py-2 text-right"></th>
               </tr>
             </thead>
@@ -232,6 +237,7 @@ function MarketSectionBlock({
               {section.items.map((item) => {
                 const ownedRecord = ownedStrategies.find((strategy) => strategy.id === item.id || strategy.id === `owned_${item.id}`);
                 const isOwned = Boolean(ownedRecord);
+                const checkoutUnavailable = section.kind === "paid" && !isOwned;
                 return (
                   <MarketCard
                     key={item.id}
@@ -244,8 +250,9 @@ function MarketSectionBlock({
                           ? (language === "zh-CN" ? MARKET_COPY["zh-CN"].favorite : MARKET_COPY["en-US"].favorite)
                           : section.kind === "community"
                             ? (language === "zh-CN" ? "保存" : "Save")
-                          : (language === "zh-CN" ? MARKET_COPY["zh-CN"].purchase : MARKET_COPY["en-US"].purchase)
+                            : copy.checkoutUnavailable
                     }
+                    disabled={checkoutUnavailable}
                     onAction={() => {
                       if (isOwned) {
                         onOpenLibrary();
@@ -259,7 +266,6 @@ function MarketSectionBlock({
                         onFavorite(item);
                         return;
                       }
-                      onPurchase(item);
                     }}
                   />
                 );
@@ -362,11 +368,6 @@ export function StrategyMarket() {
       toast.error(error instanceof Error ? error.message : language === "zh-CN" ? "保存策略失败" : "Failed to save strategy");
     });
   };
-  const handlePurchase = (item: StrategyCatalogItem) => {
-    void saveStrategy(item, "purchased").catch((error) => {
-      toast.error(error instanceof Error ? error.message : language === "zh-CN" ? "购买策略失败" : "Failed to purchase strategy");
-    });
-  };
   const handleOpenLibrary = () => {
     navigate("/strategies");
   };
@@ -428,7 +429,6 @@ export function StrategyMarket() {
           language={language}
           ownedStrategies={ownedStrategies}
           onFavorite={handleFavorite}
-          onPurchase={handlePurchase}
           onOpenLibrary={handleOpenLibrary}
         />
       ))}

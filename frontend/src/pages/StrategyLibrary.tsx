@@ -8,7 +8,6 @@ import {
   BarChart3,
   Download,
   FileCode2,
-  FolderTree,
   Database,
   LineChart,
   Loader2,
@@ -21,7 +20,6 @@ import {
   Share2,
   ShieldCheck,
   SlidersHorizontal,
-  Store,
   Trash2,
   Upload,
   WandSparkles,
@@ -575,7 +573,6 @@ export function StrategyLibrary() {
       newStrategy: "新建策略",
       debugTool: "调试工具",
       authorization: "授权管理",
-      groups: "分组管理",
       exportCurrent: "导出当前",
       import: "导入",
       name: "策略名称",
@@ -603,7 +600,6 @@ export function StrategyLibrary() {
       rejectedShare: "分享失败",
       published: "已分享",
       submitted: "已提交审核",
-      rent: "出租",
       run: "运行",
       paperRun: "模拟盘运行",
       paperRunning: "启动中",
@@ -668,7 +664,6 @@ export function StrategyLibrary() {
       newStrategy: "New Strategy",
       debugTool: "Debug Tools",
       authorization: "Authorization",
-      groups: "Groups",
       exportCurrent: "Export Current",
       import: "Import",
       name: "Strategy Name",
@@ -696,7 +691,6 @@ export function StrategyLibrary() {
       rejectedShare: "Share failed",
       published: "Shared",
       submitted: "Submitted for review",
-      rent: "Rent",
       run: "Run",
       paperRun: "Run Paper",
       paperRunning: "Starting",
@@ -981,8 +975,18 @@ export function StrategyLibrary() {
         risk_policy: riskPolicy,
         broker_binding_id: deploymentWizard.target === "LIVE" ? Number(deploymentWizard.brokerBindingId) : undefined,
       });
-      await api.readyDeployment(result.deployment.deployment_id).catch(() => undefined);
+      let readyFailed = false;
+      try {
+        await api.readyDeployment(result.deployment.deployment_id);
+      } catch {
+        readyFailed = true;
+      }
       toast.success(copy.deploymentCreated);
+      if (readyFailed) {
+        toast.message(language === "zh-CN"
+          ? "部署已创建，但未能自动设为就绪。请在部署详情中检查状态并重试。"
+          : "Deployment was created but could not be marked ready. Check its status and retry from the detail page.");
+      }
       setDeploymentWizard(null);
       navigate(`/deployments/${encodeURIComponent(result.deployment.deployment_id)}`);
     } catch (error) {
@@ -1026,11 +1030,6 @@ export function StrategyLibrary() {
     } finally {
       setPublishingId(null);
     }
-  };
-
-  const handlePendingAction = (label: string) => {
-    setMoreMenu(null);
-    toast.message(language === "zh-CN" ? `${label}功能待接入` : `${label} will be connected later`);
   };
 
   const openMoreMenu = (strategy: StrategyItem, anchor: HTMLElement) => {
@@ -1109,14 +1108,6 @@ export function StrategyLibrary() {
               >
                 <ShieldCheck className="h-4 w-4 text-primary" />
                 {copy.authorization}
-              </button>
-              <button
-                type="button"
-                onClick={() => handlePendingAction(copy.groups)}
-                className="inline-flex items-center justify-center gap-2 rounded-md border bg-background px-3 py-2 text-sm font-semibold transition hover:bg-muted"
-              >
-                <FolderTree className="h-4 w-4 text-primary" />
-                {copy.groups}
               </button>
               <button
                 type="button"
@@ -1425,14 +1416,6 @@ export function StrategyLibrary() {
           >
             <Share2 className="h-3.5 w-3.5" />
             {shareButtonLabel(moreMenu.strategy)}
-          </button>
-          <button
-            type="button"
-            onClick={() => handlePendingAction(copy.rent)}
-            className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-xs font-semibold text-foreground hover:bg-muted"
-          >
-            <Store className="h-3.5 w-3.5" />
-            {copy.rent}
           </button>
           <button
             type="button"

@@ -1,6 +1,6 @@
 ﻿import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { BarChart3, Bot, Moon, Sun, Plus, Trash2, Pencil, MessageSquare, ChevronsLeft, ChevronsRight, Layers, Loader2, Library, LogOut, User, WalletCards, ShoppingBag, BookOpen, Users, Code2, UserCog, RadioTower } from "lucide-react";
+import { BarChart3, Bot, Moon, Sun, Plus, Trash2, Pencil, MessageSquare, ChevronsLeft, ChevronsRight, Layers, Loader2, Library, LogOut, User, WalletCards, ShoppingBag, BookOpen, Users, Code2, UserCog, RadioTower, CandlestickChart } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
 import { api, type SessionItem } from "@/lib/api";
@@ -18,6 +18,7 @@ const NAV = [
   { to: "/agent", icon: Bot, labelKey: "nav.agent" },
   { to: "/strategies", icon: Library, labelKey: "nav.ownedStrategies" },
   { to: "/market", icon: ShoppingBag, labelKey: "nav.market" },
+  { to: "/crypto", icon: CandlestickChart, labelKey: "nav.crypto" },
   { to: "/library", icon: BookOpen, labelKey: "nav.library" },
   { to: "/community", icon: Users, labelKey: "nav.community" },
   { to: "/api-docs", icon: Code2, labelKey: "nav.apiDocs" },

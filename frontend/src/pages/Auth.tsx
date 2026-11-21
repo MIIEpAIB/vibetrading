@@ -4,6 +4,7 @@ import { Eye, EyeOff, Loader2, LogIn, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import { useAuthStore } from "@/stores/auth";
 import { useTranslation } from "@/i18n/I18nProvider";
+import { LanguageToggle } from "@/components/layout/LanguageToggle";
 
 const fieldClass =
   "w-full rounded-md border bg-background px-3 py-2 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20";
@@ -46,7 +47,10 @@ export function Auth() {
   const isRegister = mode === "register";
 
   return (
-    <main className="flex min-h-screen bg-background">
+    <main className="relative flex min-h-screen bg-background">
+      <div className="absolute right-4 top-4 z-10">
+        <LanguageToggle />
+      </div>
       <section className="hidden min-h-screen w-[42%] border-r bg-card px-10 py-12 lg:flex lg:flex-col">
         <div className="flex items-center gap-2 text-lg font-semibold">
           <img src="/favicon.svg" alt="" className="h-6 w-6" />

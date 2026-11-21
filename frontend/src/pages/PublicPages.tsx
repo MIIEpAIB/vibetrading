@@ -26,9 +26,10 @@ interface PublicPageConfig {
   titleKey: TranslationKey;
   subtitleKey: TranslationKey;
   icon: LucideIcon;
-  accent: string;
-  stats: Array<{ labelKey: TranslationKey; value: string }>;
-  highlights: Array<{ titleKey: TranslationKey; descKey: TranslationKey; metaKey: TranslationKey; icon: LucideIcon }>;
+  actionKey: TranslationKey;
+  actionHref: string;
+  actionExternal?: boolean;
+  highlights: Array<{ titleKey: TranslationKey; descKey: TranslationKey; metaKey: TranslationKey; href: string; external?: boolean; icon: LucideIcon }>;
 }
 
 const PUBLIC_PAGES: PublicPageConfig[] = [
@@ -37,17 +38,13 @@ const PUBLIC_PAGES: PublicPageConfig[] = [
     path: "/market",
     titleKey: "public.market.title",
     subtitleKey: "public.market.subtitle",
+    actionKey: "public.market.action",
+    actionHref: "/market",
     icon: ShoppingBag,
-    accent: "from-orange-500 to-teal-500",
-    stats: [
-      { labelKey: "public.market.stat1", value: "128" },
-      { labelKey: "public.market.stat2", value: "42" },
-      { labelKey: "public.market.stat3", value: "18" },
-    ],
     highlights: [
-      { titleKey: "public.market.item1.title", descKey: "public.market.item1.desc", metaKey: "public.market.item1.meta", icon: TrendingUp },
-      { titleKey: "public.market.item2.title", descKey: "public.market.item2.desc", metaKey: "public.market.item2.meta", icon: Compass },
-      { titleKey: "public.market.item3.title", descKey: "public.market.item3.desc", metaKey: "public.market.item3.meta", icon: Sparkles },
+      { titleKey: "public.market.item1.title", descKey: "public.market.item1.desc", metaKey: "public.market.item1.meta", href: "/market", icon: TrendingUp },
+      { titleKey: "public.market.item2.title", descKey: "public.market.item2.desc", metaKey: "public.market.item2.meta", href: "/market", icon: Compass },
+      { titleKey: "public.market.item3.title", descKey: "public.market.item3.desc", metaKey: "public.market.item3.meta", href: "/market", icon: Sparkles },
     ],
   },
   {
@@ -55,17 +52,14 @@ const PUBLIC_PAGES: PublicPageConfig[] = [
     path: "/library",
     titleKey: "public.library.title",
     subtitleKey: "public.library.subtitle",
+    actionKey: "public.library.action",
+    actionHref: "https://vibetrading.wiki/docs/",
+    actionExternal: true,
     icon: BookOpen,
-    accent: "from-teal-500 to-indigo-500",
-    stats: [
-      { labelKey: "public.library.stat1", value: "260" },
-      { labelKey: "public.library.stat2", value: "12" },
-      { labelKey: "public.library.stat3", value: "9" },
-    ],
     highlights: [
-      { titleKey: "public.library.item1.title", descKey: "public.library.item1.desc", metaKey: "public.library.item1.meta", icon: FileText },
-      { titleKey: "public.library.item2.title", descKey: "public.library.item2.desc", metaKey: "public.library.item2.meta", icon: BookOpen },
-      { titleKey: "public.library.item3.title", descKey: "public.library.item3.desc", metaKey: "public.library.item3.meta", icon: Sparkles },
+      { titleKey: "public.library.item1.title", descKey: "public.library.item1.desc", metaKey: "public.library.item1.meta", href: "https://vibetrading.wiki/docs/", external: true, icon: FileText },
+      { titleKey: "public.library.item2.title", descKey: "public.library.item2.desc", metaKey: "public.library.item2.meta", href: "https://vibetrading.wiki/tutorials/", external: true, icon: BookOpen },
+      { titleKey: "public.library.item3.title", descKey: "public.library.item3.desc", metaKey: "public.library.item3.meta", href: "https://vibetrading.wiki/alpha-library/", external: true, icon: Sparkles },
     ],
   },
   {
@@ -73,17 +67,13 @@ const PUBLIC_PAGES: PublicPageConfig[] = [
     path: "/community",
     titleKey: "public.community.title",
     subtitleKey: "public.community.subtitle",
+    actionKey: "public.community.action",
+    actionHref: "/messages",
     icon: Users,
-    accent: "from-sky-500 to-orange-500",
-    stats: [
-      { labelKey: "public.community.stat1", value: "1.8k" },
-      { labelKey: "public.community.stat2", value: "314" },
-      { labelKey: "public.community.stat3", value: "86" },
-    ],
     highlights: [
-      { titleKey: "public.community.item1.title", descKey: "public.community.item1.desc", metaKey: "public.community.item1.meta", icon: MessageSquare },
-      { titleKey: "public.community.item2.title", descKey: "public.community.item2.desc", metaKey: "public.community.item2.meta", icon: FileText },
-      { titleKey: "public.community.item3.title", descKey: "public.community.item3.desc", metaKey: "public.community.item3.meta", icon: Code2 },
+      { titleKey: "public.community.item1.title", descKey: "public.community.item1.desc", metaKey: "public.community.item1.meta", href: "/messages", icon: MessageSquare },
+      { titleKey: "public.community.item2.title", descKey: "public.community.item2.desc", metaKey: "public.community.item2.meta", href: "/messages", icon: FileText },
+      { titleKey: "public.community.item3.title", descKey: "public.community.item3.desc", metaKey: "public.community.item3.meta", href: "/messages", icon: Code2 },
     ],
   },
   {
@@ -91,17 +81,14 @@ const PUBLIC_PAGES: PublicPageConfig[] = [
     path: "/api-docs",
     titleKey: "public.apiDocs.title",
     subtitleKey: "public.apiDocs.subtitle",
+    actionKey: "public.apiDocs.action",
+    actionHref: "/docs",
+    actionExternal: true,
     icon: Code2,
-    accent: "from-slate-700 to-teal-500",
-    stats: [
-      { labelKey: "public.apiDocs.stat1", value: "8" },
-      { labelKey: "public.apiDocs.stat2", value: "54" },
-      { labelKey: "public.apiDocs.stat3", value: "16" },
-    ],
     highlights: [
-      { titleKey: "public.apiDocs.item1.title", descKey: "public.apiDocs.item1.desc", metaKey: "public.apiDocs.item1.meta", icon: Code2 },
-      { titleKey: "public.apiDocs.item2.title", descKey: "public.apiDocs.item2.desc", metaKey: "public.apiDocs.item2.meta", icon: Compass },
-      { titleKey: "public.apiDocs.item3.title", descKey: "public.apiDocs.item3.desc", metaKey: "public.apiDocs.item3.meta", icon: Sparkles },
+      { titleKey: "public.apiDocs.item1.title", descKey: "public.apiDocs.item1.desc", metaKey: "public.apiDocs.item1.meta", href: "/docs", external: true, icon: Code2 },
+      { titleKey: "public.apiDocs.item2.title", descKey: "public.apiDocs.item2.desc", metaKey: "public.apiDocs.item2.meta", href: "/docs", external: true, icon: Compass },
+      { titleKey: "public.apiDocs.item3.title", descKey: "public.apiDocs.item3.desc", metaKey: "public.apiDocs.item3.meta", href: "/docs", external: true, icon: Sparkles },
     ],
   },
 ];
@@ -145,6 +132,9 @@ export function PublicLayout() {
             <div className="hidden sm:block">
               <LanguageToggle />
             </div>
+            <div className="sm:hidden">
+              <LanguageToggle collapsed />
+            </div>
             <Link
               to={user ? "/dashboard" : "/login"}
               className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition hover:bg-primary/90"
@@ -180,6 +170,7 @@ export function PublicLayout() {
 
 export function PublicPage() {
   const { t } = useTranslation();
+  const user = useAuthStore((s) => s.user);
   const { pageId } = useParams();
   const { pathname } = useLocation();
   const pathPage = PUBLIC_PAGES.find((item) => item.path === pathname);
@@ -189,7 +180,7 @@ export function PublicPage() {
   return (
     <main>
       <section className="border-b bg-card">
-        <div className="mx-auto grid max-w-7xl gap-8 px-4 py-10 sm:px-6 lg:grid-cols-[minmax(0,1fr)_24rem] lg:px-8">
+        <div className="mx-auto max-w-4xl px-4 py-10 sm:px-6 lg:px-8">
           <div className="min-w-0">
             <div className="inline-flex items-center gap-2 rounded-md border bg-background px-2.5 py-1 text-xs font-medium text-muted-foreground">
               <Icon className="h-3.5 w-3.5 text-primary" />
@@ -199,32 +190,23 @@ export function PublicPage() {
             <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">{t(page.subtitleKey)}</p>
             <div className="mt-6 flex flex-wrap gap-2">
               <Link
-                to="/login"
+                to={user ? "/dashboard" : "/login"}
                 className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition hover:bg-primary/90"
               >
                 <LogIn className="h-4 w-4" />
-                {t("public.login")}
+                {user ? t("public.workbench") : t("public.login")}
               </Link>
-              <Link
-                to="/library"
-                className="inline-flex items-center gap-2 rounded-md border px-4 py-2 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground"
-              >
-                <BookOpen className="h-4 w-4" />
-                {t("public.libraryLink")}
-              </Link>
-            </div>
-          </div>
-          <div className="rounded-lg border bg-background p-4">
-            <div className={cn("flex h-24 items-center justify-center rounded-md bg-gradient-to-br text-white", page.accent)}>
-              <Icon className="h-10 w-10" />
-            </div>
-            <div className="mt-4 grid grid-cols-3 gap-2">
-              {page.stats.map((stat) => (
-                <div key={stat.labelKey} className="rounded-md border bg-card p-3">
-                  <div className="font-mono text-lg font-semibold">{stat.value}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">{t(stat.labelKey)}</div>
-                </div>
-              ))}
+              {page.actionExternal ? (
+                <a href={page.actionHref} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-md border px-4 py-2 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground">
+                  <BookOpen className="h-4 w-4" />
+                  {t(page.actionKey)}
+                </a>
+              ) : (
+                <Link to={page.actionHref} className="inline-flex items-center gap-2 rounded-md border px-4 py-2 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground">
+                  <BookOpen className="h-4 w-4" />
+                  {t(page.actionKey)}
+                </Link>
+              )}
             </div>
           </div>
         </div>
@@ -245,6 +227,15 @@ export function PublicPage() {
               </div>
               <h2 className="mt-4 text-base font-semibold">{t(item.titleKey)}</h2>
               <p className="mt-2 text-sm leading-6 text-muted-foreground">{t(item.descKey)}</p>
+              {item.external ? (
+                <a href={item.href} target="_blank" rel="noreferrer" className="mt-4 inline-flex text-sm font-medium text-primary hover:underline">
+                  {t("public.openResource")}
+                </a>
+              ) : (
+                <Link to={item.href} className="mt-4 inline-flex text-sm font-medium text-primary hover:underline">
+                  {t("public.openResource")}
+                </Link>
+              )}
             </article>
           );
         })}
