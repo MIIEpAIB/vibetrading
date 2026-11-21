@@ -217,11 +217,11 @@ export function ApiDocs() {
                       <div key={`${parameter.in}-${parameter.name}-${index}`} className="rounded-lg border p-3">
                         <div className="flex flex-wrap items-center gap-2"><code className="text-sm font-semibold">{parameter.name}</code><span className="text-xs text-muted-foreground">{parameter.in}</span><span className="text-[10px] text-muted-foreground">{parameter.required ? copy.required : copy.optional}</span></div>
                         {parameter.description && <p className="mt-1 text-xs text-muted-foreground">{parameter.description}</p>}
-                        {parameter.schema && <pre className="mt-2 overflow-x-auto rounded bg-muted/60 p-2 text-xs">{JSON.stringify(resolveSchemaRefs(parameter.schema, schemas), null, 2)}</pre>}
+                        {parameter.schema !== undefined && parameter.schema !== null && <pre className="mt-2 overflow-x-auto rounded bg-muted/60 p-2 text-xs">{JSON.stringify(resolveSchemaRefs(parameter.schema, schemas), null, 2)}</pre>}
                       </div>
                     ))}
                   </div> : <p className="text-sm text-muted-foreground">—</p>}
-                  {selected.operation.requestBody && <>
+                  {selected.operation.requestBody !== undefined && selected.operation.requestBody !== null && <>
                     <h3 className="mb-2 mt-5 text-sm font-semibold">{copy.request}</h3>
                     <pre className="max-h-64 overflow-auto rounded-lg bg-muted/60 p-3 text-xs leading-5">{JSON.stringify(resolveSchemaRefs(selected.operation.requestBody, schemas), null, 2)}</pre>
                   </>}
