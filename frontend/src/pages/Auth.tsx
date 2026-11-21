@@ -3,11 +3,13 @@ import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { Eye, EyeOff, Loader2, LogIn, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import { useAuthStore } from "@/stores/auth";
+import { useTranslation } from "@/i18n/I18nProvider";
 
 const fieldClass =
   "w-full rounded-md border bg-background px-3 py-2 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20";
 
 export function Auth() {
+  const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
@@ -35,7 +37,7 @@ export function Auth() {
       }
       navigate((location.state as { from?: string } | null)?.from || "/dashboard", { replace: true });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Authentication failed");
+      toast.error(error instanceof Error ? error.message : t("auth.failed"));
     } finally {
       setSubmitting(false);
     }
@@ -51,12 +53,12 @@ export function Auth() {
           Venus
         </div>
         <div className="mt-auto max-w-md space-y-4 pb-16">
-          <div className="text-sm font-medium text-primary">Private workspace</div>
+          <div className="text-sm font-medium text-primary">{t("auth.workspace")}</div>
           <h1 className="text-4xl font-semibold leading-tight tracking-tight">
-            Research, sessions, and agent records stay attached to your account.
+            {t("auth.hero")}
           </h1>
           <p className="text-sm leading-6 text-muted-foreground">
-            Sign in to enter your dedicated trading research backend.
+            {t("auth.heroDesc")}
           </p>
         </div>
       </section>
@@ -70,16 +72,16 @@ export function Auth() {
 
           <div className="mb-5 space-y-1">
             <h2 className="text-xl font-semibold tracking-tight">
-              {isRegister ? "Create account" : "Sign in"}
+              {isRegister ? t("auth.createAccount") : t("auth.signIn")}
             </h2>
             <p className="text-sm text-muted-foreground">
-              {isRegister ? "Create a private workspace." : "Access your personal dashboard."}
+              {isRegister ? t("auth.createPrivateWorkspace") : t("auth.accessDashboard")}
             </p>
           </div>
 
           <div className="space-y-4">
             <label className="grid gap-2">
-              <span className="text-sm font-medium">Username</span>
+              <span className="text-sm font-medium">{t("auth.username")}</span>
               <input
                 value={username}
                 onChange={(event) => setUsername(event.target.value)}
@@ -93,7 +95,7 @@ export function Auth() {
 
             {isRegister ? (
               <label className="grid gap-2">
-                <span className="text-sm font-medium">Display name</span>
+                <span className="text-sm font-medium">{t("auth.displayName")}</span>
                 <input
                   value={displayName}
                   onChange={(event) => setDisplayName(event.target.value)}
@@ -105,7 +107,7 @@ export function Auth() {
             ) : null}
 
             <label className="grid gap-2">
-              <span className="text-sm font-medium">Password</span>
+              <span className="text-sm font-medium">{t("auth.password")}</span>
               <div className="relative">
                 <input
                   type={showPassword ? "text" : "password"}
@@ -120,7 +122,7 @@ export function Auth() {
                   type="button"
                   onClick={() => setShowPassword((v) => !v)}
                   className="absolute right-2 top-2 rounded p-1 text-muted-foreground hover:text-foreground"
-                  title={showPassword ? "Hide password" : "Show password"}
+                  title={showPassword ? t("auth.hidePassword") : t("auth.showPassword")}
                 >
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
@@ -140,7 +142,7 @@ export function Auth() {
             ) : (
               <LogIn className="h-4 w-4" />
             )}
-            {isRegister ? "Create account" : "Sign in"}
+            {isRegister ? t("auth.createAccount") : t("auth.signIn")}
           </button>
 
           <button
@@ -148,7 +150,7 @@ export function Auth() {
             onClick={() => setMode(isRegister ? "login" : "register")}
             className="mt-4 w-full text-center text-sm text-muted-foreground hover:text-foreground"
           >
-            {isRegister ? "Already have an account? Sign in" : "Need an account? Register"}
+            {isRegister ? t("auth.alreadyHaveAccount") : t("auth.needAccount")}
           </button>
         </form>
       </section>

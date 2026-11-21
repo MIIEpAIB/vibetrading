@@ -46,8 +46,8 @@ import { useTranslation } from "@/i18n/I18nProvider";
 
 interface ZooCard {
   id: string;
-  title: string;
-  description: string;
+  titleKey: "alpha.zoo.qlib.title" | "alpha.zoo.alpha101.title" | "alpha.zoo.gtja191.title" | "alpha.zoo.academic.title";
+  descriptionKey: "alpha.zoo.qlib.desc" | "alpha.zoo.alpha101.desc" | "alpha.zoo.gtja191.desc" | "alpha.zoo.academic.desc";
   approxCount: number;
   accent: string;
 }
@@ -57,33 +57,29 @@ interface ZooCard {
 const ZOO_CARDS: ZooCard[] = [
   {
     id: "qlib158",
-    title: "Qlib 158",
-    description:
-      "Microsoft Qlib's full 158-feature library covering momentum, volatility, volume and rolling statistical signals.",
+    titleKey: "alpha.zoo.qlib.title",
+    descriptionKey: "alpha.zoo.qlib.desc",
     approxCount: 154,
     accent: "from-sky-500/20 to-sky-500/5",
   },
   {
     id: "alpha101",
-    title: "Kakushadze 101 Formulaic Alphas",
-    description:
-      "The 101 formulaic alphas from Kakushadze (2015); short-horizon cross-sectional signals.",
+    titleKey: "alpha.zoo.alpha101.title",
+    descriptionKey: "alpha.zoo.alpha101.desc",
     approxCount: 101,
     accent: "from-emerald-500/20 to-emerald-500/5",
   },
   {
     id: "gtja191",
-    title: "GTJA 191",
-    description:
-      "Guotai Junan Securities' 191 alphas; technical and microstructure signals tuned to China A-share markets.",
+    titleKey: "alpha.zoo.gtja191.title",
+    descriptionKey: "alpha.zoo.gtja191.desc",
     approxCount: 191,
     accent: "from-amber-500/20 to-amber-500/5",
   },
   {
     id: "academic",
-    title: "Academic Anomalies",
-    description:
-      "Curated long-horizon anomalies from the academic literature (value, momentum, quality, low-vol, etc.).",
+    titleKey: "alpha.zoo.academic.title",
+    descriptionKey: "alpha.zoo.academic.desc",
     approxCount: 6,
     accent: "from-violet-500/20 to-violet-500/5",
   },
@@ -213,17 +209,12 @@ function BrowseView() {
       {/* Hero */}
       <div className="space-y-2">
         <div className="flex items-center gap-2 text-xs text-muted-foreground uppercase tracking-wide">
-          <Layers className="h-3.5 w-3.5" aria-hidden="true" /> Alpha Zoo
+          <Layers className="h-3.5 w-3.5" aria-hidden="true" /> {t("alpha.zoo")}
         </div>
         <h1 className="text-2xl md:text-3xl font-bold tracking-tight">
-          {total > 0 ? total : 452} pre-built quant alphas across 4 zoos
+          {t("alpha.zoo.heading", { count: total > 0 ? total : 452 })}
         </h1>
-        <p className="text-sm text-muted-foreground max-w-2xl">
-          Browse formula-driven cross-sectional signals from Qlib, the
-          Kakushadze 101 set, GTJA 191, and the academic anomaly literature.
-          Click any alpha to read its formula and source code, or run a bench
-          to score the whole zoo on a universe and period.
-        </p>
+        <p className="text-sm text-muted-foreground max-w-2xl">{t("alpha.zoo.intro")}</p>
       </div>
 
       {/* Zoo cards */}
@@ -248,9 +239,9 @@ function BrowseView() {
                   {z.approxCount}
                 </span>
               </div>
-              <h3 className="font-semibold text-sm leading-tight">{z.title}</h3>
+              <h3 className="font-semibold text-sm leading-tight">{t(z.titleKey)}</h3>
               <p className="text-xs text-muted-foreground line-clamp-3">
-                {z.description}
+                {t(z.descriptionKey)}
               </p>
             </button>
           );
@@ -291,7 +282,7 @@ function BrowseView() {
             <option value="">{t("alpha.allZoos")}</option>
             {ZOO_CARDS.map((z) => (
               <option key={z.id} value={z.id}>
-                {z.title}
+                {t(z.titleKey)}
               </option>
             ))}
           </select>
@@ -787,7 +778,7 @@ function BenchView() {
           >
             {ZOO_CARDS.map((z) => (
               <option key={z.id} value={z.id}>
-                {z.title}
+                {t(z.titleKey)}
               </option>
             ))}
           </select>

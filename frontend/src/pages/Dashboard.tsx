@@ -15,6 +15,7 @@ import { StrategyReturnChart } from "@/components/charts/StrategyReturnChart";
 import { KLineChartPanel } from "@/components/charts/KLineChartPanel";
 import { api, type CryptoKlineBar, type EquityPoint, type QIFIOrder, type QuantaxisAccountSnapshot } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { useTranslation } from "@/i18n/I18nProvider";
 
 const QUOTE_ASSETS = new Set(["USD", "USDT", "USDC", "BUSD", "DAI"]);
 const REFRESH_MS = 10_000;
@@ -206,16 +207,17 @@ function dashboardAccount(snapshot: QuantaxisAccountSnapshot, orders: QIFIOrder[
 }
 
 function KlineSection({ state, setState }: { state: KlineState; setState: Dispatch<SetStateAction<KlineState>> }) {
+  const { t } = useTranslation();
   return (
     <section className="rounded-lg border border-zinc-800 bg-[#111318] p-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <div>
           <div className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
             <CandlestickChart className="h-4 w-4 text-orange-300" />
-            Market Candles
+            {t("dashboard.marketCandles")}
           </div>
           <div className="mt-1 text-xs text-zinc-500">
-            {state.symbol} · {state.timeframe.toUpperCase()} · live crypto bars
+            {state.symbol} · {state.timeframe.toUpperCase()} · {t("dashboard.liveBars")}
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -258,7 +260,7 @@ function KlineSection({ state, setState }: { state: KlineState; setState: Dispat
       </div>
       <KLineChartPanel symbol={state.symbol} timeframe={state.timeframe} bars={state.bars} height={420} className="rounded-md bg-[#0d0f13]" />
       {!state.bars.length && !state.loading ? (
-        <div className="mt-2 text-xs text-amber-200">No live K-line data returned. Chart is intentionally empty.</div>
+        <div className="mt-2 text-xs text-amber-200">{t("dashboard.noKline")}</div>
       ) : null}
     </section>
   );
@@ -298,6 +300,7 @@ function StatCard({
 }
 
 export function Dashboard() {
+  const { t, language } = useTranslation();
   const [account, setAccount] = useState<DashboardAccount | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -392,7 +395,7 @@ export function Dashboard() {
   if (loading && !account) {
     return (
       <main className="flex min-h-full items-center justify-center bg-[#0b0d10] text-sm text-zinc-400">
-        Loading account...
+        {t("dashboard.loading")}
       </main>
     );
   }
@@ -402,8 +405,8 @@ export function Dashboard() {
       <div className="mx-auto max-w-[1480px] space-y-4 px-4 py-4 sm:px-6 lg:px-8">
         <header className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800 pb-4">
           <div>
-            <div className="text-xs font-medium uppercase tracking-wide text-orange-300">Shadow Account Dashboard</div>
-            <h1 className="mt-1 text-2xl font-semibold text-white">Portfolio Performance</h1>
+            <div className="text-xs font-medium uppercase tracking-wide text-orange-300">{t("dashboard.shadowDashboard")}</div>
+            <h1 className="mt-1 text-2xl font-semibold text-white">{t("dashboard.title")}</h1>
           </div>
           <button
             type="button"
@@ -411,35 +414,35 @@ export function Dashboard() {
             className="inline-flex h-8 items-center gap-2 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-xs font-medium text-zinc-200 hover:bg-zinc-800"
           >
             <RefreshCw className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />
-            Refresh
+            {t("dashboard.refresh")}
           </button>
         </header>
 
         <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <StatCard
-            label="Account Value"
+            label={t("dashboard.accountValue")}
             value={formatMoney(equityValue || INITIAL_VIRTUAL_CAPITAL)}
-            sub="Mark-to-market across cash and positions"
+            sub={t("dashboard.markToMarket")}
             icon={WalletCards}
           />
           <StatCard
-            label="Net PnL"
+            label={t("dashboard.netPnl")}
             value={formatMoney(pnl)}
             sub={formatPercent(pnlPct)}
             icon={pnl >= 0 ? TrendingUp : TrendingDown}
             tone={pnl >= 0 ? "green" : "red"}
           />
           <StatCard
-            label="Cash"
+            label={t("dashboard.cash")}
             value={formatMoney(cashValue)}
-            sub="Quote currency balance"
+            sub={t("dashboard.quoteBalance")}
             icon={BarChart3}
             tone="neutral"
           />
           <StatCard
-            label="Exposure"
+            label={t("dashboard.exposure")}
             value={formatPercent(exposurePct)}
-            sub={`${activeOrders.length} open orders`}
+            sub={t("dashboard.openOrders", { count: activeOrders.length })}
             icon={Activity}
             tone={exposurePct >= 50 ? "amber" : "neutral"}
           />
@@ -453,15 +456,15 @@ export function Dashboard() {
                 <div>
                   <div className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
                     <BarChart3 className="h-4 w-4 text-orange-300" />
-                    Net Value Curve
+                    {t("dashboard.netValueCurve")}
                   </div>
                   <div className="mt-1 text-xs text-zinc-500">
-                    Since inception performance reconstructed from fills and current mark prices
+                    {t("dashboard.curveDesc")}
                   </div>
                 </div>
                 <span className="flex items-center gap-1 text-xs text-zinc-500">
                   <Clock3 className="h-3.5 w-3.5" />
-                  {equitySeries.length} points
+                  {t("dashboard.points", { count: equitySeries.length })}
                 </span>
               </div>
               <StrategyReturnChart data={equitySeries} initialCapital={INITIAL_VIRTUAL_CAPITAL} height={360} />
@@ -470,8 +473,8 @@ export function Dashboard() {
             <div className="rounded-lg border border-zinc-800 bg-[#111318]">
               <div className="flex items-center justify-between gap-3 border-b border-zinc-800 px-4 py-3">
                 <div>
-                  <h2 className="text-base font-semibold text-white">Assets</h2>
-                  <p className="mt-1 text-xs text-zinc-500">Cash and marked positions</p>
+                  <h2 className="text-base font-semibold text-white">{t("dashboard.assets")}</h2>
+                  <p className="mt-1 text-xs text-zinc-500">{t("dashboard.cashAndPositions")}</p>
                 </div>
                 <Database className="h-4 w-4 text-sky-300" />
               </div>
@@ -479,12 +482,12 @@ export function Dashboard() {
                 <table className="w-full min-w-[760px] border-collapse text-sm">
                   <thead className="bg-[#171a20] text-xs uppercase text-zinc-500">
                     <tr>
-                      <th className="px-4 py-3 text-left font-medium">Asset</th>
-                      <th className="px-4 py-3 text-right font-medium">Balance</th>
-                      <th className="px-4 py-3 text-right font-medium">Frozen</th>
-                      <th className="px-4 py-3 text-right font-medium">Mark</th>
-                      <th className="px-4 py-3 text-right font-medium">Value</th>
-                      <th className="px-4 py-3 text-right font-medium">Weight</th>
+                      <th className="px-4 py-3 text-left font-medium">{t("dashboard.asset")}</th>
+                      <th className="px-4 py-3 text-right font-medium">{t("dashboard.balance")}</th>
+                      <th className="px-4 py-3 text-right font-medium">{t("dashboard.frozen")}</th>
+                      <th className="px-4 py-3 text-right font-medium">{t("dashboard.mark")}</th>
+                      <th className="px-4 py-3 text-right font-medium">{t("dashboard.value")}</th>
+                      <th className="px-4 py-3 text-right font-medium">{t("dashboard.weight")}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-800">
@@ -506,7 +509,7 @@ export function Dashboard() {
                     {!topAccounts.length ? (
                       <tr>
                         <td colSpan={6} className="px-4 py-8 text-center text-sm text-zinc-500">
-                          No shadow account data yet.
+                          {t("dashboard.noAccountData")}
                         </td>
                       </tr>
                     ) : null}
@@ -519,31 +522,31 @@ export function Dashboard() {
           <aside className="space-y-4">
             <div className="rounded-lg border border-zinc-800 bg-[#111318] p-4">
               <div className="mb-4 flex items-center justify-between">
-                <div className="text-sm font-semibold text-zinc-100">Order Summary</div>
+                <div className="text-sm font-semibold text-zinc-100">{t("dashboard.orderSummary")}</div>
                 <WalletCards className="h-4 w-4 text-sky-300" />
               </div>
               <div className="space-y-3 text-sm">
                 <div className="flex items-center justify-between rounded-md bg-[#181b21] px-3 py-2">
-                  <span className="text-zinc-400">Filled</span>
+                  <span className="text-zinc-400">{t("dashboard.filled")}</span>
                   <span className="font-mono text-emerald-300">{filledOrders.length}</span>
                 </div>
                 <div className="flex items-center justify-between rounded-md bg-[#181b21] px-3 py-2">
-                  <span className="text-zinc-400">Open</span>
+                  <span className="text-zinc-400">{t("dashboard.open")}</span>
                   <span className="font-mono text-amber-300">{activeOrders.length}</span>
                 </div>
                 <div className="flex items-center justify-between rounded-md bg-[#181b21] px-3 py-2">
-                  <span className="text-zinc-400">Closed</span>
+                  <span className="text-zinc-400">{t("dashboard.closed")}</span>
                   <span className="font-mono text-zinc-200">{closedOrders.length}</span>
                 </div>
                 <div className="flex items-center justify-between rounded-md bg-[#181b21] px-3 py-2">
-                  <span className="text-zinc-400">Last update</span>
-                  <span className="font-mono text-zinc-300">{account?.updated_at ? formatDate(account.updated_at) : "--"}</span>
+                  <span className="text-zinc-400">{t("dashboard.lastUpdate")}</span>
+                  <span className="font-mono text-zinc-300">{account?.updated_at ? new Date(account.updated_at).toLocaleString(language) : "--"}</span>
                 </div>
               </div>
             </div>
 
             <div className="rounded-lg border border-zinc-800 bg-[#111318] p-4">
-              <div className="text-sm font-semibold text-zinc-100">Recent Orders</div>
+              <div className="text-sm font-semibold text-zinc-100">{t("dashboard.recentOrders")}</div>
               <div className="mt-4 space-y-3">
                 {orders.slice(0, 6).map((order) => (
                   <div key={order.order_id} className="rounded-md bg-[#181b21] px-3 py-2 text-xs">
@@ -562,7 +565,7 @@ export function Dashboard() {
                   </div>
                 ))}
                 {!orders.length ? (
-                  <div className="rounded-md bg-[#181b21] px-3 py-4 text-sm text-zinc-500">No orders yet.</div>
+                  <div className="rounded-md bg-[#181b21] px-3 py-4 text-sm text-zinc-500">{t("dashboard.noOrders")}</div>
                 ) : null}
               </div>
             </div>

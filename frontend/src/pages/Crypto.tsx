@@ -4,6 +4,7 @@ import { KLineChartPanel } from "@/components/charts/KLineChartPanel";
 import { authHeaders } from "@/lib/apiAuth";
 import type { CryptoKlineBar } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { useTranslation } from "@/i18n/I18nProvider";
 
 type LegacyCryptoBar = {
   time: number;
@@ -130,6 +131,7 @@ async function fetchKline(symbol: string, frequency: string): Promise<LegacyCryp
 }
 
 export function Crypto() {
+  const { t } = useTranslation();
   const [symbolInput, setSymbolInput] = useState("BTCUSDT");
   const [symbol, setSymbol] = useState("BTCUSDT");
   const [frequency, setFrequency] = useState<(typeof FREQUENCIES)[number]>("5m");
@@ -180,7 +182,7 @@ export function Crypto() {
   return (
     <main className="flex h-full min-h-[640px] flex-col bg-[#101418] text-zinc-100">
       <header className="flex flex-wrap items-center gap-2 border-b border-zinc-800 px-4 py-3">
-        <h1 className="mr-3 text-lg font-semibold text-white">Crypto Kline</h1>
+        <h1 className="mr-3 text-lg font-semibold text-white">{t("crypto.title")}</h1>
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
           <input
             list="crypto-symbols"
@@ -190,7 +192,7 @@ export function Crypto() {
               if (e.key === "Enter") void load();
             }}
             className="h-9 w-full max-w-[180px] rounded-md border border-zinc-700 bg-[#151b22] px-3 text-sm outline-none"
-            aria-label="symbol"
+            aria-label={t("crypto.symbol")}
           />
           <datalist id="crypto-symbols">
             {SYMBOLS.map((item) => (
@@ -218,7 +220,7 @@ export function Crypto() {
             className="inline-flex h-9 items-center gap-2 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm font-medium text-zinc-100 hover:bg-zinc-800"
           >
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            Load
+            {t("crypto.load")}
           </button>
         </div>
       </header>
@@ -231,7 +233,7 @@ export function Crypto() {
           <div className="flex items-center gap-2">
             <CandlestickChart className="h-4 w-4 text-orange-300" />
           </div>
-          <div className="font-mono text-zinc-500">{lastClose ? `Last ${lastClose.toFixed(2)}` : "--"}</div>
+          <div className="font-mono text-zinc-500">{lastClose ? t("crypto.last", { price: lastClose.toFixed(2) }) : "--"}</div>
         </div>
       </div>
     </main>

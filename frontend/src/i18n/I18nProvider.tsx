@@ -26,7 +26,12 @@ function isLanguageCode(value: string | null): value is LanguageCode {
 
 function getInitialLanguage(): LanguageCode {
   if (typeof window === "undefined") return defaultLanguage;
-  const stored = window.localStorage.getItem(STORAGE_KEY);
+  let stored: string | null = null;
+  try {
+    stored = window.localStorage.getItem(STORAGE_KEY);
+  } catch {
+    // Storage can be disabled in private browsing; use the browser locale.
+  }
   if (isLanguageCode(stored)) return stored;
   const browserLanguage = window.navigator.language;
   return browserLanguage.toLowerCase().startsWith("zh") ? "zh-CN" : "en-US";
@@ -66,7 +71,11 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 
   const setLanguage = (nextLanguage: LanguageCode) => {
     setLanguageState(nextLanguage);
-    window.localStorage.setItem(STORAGE_KEY, nextLanguage);
+    try {
+      window.localStorage.setItem(STORAGE_KEY, nextLanguage);
+    } catch {
+      // The current tab still switches even when persistence is unavailable.
+    }
   };
 
   const value = useMemo<I18nContextValue>(() => {
@@ -79,6 +88,16 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     document.documentElement.lang = language === "zh-CN" ? "zh-CN" : "en-US";
   }, [language]);
+
+  useEffect(() => {
+    const syncLanguage = (event: StorageEvent) => {
+      if (event.key === STORAGE_KEY && isLanguageCode(event.newValue)) {
+        setLanguageState(event.newValue);
+      }
+    };
+    window.addEventListener("storage", syncLanguage);
+    return () => window.removeEventListener("storage", syncLanguage);
+  }, []);
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }

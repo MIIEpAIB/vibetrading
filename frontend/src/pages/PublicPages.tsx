@@ -15,96 +15,93 @@ import {
 import { LanguageToggle } from "@/components/layout/LanguageToggle";
 import { useAuthStore } from "@/stores/auth";
 import { cn } from "@/lib/utils";
+import { useTranslation } from "@/i18n/I18nProvider";
+import type { TranslationKey } from "@/i18n/translations";
 
 type PublicPageId = "market" | "library" | "community" | "api-docs";
 
 interface PublicPageConfig {
   id: PublicPageId;
   path: string;
-  label: string;
-  title: string;
-  subtitle: string;
+  titleKey: TranslationKey;
+  subtitleKey: TranslationKey;
   icon: LucideIcon;
   accent: string;
-  stats: Array<{ label: string; value: string }>;
-  highlights: Array<{ title: string; desc: string; meta: string; icon: LucideIcon }>;
+  stats: Array<{ labelKey: TranslationKey; value: string }>;
+  highlights: Array<{ titleKey: TranslationKey; descKey: TranslationKey; metaKey: TranslationKey; icon: LucideIcon }>;
 }
 
 const PUBLIC_PAGES: PublicPageConfig[] = [
   {
     id: "market",
     path: "/market",
-    label: "策略商城",
-    title: "策略商城",
-    subtitle: "发现可学习、可复制、可进入影子盘验证的加密与多市场策略模板。",
+    titleKey: "public.market.title",
+    subtitleKey: "public.market.subtitle",
     icon: ShoppingBag,
     accent: "from-orange-500 to-teal-500",
     stats: [
-      { label: "精选策略", value: "128" },
-      { label: "可影子验证", value: "42" },
-      { label: "新手模板", value: "18" },
+      { labelKey: "public.market.stat1", value: "128" },
+      { labelKey: "public.market.stat2", value: "42" },
+      { labelKey: "public.market.stat3", value: "18" },
     ],
     highlights: [
-      { title: "BTC 趋势跟随组合", desc: "均线、波动率过滤、分批止盈与最大回撤保护。", meta: "适合新手 · 现货优先", icon: TrendingUp },
-      { title: "ETH 震荡网格模板", desc: "网格间距、仓位上限、极端行情暂停规则完整。", meta: "影子盘推荐", icon: Compass },
-      { title: "多币种动量轮动", desc: "BTC/ETH/SOL/BNB 横截面排序，周频再平衡。", meta: "进阶策略", icon: Sparkles },
+      { titleKey: "public.market.item1.title", descKey: "public.market.item1.desc", metaKey: "public.market.item1.meta", icon: TrendingUp },
+      { titleKey: "public.market.item2.title", descKey: "public.market.item2.desc", metaKey: "public.market.item2.meta", icon: Compass },
+      { titleKey: "public.market.item3.title", descKey: "public.market.item3.desc", metaKey: "public.market.item3.meta", icon: Sparkles },
     ],
   },
   {
     id: "library",
     path: "/library",
-    label: "文库",
-    title: "文库",
-    subtitle: "沉淀交易、量化、回测、交易所 API、风控和影子盘过渡实盘的知识文档。",
+    titleKey: "public.library.title",
+    subtitleKey: "public.library.subtitle",
     icon: BookOpen,
     accent: "from-teal-500 to-indigo-500",
     stats: [
-      { label: "文章", value: "260" },
-      { label: "新手路径", value: "12" },
-      { label: "实盘清单", value: "9" },
+      { labelKey: "public.library.stat1", value: "260" },
+      { labelKey: "public.library.stat2", value: "12" },
+      { labelKey: "public.library.stat3", value: "9" },
     ],
     highlights: [
-      { title: "懂交易但不懂量化：入门路径", desc: "把主观交易规则转成信号、参数、回测和影子观察项。", meta: "新手必读", icon: FileText },
-      { title: "懂量化但不懂交易：市场常识", desc: "交易成本、滑点、流动性、交易所规则和持仓心理。", meta: "交易基础", icon: BookOpen },
-      { title: "从影子盘到实盘的 12 个门槛", desc: "成交样本、异常订单、亏损上限、确认模式和熔断机制。", meta: "上线检查", icon: Sparkles },
+      { titleKey: "public.library.item1.title", descKey: "public.library.item1.desc", metaKey: "public.library.item1.meta", icon: FileText },
+      { titleKey: "public.library.item2.title", descKey: "public.library.item2.desc", metaKey: "public.library.item2.meta", icon: BookOpen },
+      { titleKey: "public.library.item3.title", descKey: "public.library.item3.desc", metaKey: "public.library.item3.meta", icon: Sparkles },
     ],
   },
   {
     id: "community",
     path: "/community",
-    label: "社区",
-    title: "社区",
-    subtitle: "和交易者、开发者、策略作者一起讨论想法、复盘失败、共建策略模板。",
+    titleKey: "public.community.title",
+    subtitleKey: "public.community.subtitle",
     icon: Users,
     accent: "from-sky-500 to-orange-500",
     stats: [
-      { label: "讨论主题", value: "1.8k" },
-      { label: "策略共创", value: "314" },
-      { label: "今日活跃", value: "86" },
+      { labelKey: "public.community.stat1", value: "1.8k" },
+      { labelKey: "public.community.stat2", value: "314" },
+      { labelKey: "public.community.stat3", value: "86" },
     ],
     highlights: [
-      { title: "策略诊断区", desc: "提交策略逻辑，社区一起找未来函数、过拟合和风控漏洞。", meta: "开放讨论", icon: MessageSquare },
-      { title: "交易复盘区", desc: "记录错过机会、过早止盈、追涨杀跌和执行偏差。", meta: "行为修正", icon: FileText },
-      { title: "交易所接入区", desc: "讨论 OKX、Binance、Bybit 等连接器配置与常见错误。", meta: "开发协作", icon: Code2 },
+      { titleKey: "public.community.item1.title", descKey: "public.community.item1.desc", metaKey: "public.community.item1.meta", icon: MessageSquare },
+      { titleKey: "public.community.item2.title", descKey: "public.community.item2.desc", metaKey: "public.community.item2.meta", icon: FileText },
+      { titleKey: "public.community.item3.title", descKey: "public.community.item3.desc", metaKey: "public.community.item3.meta", icon: Code2 },
     ],
   },
   {
     id: "api-docs",
     path: "/api-docs",
-    label: "API 文档",
-    title: "API 文档",
-    subtitle: "面向开发者的策略、影子盘、Alpha、会话和实盘授权接口说明。",
+    titleKey: "public.apiDocs.title",
+    subtitleKey: "public.apiDocs.subtitle",
     icon: Code2,
     accent: "from-slate-700 to-teal-500",
     stats: [
-      { label: "接口模块", value: "8" },
-      { label: "示例请求", value: "54" },
-      { label: "安全规则", value: "16" },
+      { labelKey: "public.apiDocs.stat1", value: "8" },
+      { labelKey: "public.apiDocs.stat2", value: "54" },
+      { labelKey: "public.apiDocs.stat3", value: "16" },
     ],
     highlights: [
-      { title: "Strategy Library API", desc: "策略列表、创建、替换、删除和标签字段约定。", meta: "REST", icon: Code2 },
-      { title: "Shadow Trading API", desc: "虚拟账户、订单状态机、行情触发和成交记录。", meta: "Sandbox", icon: Compass },
-      { title: "Live Mandate API", desc: "授权提交、确认模式、过期、熔断和审计边界。", meta: "Safety", icon: Sparkles },
+      { titleKey: "public.apiDocs.item1.title", descKey: "public.apiDocs.item1.desc", metaKey: "public.apiDocs.item1.meta", icon: Code2 },
+      { titleKey: "public.apiDocs.item2.title", descKey: "public.apiDocs.item2.desc", metaKey: "public.apiDocs.item2.meta", icon: Compass },
+      { titleKey: "public.apiDocs.item3.title", descKey: "public.apiDocs.item3.desc", metaKey: "public.apiDocs.item3.meta", icon: Sparkles },
     ],
   },
 ];
@@ -114,6 +111,7 @@ function getPublicPage(id?: string): PublicPageConfig {
 }
 
 export function PublicLayout() {
+  const { t } = useTranslation();
   const user = useAuthStore((s) => s.user);
   const { pathname } = useLocation();
 
@@ -139,7 +137,7 @@ export function PublicLayout() {
                   )
                 }
               >
-                {page.label}
+                {t(page.titleKey)}
               </NavLink>
             ))}
           </nav>
@@ -152,7 +150,7 @@ export function PublicLayout() {
               className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition hover:bg-primary/90"
             >
               <LogIn className="h-4 w-4" />
-              {user ? "进入工作台" : "登录"}
+              {user ? t("public.workbench") : t("auth.signIn")}
             </Link>
           </div>
         </div>
@@ -170,7 +168,7 @@ export function PublicLayout() {
                 )
               }
             >
-              {page.label}
+              {t(page.titleKey)}
             </NavLink>
           ))}
         </nav>
@@ -181,6 +179,7 @@ export function PublicLayout() {
 }
 
 export function PublicPage() {
+  const { t } = useTranslation();
   const { pageId } = useParams();
   const { pathname } = useLocation();
   const pathPage = PUBLIC_PAGES.find((item) => item.path === pathname);
@@ -194,24 +193,24 @@ export function PublicPage() {
           <div className="min-w-0">
             <div className="inline-flex items-center gap-2 rounded-md border bg-background px-2.5 py-1 text-xs font-medium text-muted-foreground">
               <Icon className="h-3.5 w-3.5 text-primary" />
-              Venus Public
+              {t("public.badge")}
             </div>
-            <h1 className="mt-4 text-3xl font-semibold tracking-normal sm:text-4xl">{page.title}</h1>
-            <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">{page.subtitle}</p>
+            <h1 className="mt-4 text-3xl font-semibold tracking-normal sm:text-4xl">{t(page.titleKey)}</h1>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">{t(page.subtitleKey)}</p>
             <div className="mt-6 flex flex-wrap gap-2">
               <Link
                 to="/login"
                 className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition hover:bg-primary/90"
               >
                 <LogIn className="h-4 w-4" />
-                登录体验完整功能
+                {t("public.login")}
               </Link>
               <Link
                 to="/library"
                 className="inline-flex items-center gap-2 rounded-md border px-4 py-2 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground"
               >
                 <BookOpen className="h-4 w-4" />
-                查看新手文库
+                {t("public.libraryLink")}
               </Link>
             </div>
           </div>
@@ -221,9 +220,9 @@ export function PublicPage() {
             </div>
             <div className="mt-4 grid grid-cols-3 gap-2">
               {page.stats.map((stat) => (
-                <div key={stat.label} className="rounded-md border bg-card p-3">
+                <div key={stat.labelKey} className="rounded-md border bg-card p-3">
                   <div className="font-mono text-lg font-semibold">{stat.value}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">{stat.label}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{t(stat.labelKey)}</div>
                 </div>
               ))}
             </div>
@@ -241,11 +240,11 @@ export function PublicPage() {
                   <ItemIcon className="h-4 w-4" />
                 </div>
                 <span className="rounded-md border bg-background px-2 py-1 text-[11px] font-medium text-muted-foreground">
-                  {item.meta}
+                  {t(item.metaKey)}
                 </span>
               </div>
-              <h2 className="mt-4 text-base font-semibold">{item.title}</h2>
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">{item.desc}</p>
+              <h2 className="mt-4 text-base font-semibold">{t(item.titleKey)}</h2>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">{t(item.descKey)}</p>
             </article>
           );
         })}
