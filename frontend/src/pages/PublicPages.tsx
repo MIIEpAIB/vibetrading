@@ -234,7 +234,7 @@ export function PublicPage() {
         {page.highlights.map((item) => {
           const ItemIcon = item.icon;
           return (
-            <article key={item.title} className="rounded-lg border bg-card p-4">
+            <article key={item.titleKey} className="rounded-lg border bg-card p-4">
               <div className="flex items-start justify-between gap-3">
                 <div className="rounded-md bg-primary/10 p-2 text-primary">
                   <ItemIcon className="h-4 w-4" />
