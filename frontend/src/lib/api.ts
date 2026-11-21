@@ -100,6 +100,7 @@ function appendQueryParam(url: string, key: string, value: string): string {
 }
 
 export const api = {
+  getOpenApiSpec: () => request<Record<string, unknown>>("/openapi.json"),
   register: (username: string, password: string, display_name?: string) =>
     request<AuthTokenResponse>("/auth/register", {
       method: "POST",

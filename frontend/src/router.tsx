@@ -40,6 +40,15 @@ const Deployments = lazy(() =>
 const Messages = lazy(() =>
   import("@/pages/Messages").then((m) => ({ default: m.Messages })),
 );
+const LibraryPage = lazy(() =>
+  import("@/pages/Library").then((m) => ({ default: m.LibraryPage })),
+);
+const Community = lazy(() =>
+  import("@/pages/Community").then((m) => ({ default: m.Community })),
+);
+const ApiDocs = lazy(() =>
+  import("@/pages/ApiDocs").then((m) => ({ default: m.ApiDocs })),
+);
 const Auth = lazy(() => import("@/pages/Auth").then((m) => ({ default: m.Auth })));
 const PersonalSettings = lazy(() =>
   import("@/pages/PersonalSettings").then((m) => ({ default: m.PersonalSettings })),
@@ -97,9 +106,13 @@ export const router = createBrowserRouter([
       { path: "/", element: wrap(PublicPage) },
       { path: "/market", element: wrap(StrategyMarket) },
       { path: "/strategy/:strategyId", element: wrap(StrategyShare) },
-      { path: "/library", element: wrap(PublicPage) },
-      { path: "/community", element: wrap(PublicPage) },
-      { path: "/api-docs", element: wrap(PublicPage) },
+      { path: "/library", element: wrap(LibraryPage) },
+      {
+        path: "/community",
+        element: <RequireAuth />,
+        children: [{ index: true, element: wrap(Community) }],
+      },
+      { path: "/api-docs", element: wrap(ApiDocs) },
       { path: "/public/:pageId", element: wrap(PublicPage) },
     ],
   },

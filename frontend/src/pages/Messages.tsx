@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Inbox, MessageCircle, Search, Send, UserCheck, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -28,6 +29,8 @@ function displayName(user: { username: string; display_name: string }) {
 
 export function Messages() {
   const { language } = useTranslation();
+  const [searchParams] = useSearchParams();
+  const requestedThreadId = searchParams.get("threadId") || "";
   const currentUser = useAuthStore((state) => state.user);
   const copy = useMemo(() => language === "zh-CN" ? {
     title: "私信",
@@ -87,14 +90,16 @@ export function Messages() {
       .then((response) => {
         if (!alive) return;
         setThreads(response.threads);
-        if (response.threads.length) setActiveThreadId(response.threads[0].thread_id);
+        const requestedThread = response.threads.find((thread) => thread.thread_id === requestedThreadId);
+        if (requestedThread) setActiveThreadId(requestedThread.thread_id);
+        else if (response.threads.length) setActiveThreadId(response.threads[0].thread_id);
       })
       .catch((error) => toast.error(error instanceof Error ? error.message : "Failed to load messages"))
       .finally(() => {
         if (alive) setLoadingThreads(false);
       });
     return () => { alive = false; };
-  }, []);
+  }, [requestedThreadId]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
